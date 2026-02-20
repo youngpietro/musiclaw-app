@@ -1,0 +1,210 @@
+// supabase/functions/create-order/index.ts
+// POST /functions/v1/create-order
+// Body: { beat_id }
+// Creates a PayPal order for purchasing a beat. No auth required (anonymous buyers).
+// SECURITY: Price from DB (not client), CORS restricted, rate limited
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const ALLOWED_ORIGINS = [
+  "https://musiclaw.app",
+  "https://www.musiclaw.app",
+  "https://musiclaw-app.vercel.app",
+];
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
+
+async function getPayPalAccessToken(): Promise<string> {
+  const clientId = Deno.env.get("PAYPAL_CLIENT_ID")!;
+  const clientSecret = Deno.env.get("PAYPAL_CLIENT_SECRET")!;
+  const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.sandbox.paypal.com";
+
+  const res = await fetch(`${apiBase}/v1/oauth2/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "grant_type=client_credentials",
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`PayPal auth failed: ${res.status} ${err}`);
+  }
+
+  const data = await res.json();
+  return data.access_token;
+}
+
+serve(async (req) => {
+  const cors = getCorsHeaders(req);
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+
+  try {
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    // ─── RATE LIMITING: max 20 order creations per hour per IP ────────
+    const clientIp =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      req.headers.get("cf-connecting-ip") ||
+      "unknown";
+
+    const { data: recentOrders } = await supabase
+      .from("rate_limits")
+      .select("id")
+      .eq("action", "create_order")
+      .eq("identifier", clientIp)
+      .gte("created_at", new Date(Date.now() - 3600000).toISOString());
+
+    if (recentOrders && recentOrders.length >= 20) {
+      return new Response(
+        JSON.stringify({ error: "Too many purchase attempts. Try again later." }),
+        { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    await supabase.from("rate_limits").insert({
+      action: "create_order",
+      identifier: clientIp,
+    });
+
+    // ─── VALIDATE INPUT ───────────────────────────────────────────────
+    const body = await req.json();
+    const { beat_id } = body;
+
+    if (!beat_id) {
+      return new Response(
+        JSON.stringify({ error: "beat_id is required" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── LOOK UP BEAT (price comes from DB, never from client) ────────
+    const { data: beat } = await supabase
+      .from("beats")
+      .select("id, title, genre, price, agent_id, status")
+      .eq("id", beat_id)
+      .single();
+
+    if (!beat) {
+      return new Response(
+        JSON.stringify({ error: "Beat not found" }),
+        { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (beat.status !== "complete") {
+      return new Response(
+        JSON.stringify({ error: "Beat is not yet available for purchase" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!beat.price || beat.price < 1.0) {
+      return new Response(
+        JSON.stringify({ error: "This beat is not for sale" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── VERIFY AGENT HAS PAYPAL (live schema: paypal_email on agents) ─
+    const { data: agent } = await supabase
+      .from("agents")
+      .select("handle, name, paypal_email")
+      .eq("id", beat.agent_id)
+      .single();
+
+    if (!agent?.paypal_email) {
+      return new Response(
+        JSON.stringify({ error: "This agent has not set up payment receiving yet" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── CALCULATE SPLIT ──────────────────────────────────────────────
+    const totalAmount = parseFloat(beat.price);
+    const platformAmount = Math.round(totalAmount * 10) / 100; // 10%
+    const agentAmount = Math.round((totalAmount - platformAmount) * 100) / 100; // 90%
+
+    // ─── CREATE PAYPAL ORDER ──────────────────────────────────────────
+    const accessToken = await getPayPalAccessToken();
+    const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.sandbox.paypal.com";
+
+    const orderPayload = {
+      intent: "CAPTURE",
+      purchase_units: [
+        {
+          reference_id: beat.id,
+          description: `Beat: ${beat.title} by ${agent?.handle || "unknown"}`.slice(0, 127),
+          amount: {
+            currency_code: "USD",
+            value: totalAmount.toFixed(2),
+          },
+        },
+      ],
+    };
+
+    const orderRes = await fetch(`${apiBase}/v2/checkout/orders`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(orderPayload),
+    });
+
+    if (!orderRes.ok) {
+      const errText = await orderRes.text();
+      console.error("PayPal order creation failed:", errText);
+      return new Response(
+        JSON.stringify({ error: "Payment service error. Please try again." }),
+        { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    const orderData = await orderRes.json();
+    const orderId = orderData.id;
+
+    // ─── RECORD PURCHASE IN DB ────────────────────────────────────────
+    // Live schema uses: paypal_status, platform_fee, seller_paypal
+    const { error: insertError } = await supabase.from("purchases").insert({
+      beat_id: beat.id,
+      buyer_email: "",
+      paypal_order_id: orderId,
+      amount: totalAmount,
+      platform_fee: platformAmount,
+      seller_paypal: agent.paypal_email,
+      paypal_status: "pending",
+    });
+
+    if (insertError) throw insertError;
+
+    return new Response(
+      JSON.stringify({
+        order_id: orderId,
+        amount: totalAmount.toFixed(2),
+        currency: "USD",
+      }),
+      { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
+    );
+  } catch (err) {
+    console.error("Create order error:", err.message);
+    return new Response(
+      JSON.stringify({ error: "Failed to create order. Please try again." }),
+      { status: 500, headers: { ...cors, "Content-Type": "application/json" } }
+    );
+  }
+});

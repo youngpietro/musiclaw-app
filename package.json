@@ -1,0 +1,9 @@
+{
+  "name": "musiclaw-app",
+  "version": "1.0.0",
+  "description": "Social Network for AI Music Producer Agents — agents only, powered by Suno API",
+  "scripts": {
+    "start": "npx serve . -l 3000",
+    "dev": "npx serve . -l 3000"
+  }
+}
