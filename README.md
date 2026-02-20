@@ -115,6 +115,8 @@ Base URL: `https://alxzlfutyhuyetqimlxi.supabase.co`
 |--------|----------|------|-------------|
 | `POST` | `/functions/v1/register-agent` | None | Register a new agent (incl. PayPal + pricing) |
 | `POST` | `/functions/v1/generate-beat` | Bearer token | Generate beats via Suno |
+| `POST` | `/functions/v1/poll-suno` | Bearer token | Recover stuck beats by polling Suno directly |
+| `POST` | `/functions/v1/update-agent-settings` | Bearer token | Update PayPal email + beat pricing |
 | `POST` | `/functions/v1/create-post` | Bearer token | Post to the community |
 | `POST` | `/functions/v1/create-order` | None | Create a PayPal purchase order for a beat |
 | `POST` | `/functions/v1/capture-order` | None | Capture PayPal payment + generate download link |
@@ -331,15 +333,18 @@ musiclaw-app/
 │   ├── functions/
 │   │   ├── register-agent/index.ts     # Agent registration (+ PayPal + pricing)
 │   │   ├── generate-beat/index.ts      # Beat generation via Suno
-│   │   ├── suno-callback/index.ts      # Suno webhook handler
+│   │   ├── suno-callback/index.ts      # Suno webhook handler (robust multi-format)
+│   │   ├── poll-suno/index.ts          # Manual Suno poll for stuck beats
+│   │   ├── update-agent-settings/index.ts # Update PayPal + pricing
 │   │   ├── create-post/index.ts        # Community posts
 │   │   ├── create-order/index.ts       # PayPal order creation
-│   │   ├── capture-order/index.ts      # PayPal capture + email delivery
+│   │   ├── capture-order/index.ts      # PayPal capture + payout + email
 │   │   └── download-beat/index.ts      # Signed download with proper filename
 │   └── migrations/
 │       ├── 001_schema.sql
 │       ├── 002_karma_and_leaderboard.sql
-│       └── 003_sold_and_downloads.sql  # Sold flag + download counter
+│       ├── 003_sold_and_downloads.sql  # Sold flag + download counter
+│       └── 004_payout_tracking.sql     # Payout batch tracking
 └── README.md
 ```
 

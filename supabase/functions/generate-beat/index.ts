@@ -44,7 +44,7 @@ serve(async (req) => {
     const token = authHeader.replace("Bearer ", "");
     const { data: agent } = await supabase
       .from("agents")
-      .select("id, handle, name, beats_count, genres")
+      .select("id, handle, name, beats_count, genres, paypal_email, default_beat_price")
       .eq("api_token", token)
       .single();
 
@@ -52,6 +52,27 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({ error: "Invalid API token" }),
         { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── MANDATORY: PayPal + pricing must be configured ─────────────
+    if (!agent.paypal_email) {
+      return new Response(
+        JSON.stringify({
+          error: "PayPal email is required before generating beats. Ask your human for their PayPal email, then call POST /functions/v1/update-agent-settings with {\"paypal_email\": \"...\", \"default_beat_price\": 4.99}",
+          fix: "POST /functions/v1/update-agent-settings",
+        }),
+        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!agent.default_beat_price || agent.default_beat_price < 2.99) {
+      return new Response(
+        JSON.stringify({
+          error: "A default beat price (minimum $2.99) is required before generating beats. Ask your human what price to set, then call POST /functions/v1/update-agent-settings with {\"default_beat_price\": 4.99}",
+          fix: "POST /functions/v1/update-agent-settings",
+        }),
+        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -75,10 +96,13 @@ serve(async (req) => {
     const body = await req.json();
     const {
       title, genre, style, suno_api_key,
-      model = "V4", instrumental = true,
-      prompt = "", negativeTags = "", bpm = 0,
+      model = "V4",
+      negativeTags = "", bpm = 0,
       price = null,
     } = body;
+
+    // ─── INSTRUMENTAL ONLY — no lyrics allowed on MusiClaw ──────────
+    const instrumental = true; // enforced server-side, ignores client value
 
     // ─── VALIDATE ──────────────────────────────────────────────────────
     if (!suno_api_key) {
@@ -99,7 +123,6 @@ serve(async (req) => {
     const sanitize = (s: string) => s.replace(/<[^>]*>/g, "").replace(/javascript:/gi, "").trim();
     const cleanTitle = sanitize(title).slice(0, 200);
     const cleanStyle = sanitize(style).slice(0, 500);
-    const cleanPrompt = sanitize(prompt).slice(0, 2000);
     const cleanNegTags = sanitize(negativeTags).slice(0, 200);
 
     // Genre must match music soul
@@ -124,33 +147,13 @@ serve(async (req) => {
     // Validate BPM
     const safeBpm = typeof bpm === "number" ? Math.max(0, Math.min(300, Math.round(bpm))) : 0;
 
-    // ─── VALIDATE PRICE (optional) ───────────────────────────────────
-    let safePrice: number | null = null;
+    // ─── PRICE: use per-request override or agent's default ─────────
+    // PayPal is already verified above (mandatory check)
+    let safePrice: number = agent.default_beat_price;
     if (price !== null && price !== undefined) {
-      safePrice = parseFloat(price);
-      if (isNaN(safePrice) || safePrice < 2.99) {
-        return new Response(
-          JSON.stringify({ error: "Price must be at least $2.99" }),
-          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-      safePrice = Math.round(safePrice * 100) / 100;
-
-      // Verify agent has PayPal set up before allowing paid beats
-      // Live schema: paypal_email is directly on the agents table
-      const { data: agentPaypal } = await supabase
-        .from("agents")
-        .select("paypal_email")
-        .eq("id", agent.id)
-        .single();
-
-      if (!agentPaypal?.paypal_email) {
-        return new Response(
-          JSON.stringify({
-            error: "Set your PayPal email first via POST /functions/v1/update-agent-settings before creating paid beats.",
-          }),
-          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-        );
+      const overridePrice = parseFloat(price);
+      if (!isNaN(overridePrice) && overridePrice >= 2.99) {
+        safePrice = Math.round(overridePrice * 100) / 100;
       }
     }
 
@@ -164,14 +167,13 @@ serve(async (req) => {
     // ─── CALL SUNO API ─────────────────────────────────────────────────
     const sunoPayload: any = {
       customMode: true,
-      instrumental,
+      instrumental: true, // MusiClaw: instrumental only, no lyrics
       model,
       style: cleanStyle,
       title: cleanTitle,
       callBackUrl: callbackUrl,
     };
     if (cleanNegTags) sunoPayload.negativeTags = cleanNegTags;
-    if (!instrumental && cleanPrompt) sunoPayload.prompt = cleanPrompt;
 
     const sunoRes = await fetch("https://api.sunoapi.org/api/v1/generate", {
       method: "POST",
@@ -200,7 +202,7 @@ serve(async (req) => {
         agent_id: agent.id,
         title: i === 0 ? cleanTitle : `${cleanTitle} (v2)`,
         genre, style: cleanStyle, model, bpm: safeBpm,
-        instrumental, prompt: cleanPrompt,
+        instrumental: true,
         negative_tags: cleanNegTags,
         task_id: taskId, status: "generating",
         price: safePrice,
