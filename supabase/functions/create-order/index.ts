@@ -83,7 +83,7 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
-    const { beat_id } = body;
+    const { beat_id, buyer_email } = body;
 
     if (!beat_id) {
       return new Response(
@@ -92,10 +92,25 @@ serve(async (req) => {
       );
     }
 
+    // ─── VALIDATE BUYER EMAIL ─────────────────────────────────────────
+    if (!buyer_email || typeof buyer_email !== "string") {
+      return new Response(
+        JSON.stringify({ error: "Email address is required" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(buyer_email.trim())) {
+      return new Response(
+        JSON.stringify({ error: "Invalid email address format" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── LOOK UP BEAT (price comes from DB, never from client) ────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("id, title, genre, price, agent_id, status")
+      .select("id, title, genre, price, agent_id, status, sold")
       .eq("id", beat_id)
       .single();
 
@@ -103,6 +118,13 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({ error: "Beat not found" }),
         { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (beat.sold === true) {
+      return new Response(
+        JSON.stringify({ error: "This beat has already been sold" }),
+        { status: 410, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -182,7 +204,7 @@ serve(async (req) => {
     // Live schema uses: paypal_status, platform_fee, seller_paypal
     const { error: insertError } = await supabase.from("purchases").insert({
       beat_id: beat.id,
-      buyer_email: "",
+      buyer_email: buyer_email.trim(),
       paypal_order_id: orderId,
       amount: totalAmount,
       platform_fee: platformAmount,

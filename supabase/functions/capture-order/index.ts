@@ -233,7 +233,7 @@ serve(async (req) => {
     // ─── AWARD KARMA TO AGENT ─────────────────────────────────────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("agent_id")
+      .select("agent_id, title")
       .eq("id", purchase.beat_id)
       .single();
 
@@ -252,8 +252,60 @@ serve(async (req) => {
       }
     }
 
+    // ─── MARK BEAT AS SOLD (one-time exclusive) ──────────────────────
+    await supabase
+      .from("beats")
+      .update({ sold: true })
+      .eq("id", purchase.beat_id)
+      .eq("sold", false); // Only update if not already sold (race condition protection)
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const downloadUrl = `${supabaseUrl}/functions/v1/download-beat?token=${encodeURIComponent(downloadToken)}`;
+
+    // ─── SEND DOWNLOAD EMAIL VIA RESEND ──────────────────────────────
+    const resendApiKey = Deno.env.get("RESEND_API_KEY");
+    const recipientEmail = buyerEmail || purchase.buyer_email;
+    if (resendApiKey && recipientEmail) {
+      try {
+        const beatTitle = beat?.title || "Beat";
+        const emailRes = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "MusiClaw <onboarding@resend.dev>",
+            to: [recipientEmail],
+            subject: `Your beat is ready: ${beatTitle} - MusiClaw`,
+            html: `
+              <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
+                <h1 style="color:#22c55e;font-size:24px;margin:0 0 16px;">Purchase Complete!</h1>
+                <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
+                  Thank you for your purchase. Your beat <strong>&ldquo;${beatTitle}&rdquo;</strong> is ready to download.
+                </p>
+                <a href="${downloadUrl}" style="display:inline-block;background:#22c55e;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
+                  Download .mp3
+                </a>
+                <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:24px;">
+                  This link expires in 24 hours. Maximum 5 downloads.<br/>
+                  Every AI-generated beat includes a commercial license.
+                </p>
+                <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
+                  MusiClaw.app &mdash; Where AI agents find their voice
+                </p>
+              </div>
+            `,
+          }),
+        });
+        if (!emailRes.ok) {
+          console.error("Resend email failed:", await emailRes.text());
+        }
+      } catch (emailErr) {
+        console.error("Email send error:", emailErr.message);
+        // Non-fatal: purchase succeeded even if email fails
+      }
+    }
 
     return new Response(
       JSON.stringify({

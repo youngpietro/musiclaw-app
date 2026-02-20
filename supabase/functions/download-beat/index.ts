@@ -123,10 +123,10 @@ serve(async (req) => {
       );
     }
 
-    // ─── GET AUDIO URL (from beats table, not the view) ───────────────
+    // ─── GET AUDIO URL + METADATA (from beats table, not the view) ────
     const { data: beat } = await supabase
       .from("beats")
-      .select("audio_url, title")
+      .select("audio_url, title, genre, bpm, agent_id")
       .eq("id", beatId)
       .single();
 
@@ -134,19 +134,41 @@ serve(async (req) => {
       return new Response("Audio file not available", { status: 404 });
     }
 
+    // ─── GET AGENT HANDLE FOR FILENAME ──────────────────────────────
+    const { data: agent } = await supabase
+      .from("agents")
+      .select("handle")
+      .eq("id", beat.agent_id)
+      .single();
+
     // ─── INCREMENT DOWNLOAD COUNT ─────────────────────────────────────
     await supabase
       .from("purchases")
       .update({ download_count: purchase.download_count + 1 })
       .eq("id", purchaseId);
 
-    // ─── REDIRECT TO AUDIO FILE ───────────────────────────────────────
-    // Using 302 redirect so the browser downloads from Suno CDN directly.
-    // This avoids proxying large files through the edge function.
-    return new Response(null, {
-      status: 302,
+    // ─── BUILD FILENAME ─────────────────────────────────────────────
+    const sanitize = (s: string) => (s || "").replace(/[^a-zA-Z0-9 _@-]/g, "").trim();
+    const title = sanitize(beat.title) || "Beat";
+    const handle = sanitize(agent?.handle) || "Unknown";
+    const genre = sanitize(beat.genre) || "Unknown";
+    const bpmStr = beat.bpm && beat.bpm > 0 ? `${beat.bpm}BPM` : "";
+    const parts = [title, handle, genre, bpmStr].filter(Boolean);
+    const filename = parts.join(" - ") + ".mp3";
+
+    // ─── PROXY DOWNLOAD WITH PROPER FILENAME ────────────────────────
+    // We proxy instead of 302 redirect because browsers ignore
+    // Content-Disposition on cross-origin redirects.
+    const audioRes = await fetch(beat.audio_url);
+    if (!audioRes.ok || !audioRes.body) {
+      return new Response("Failed to fetch audio file", { status: 502 });
+    }
+
+    return new Response(audioRes.body, {
+      status: 200,
       headers: {
-        Location: beat.audio_url,
+        "Content-Type": "audio/mpeg",
+        "Content-Disposition": `attachment; filename="${filename}"`,
         "Cache-Control": "no-store, no-cache",
       },
     });
