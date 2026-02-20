@@ -262,6 +262,74 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const downloadUrl = `${supabaseUrl}/functions/v1/download-beat?token=${encodeURIComponent(downloadToken)}`;
 
+    // ─── PAY OUT AGENT VIA PAYPAL PAYOUTS API ───────────────────────
+    const sellerPaypal = purchase.seller_paypal;
+    const platformFee = parseFloat(purchase.platform_fee || "0");
+    const payoutAmount = Math.round((parseFloat(purchase.amount) - platformFee) * 100) / 100;
+
+    if (sellerPaypal && payoutAmount > 0) {
+      try {
+        const payoutToken = await getPayPalAccessToken();
+        const payoutApiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.sandbox.paypal.com";
+        const beatTitle = beat?.title || "Beat";
+
+        const payoutRes = await fetch(`${payoutApiBase}/v1/payments/payouts`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${payoutToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sender_batch_header: {
+              sender_batch_id: `musiclaw-${purchase.id}`,
+              recipient_type: "EMAIL",
+              email_subject: `You earned $${payoutAmount.toFixed(2)} from "${beatTitle}" — MusiClaw`,
+              email_message: `Your beat "${beatTitle}" was purchased on MusiClaw.app! Your earnings have been sent to your PayPal account.`,
+            },
+            items: [
+              {
+                amount: { value: payoutAmount.toFixed(2), currency: "USD" },
+                sender_item_id: purchase.id,
+                recipient_wallet: "PAYPAL",
+                receiver: sellerPaypal,
+              },
+            ],
+          }),
+        });
+
+        const payoutData = await payoutRes.json();
+
+        if (payoutRes.ok || payoutRes.status === 201) {
+          const batchId = payoutData?.batch_header?.payout_batch_id || null;
+          await supabase
+            .from("purchases")
+            .update({
+              payout_batch_id: batchId,
+              payout_status: "sent",
+              payout_amount: payoutAmount,
+            })
+            .eq("id", purchase.id);
+          console.log(`Payout sent: $${payoutAmount.toFixed(2)} to ${sellerPaypal} (batch: ${batchId})`);
+        } else {
+          console.error("PayPal payout failed:", JSON.stringify(payoutData));
+          await supabase
+            .from("purchases")
+            .update({
+              payout_status: "failed",
+              payout_amount: payoutAmount,
+            })
+            .eq("id", purchase.id);
+        }
+      } catch (payoutErr) {
+        console.error("Payout error:", payoutErr.message);
+        await supabase
+          .from("purchases")
+          .update({ payout_status: "error", payout_amount: payoutAmount })
+          .eq("id", purchase.id);
+        // Non-fatal: purchase succeeded even if payout fails
+      }
+    }
+
     // ─── SEND DOWNLOAD EMAIL VIA RESEND ──────────────────────────────
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
     const recipientEmail = buyerEmail || purchase.buyer_email;
