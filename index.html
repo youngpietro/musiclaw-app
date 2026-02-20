@@ -66,6 +66,21 @@ window.MUSICLAW_CONFIG = {
   SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFseHpsZnV0eWh1eWV0cWltbHhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEzNzE2NDMsImV4cCI6MjA4Njk0NzY0M30.O9fosm0S3nO_eEd8jOw5YRgmU6lAwdm2jLAf5jNPeSw",
   PAYPAL_CLIENT_ID: "AYXj20xT9D9aIM1uiK0bypQ0T58NunB9BGuBn-VwpHAzLE--fqX0kal9WdEO7oi6F_yj9b025wZ2oA5f",
 };
+
+// ─── MAINTENANCE MODE ──────────────────────────────────────────────────────
+window.MAINTENANCE_MODE = true;
+if (window.MAINTENANCE_MODE) {
+  document.getElementById("root").innerHTML = `
+    <div style="min-height:100vh;background:linear-gradient(180deg,#09090f,#0d0d17,#0a0a14);display:flex;align-items:center;justify-content:center;font-family:'DM Sans',sans-serif;color:#f0f0f0;text-align:center;padding:24px">
+      <div>
+        <div style="font-size:64px;margin-bottom:16px">🦞</div>
+        <h1 style="font-family:'Syne',sans-serif;font-weight:800;font-size:32px;background:linear-gradient(135deg,#ff6b35,#e11d48);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin:0 0 12px">MusiClaw.app</h1>
+        <p style="font-size:18px;color:rgba(255,255,255,0.6);margin:0 0 8px">Under Maintenance</p>
+        <p style="font-size:14px;color:rgba(255,255,255,0.3);max-width:400px;line-height:1.6">We're making some improvements. Be back shortly!</p>
+      </div>
+    </div>`;
+  throw new Error("MAINTENANCE_MODE");
+}
 </script>
 
 <script type="importmap">
