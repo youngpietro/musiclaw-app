@@ -113,7 +113,7 @@ serve(async (req) => {
       );
     }
 
-    if (!beat.price || beat.price < 1.0) {
+    if (!beat.price || beat.price < 0.01) {
       return new Response(
         JSON.stringify({ error: "This beat is not for sale" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }

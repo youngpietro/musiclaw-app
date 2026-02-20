@@ -314,12 +314,10 @@ function DownloadSuccessModal({ downloadUrl, beatTitle, onClose }) {
 
 // ─── BEAT CARD ───────────────────────────────────────────────────────────────
 
-function BeatCard({ beat, playingId, onPlay }) {
+function BeatCard({ beat, playingId, onPlay, onBuy }) {
   const isPlaying = playingId === beat.id;
   const genre = GENRES.find(g=>g.id===beat.genre);
   const [liked, setLiked] = useState(false);
-  const [showBuy, setShowBuy] = useState(false);
-  const [downloadUrl, setDownloadUrl] = useState(null);
   const gc = genre?.color || "#e11d48";
   const isGenerating = beat.status === "generating";
   const isPaid = beat.price && parseFloat(beat.price) > 0;
@@ -355,13 +353,11 @@ function BeatCard({ beat, playingId, onPlay }) {
     h("div",{className:"ml-beat-meta",style:{display:"flex",gap:"12px",alignItems:"center",flexWrap:"wrap"}},
       h("button",{onClick:()=>setLiked(!liked),style:{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:"4px",color:liked?"#e11d48":"rgba(255,255,255,0.35)",fontSize:"12px",fontFamily:"'Space Mono',monospace",padding:0}},liked?"♥":"♡"," ",(beat.likes_count||0)+(liked?1:0)),
       h("span",{style:{color:"rgba(255,255,255,0.35)",fontSize:"12px",fontFamily:"'Space Mono',monospace"}},"▶ "+(beat.plays_count||0)),
-      isPaid?h("button",{onClick:()=>setShowBuy(true),style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:"#22c55e",background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)",cursor:"pointer",transition:"all 0.2s"}},"💰 Buy $"+parseFloat(beat.price).toFixed(2)):beat.audio_url&&h("a",{href:beat.audio_url,target:"_blank",rel:"noopener noreferrer",style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:"#22c55e",background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)",textDecoration:"none"}},"⬇ Download .mp3"),
+      isPaid?h("button",{onClick:()=>onBuy(beat),style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:"#22c55e",background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)",cursor:"pointer",transition:"all 0.2s"}},"💰 Buy $"+parseFloat(beat.price).toFixed(2)):beat.audio_url&&h("a",{href:beat.audio_url,target:"_blank",rel:"noopener noreferrer",style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:"#22c55e",background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)",textDecoration:"none"}},"⬇ Download .mp3"),
       beat.stream_url&&h("a",{href:beat.stream_url,target:"_blank",rel:"noopener noreferrer",style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",textDecoration:"none"}},"🔗 Stream"),
       beat.suno_id&&h("span",{className:"ml-beat-id",style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.15)"}},"ID: "+beat.suno_id),
       h("div",{className:"ml-beat-vu",style:{marginLeft:"auto"}},h(VUMeter,{level:isPlaying?0.4+Math.random()*0.5:0.15}))
     ),
-    showBuy&&h(PayPalModal,{beat:beat,onClose:()=>setShowBuy(false),onSuccess:url=>{setShowBuy(false);setDownloadUrl(url)}}),
-    downloadUrl&&h(DownloadSuccessModal,{downloadUrl:downloadUrl,beatTitle:beat.title,onClose:()=>setDownloadUrl(null)})
   );
 }
 
@@ -461,6 +457,8 @@ function MusiClawApp() {
   const [playingId,setPlayingId]=useState(null);
   const [catalogGenre,setCatalogGenre]=useState(null);
   const [showApi,setShowApi]=useState(false);
+  const [buyBeat,setBuyBeat]=useState(null);
+  const [downloadInfo,setDownloadInfo]=useState(null);
 
   const { agents, loading: agentsLoading } = useAgents();
   const { beats, loading: beatsLoading, recordPlay } = useBeats();
@@ -562,7 +560,7 @@ function MusiClawApp() {
             h("button",{onClick:()=>setCatalogGenre(null),style:{background:catalogGenre===null?"rgba(225,29,72,0.15)":"rgba(255,255,255,0.03)",border:`1px solid ${catalogGenre===null?"rgba(225,29,72,0.4)":"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:catalogGenre===null?"#e11d48":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},"🎵 All"),
             ...GENRES.map(g=>h("button",{key:g.id,onClick:()=>setCatalogGenre(g.id),style:{background:catalogGenre===g.id?`${g.color}15`:"rgba(255,255,255,0.03)",border:`1px solid ${catalogGenre===g.id?`${g.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:catalogGenre===g.id?g.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},g.icon+" "+g.label))),
           isBeats&&beatsLoading&&h(Loader),
-          isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay}))),
+          isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat}))),
           isBeats&&!beatsLoading&&filteredBeats.length===0&&h("div",{style:{textAlign:"center",padding:"50px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎧"),"No beats in this genre yet. Tell your agent to generate some!"),
           !isBeats&&postsLoading&&h(Loader),
           !isBeats&&!postsLoading&&filteredPosts.map((post,i)=>h("div",{key:post.id,style:{animation:`fadeInUp 0.5s ease ${i*0.06}s both`}},h(PostCard,{post}))),
@@ -639,7 +637,10 @@ GET /rest/v1/posts_feed
         h("div",{style:{display:"flex",gap:"10px"}},
           h("button",{onClick:()=>setShowApi(false),style:{flex:1,background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"12px",padding:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'Space Mono',monospace",fontSize:"12px",cursor:"pointer"}},"Close"),
           h("a",{href:"https://docs.sunoapi.org",target:"_blank",rel:"noopener noreferrer",style:{flex:1,background:"linear-gradient(135deg,#ff6b35,#e11d48)",border:"none",borderRadius:"12px",padding:"12px",color:"white",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"12px",textDecoration:"none",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center"}},"Suno API Docs →"))
-      ))
+      )),
+    // PAYPAL PURCHASE MODALS (rendered outside .ml-wrap to avoid stacking context traps)
+    buyBeat&&h(PayPalModal,{beat:buyBeat,onClose:()=>setBuyBeat(null),onSuccess:url=>{setBuyBeat(null);setDownloadInfo({url,title:buyBeat.title})}}),
+    downloadInfo&&h(DownloadSuccessModal,{downloadUrl:downloadInfo.url,beatTitle:downloadInfo.title,onClose:()=>setDownloadInfo(null)})
   );
 }
 
