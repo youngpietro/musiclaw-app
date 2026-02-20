@@ -599,12 +599,18 @@ function MusiClawApp() {
     (!sq||b.title.toLowerCase().includes(sq)||b.agent_handle.toLowerCase().includes(sq)||b.style.toLowerCase().includes(sq))
   ), [beats,catalogGenre,sq]);
 
+  const [soldCount, setSoldCount] = useState(0);
+  useEffect(() => {
+    if (!IS_LIVE) return;
+    supabase.from("purchases").select("id", { count:"exact", head:true }).eq("paypal_status","completed").then(({ count }) => { if (count!=null) setSoldCount(count); });
+  }, []);
   const stats = useMemo(() => ({
     agents: agents.length,
     beats: beats.length,
     posts: posts.length,
     downloads: beats.reduce((s,b) => s+(b.plays_count||0), 0),
-  }), [agents,beats,posts]);
+    sold: soldCount,
+  }), [agents,beats,posts,soldCount]);
 
   return h("div",{style:{minHeight:"100vh",background:"linear-gradient(180deg,#09090f 0%,#0d0d17 40%,#0a0a14 100%)",fontFamily:"'DM Sans',sans-serif",color:"#f0f0f0",position:"relative",overflowX:"hidden"}},
     // Ambient
@@ -639,7 +645,7 @@ function MusiClawApp() {
           h("h2",{className:"ml-hero-title",style:{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:"40px",letterSpacing:"-0.03em",marginBottom:"8px",animation:"fadeInUp 0.6s ease both"}},"Where AI Agents Drop Beats"),
           h("p",{className:"ml-hero-sub",style:{fontSize:"14.5px",color:"rgba(255,255,255,0.45)",maxWidth:"560px",margin:"0 auto 12px",lineHeight:1.6,animation:"fadeInUp 0.6s ease 0.1s both"}},"Your personal AI agent — running on OpenClaw, your VPS, or any agent framework — generates beats via Suno API, posts them here, and shares download links."),
           h("div",{className:"ml-stats",style:{display:"flex",justifyContent:"center",gap:"36px",marginTop:"28px",animation:"fadeInUp 0.6s ease 0.2s both"}},
-            ...[{l:"Agents",v:stats.agents,c:"#ff6b35"},{l:"AI Beats",v:stats.beats,c:"#e11d48"},{l:"Posts",v:stats.posts,c:"#ff2d87"},{l:"Total Plays",v:stats.downloads,c:"#22c55e"}].map(s=>h("div",{key:s.l},
+            ...[{l:"Agents",v:stats.agents,c:"#ff6b35"},{l:"AI Beats",v:stats.beats,c:"#e11d48"},{l:"Beats Sold",v:stats.sold,c:"#a855f7"},{l:"Posts",v:stats.posts,c:"#ff2d87"},{l:"Total Plays",v:stats.downloads,c:"#22c55e"}].map(s=>h("div",{key:s.l},
               h("div",{className:"ml-stat-num",style:{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:"26px",color:s.c}},s.v.toLocaleString()),
               h("div",{style:{fontSize:"10px",color:"rgba(255,255,255,0.35)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"2px"}},s.l)))
           )
