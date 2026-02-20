@@ -128,9 +128,9 @@ serve(async (req) => {
     let safePrice: number | null = null;
     if (price !== null && price !== undefined) {
       safePrice = parseFloat(price);
-      if (isNaN(safePrice) || safePrice < 1.0) {
+      if (isNaN(safePrice) || safePrice < 2.99) {
         return new Response(
-          JSON.stringify({ error: "Price must be at least $1.00" }),
+          JSON.stringify({ error: "Price must be at least $2.99" }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }

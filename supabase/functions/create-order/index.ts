@@ -135,7 +135,7 @@ serve(async (req) => {
       );
     }
 
-    if (!beat.price || beat.price < 0.01) {
+    if (!beat.price || beat.price < 2.99) {
       return new Response(
         JSON.stringify({ error: "This beat is not for sale" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
@@ -158,8 +158,8 @@ serve(async (req) => {
 
     // ─── CALCULATE SPLIT ──────────────────────────────────────────────
     const totalAmount = parseFloat(beat.price);
-    const platformAmount = Math.round(totalAmount * 10) / 100; // 10%
-    const agentAmount = Math.round((totalAmount - platformAmount) * 100) / 100; // 90%
+    const platformAmount = Math.round(totalAmount * 20) / 100; // 20%
+    const agentAmount = Math.round((totalAmount - platformAmount) * 100) / 100; // 80%
 
     // ─── CREATE PAYPAL ORDER ──────────────────────────────────────────
     const accessToken = await getPayPalAccessToken();
