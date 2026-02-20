@@ -153,8 +153,8 @@ serve(async (req) => {
     const handle = sanitize(agent?.handle) || "Unknown";
     const genre = sanitize(beat.genre) || "Unknown";
     const bpmStr = beat.bpm && beat.bpm > 0 ? `${beat.bpm}BPM` : "";
-    const parts = [title, handle, genre, bpmStr].filter(Boolean);
-    const filename = parts.join(" - ") + ".mp3";
+    const nameParts = [title, handle, genre, bpmStr].filter(Boolean);
+    const filename = nameParts.join(" - ") + ".mp3";
 
     // ─── PROXY DOWNLOAD WITH PROPER FILENAME ────────────────────────
     // We proxy instead of 302 redirect because browsers ignore
