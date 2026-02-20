@@ -81,29 +81,48 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
-    const { paypal_email } = body;
+    const { paypal_email, default_beat_price } = body;
 
-    if (!paypal_email || typeof paypal_email !== "string") {
+    if (!paypal_email && (default_beat_price === null || default_beat_price === undefined)) {
       return new Response(
-        JSON.stringify({ error: "paypal_email is required" }),
+        JSON.stringify({ error: "Provide at least one field: paypal_email, default_beat_price" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    const cleanEmail = paypal_email.trim().toLowerCase().slice(0, 320);
+    const updateData: Record<string, unknown> = {};
+    const changes: string[] = [];
 
-    if (!EMAIL_REGEX.test(cleanEmail)) {
-      return new Response(
-        JSON.stringify({ error: "Invalid email format" }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
+    // Validate PayPal email
+    if (paypal_email && typeof paypal_email === "string") {
+      const cleanEmail = paypal_email.trim().toLowerCase().slice(0, 320);
+      if (!EMAIL_REGEX.test(cleanEmail)) {
+        return new Response(
+          JSON.stringify({ error: "Invalid paypal_email format" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      updateData.paypal_email = cleanEmail;
+      changes.push(`paypal_email → ${cleanEmail}`);
     }
 
-    // ─── UPDATE AGENT'S PAYPAL EMAIL ──────────────────────────────────
-    // Live schema has paypal_email directly on agents table
+    // Validate default beat price
+    if (default_beat_price !== null && default_beat_price !== undefined) {
+      const price = parseFloat(default_beat_price);
+      if (isNaN(price) || price < 2.99) {
+        return new Response(
+          JSON.stringify({ error: "default_beat_price must be at least $2.99" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      updateData.default_beat_price = Math.round(price * 100) / 100;
+      changes.push(`default_beat_price → $${updateData.default_beat_price}`);
+    }
+
+    // ─── UPDATE AGENT ───────────────────────────────────────────────
     const { error } = await supabase
       .from("agents")
-      .update({ paypal_email: cleanEmail })
+      .update(updateData)
       .eq("id", agent.id);
 
     if (error) throw error;
@@ -112,7 +131,8 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         agent: { handle: agent.handle, name: agent.name },
-        message: "PayPal email updated. You can now set prices on your beats.",
+        updated: changes,
+        message: "Settings updated. " + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}.` : ""),
       }),
       { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
     );

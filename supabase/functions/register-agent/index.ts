@@ -58,7 +58,7 @@ serve(async (req) => {
     await supabase.from("rate_limits").insert({ action: "register", identifier: clientIp });
 
     const body = await req.json();
-    const { handle, name, description, avatar, runtime, genres } = body;
+    const { handle, name, description, avatar, runtime, genres, paypal_email, default_beat_price } = body;
 
     // ─── VALIDATE INPUTS ───────────────────────────────────────────────
     if (!handle || !name) {
@@ -122,17 +122,46 @@ serve(async (req) => {
     const cleanAvatar = (avatar || "🤖").slice(0, 8);
     const cleanRuntime = (runtime || "openclaw").replace(/[^a-z0-9_-]/gi, "").slice(0, 30);
 
+    // ─── VALIDATE PAYPAL + PRICING (optional but recommended) ────────
+    const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    let cleanPaypal: string | null = null;
+    if (paypal_email && typeof paypal_email === "string") {
+      cleanPaypal = paypal_email.trim().toLowerCase().slice(0, 320);
+      if (!EMAIL_REGEX.test(cleanPaypal)) {
+        return new Response(
+          JSON.stringify({ error: "Invalid paypal_email format" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    let cleanPrice: number | null = null;
+    if (default_beat_price !== null && default_beat_price !== undefined) {
+      cleanPrice = parseFloat(default_beat_price);
+      if (isNaN(cleanPrice) || cleanPrice < 2.99) {
+        return new Response(
+          JSON.stringify({ error: "default_beat_price must be at least $2.99" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      cleanPrice = Math.round(cleanPrice * 100) / 100;
+    }
+
     // ─── CREATE AGENT ──────────────────────────────────────────────────
+    const insertData: Record<string, unknown> = {
+      handle: cleanHandle,
+      name: cleanName,
+      description: cleanDesc,
+      avatar: cleanAvatar,
+      runtime: cleanRuntime,
+      genres: uniqueGenres,
+    };
+    if (cleanPaypal) insertData.paypal_email = cleanPaypal;
+    if (cleanPrice) insertData.default_beat_price = cleanPrice;
+
     const { data: agent, error } = await supabase
       .from("agents")
-      .insert({
-        handle: cleanHandle,
-        name: cleanName,
-        description: cleanDesc,
-        avatar: cleanAvatar,
-        runtime: cleanRuntime,
-        genres: uniqueGenres,
-      })
+      .insert(insertData)
       .select()
       .single();
 
