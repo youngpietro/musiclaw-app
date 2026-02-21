@@ -1,8 +1,8 @@
 // supabase/functions/manage-beats/index.ts
 // POST /functions/v1/manage-beats
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { action: "list" | "update-price" | "delete", beat_id?, price? }
-// Lets agents list, reprice, or soft-delete their beats
+// Body: { action: "list" | "update" | "update-price" | "delete", beat_id?, title?, price? }
+// Lets agents list, update (title/price), or soft-delete their beats
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -80,12 +80,13 @@ serve(async (req) => {
     const body = await req.json();
     const { action } = body;
 
-    if (!action || !["list", "update-price", "delete"].includes(action)) {
+    if (!action || !["list", "update", "update-price", "delete"].includes(action)) {
       return new Response(
         JSON.stringify({
-          error: 'Invalid action. Use "list", "update-price", or "delete".',
+          error: 'Invalid action. Use "list", "update", "update-price", or "delete".',
           examples: {
             list: '{"action":"list"}',
+            update: '{"action":"update","beat_id":"...","title":"New Title","price":5.99}',
             "update-price": '{"action":"update-price","beat_id":"...","price":5.99}',
             delete: '{"action":"delete","beat_id":"..."}',
           },
@@ -202,6 +203,107 @@ serve(async (req) => {
             new_price: roundedPrice,
           },
           message: `Price updated: "${beat.title}" is now $${roundedPrice.toFixed(2)}`,
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  ACTION: UPDATE (title and/or price)
+    // ═══════════════════════════════════════════════════════════════════
+    if (action === "update") {
+      const { beat_id, title, price } = body;
+
+      if (!beat_id) {
+        return new Response(
+          JSON.stringify({ error: "beat_id is required" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if ((title === null || title === undefined) && (price === null || price === undefined)) {
+        return new Response(
+          JSON.stringify({ error: "Provide at least one field to update: title, price" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Look up beat — must belong to this agent
+      const { data: beat } = await supabase
+        .from("beats")
+        .select("id, title, price, sold, status, agent_id")
+        .eq("id", beat_id)
+        .eq("agent_id", agent.id)
+        .single();
+
+      if (!beat) {
+        return new Response(
+          JSON.stringify({ error: "Beat not found or does not belong to you" }),
+          { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (beat.sold) {
+        return new Response(
+          JSON.stringify({ error: "Cannot update a sold beat" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (beat.status !== "complete") {
+        return new Response(
+          JSON.stringify({ error: "Cannot update — beat is still generating" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      const updateData: Record<string, unknown> = {};
+      const changes: string[] = [];
+
+      // Validate title
+      if (title !== null && title !== undefined) {
+        const cleanTitle = String(title).replace(/<[^>]*>/g, "").trim().slice(0, 200);
+        if (!cleanTitle) {
+          return new Response(
+            JSON.stringify({ error: "title cannot be empty" }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        updateData.title = cleanTitle;
+        changes.push(`title: "${beat.title}" → "${cleanTitle}"`);
+      }
+
+      // Validate price
+      if (price !== null && price !== undefined) {
+        const newPrice = parseFloat(price);
+        if (isNaN(newPrice) || newPrice < 2.99) {
+          return new Response(
+            JSON.stringify({ error: "price must be at least $2.99" }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        const roundedPrice = Math.round(newPrice * 100) / 100;
+        updateData.price = roundedPrice;
+        changes.push(`price: $${beat.price} → $${roundedPrice.toFixed(2)}`);
+      }
+
+      const { error: updateErr } = await supabase
+        .from("beats")
+        .update(updateData)
+        .eq("id", beat.id);
+
+      if (updateErr) throw updateErr;
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          beat: {
+            id: beat.id,
+            title: updateData.title || beat.title,
+            price: updateData.price || beat.price,
+          },
+          changes,
+          message: `Beat updated: ${changes.join(", ")}`,
         }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );

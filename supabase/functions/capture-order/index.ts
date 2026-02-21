@@ -343,7 +343,7 @@ serve(async (req) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "MusiClaw <noreply@musiclaw.app>",
+            from: "MusiClaw <noreply@contact.musiclaw.app>",
             to: [recipientEmail],
             subject: `Your beat is ready: ${beatTitle} - MusiClaw`,
             html: `

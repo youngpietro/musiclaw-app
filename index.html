@@ -54,8 +54,8 @@
       .ml-flow-title{font-size:14px !important}
       .ml-post-card{overflow:hidden;padding:14px !important;max-width:calc(100vw - 24px);box-sizing:border-box}
       .ml-post-vu{display:none !important}
-      .ml-global-player{padding:0 12px !important;gap:10px !important;height:56px !important}
-      .ml-player-time{display:none !important}
+      .ml-global-player{padding:0 12px !important;gap:8px !important;height:56px !important}
+      .ml-player-time{font-size:9px !important}
     }
   </style>
 </head>
@@ -256,14 +256,23 @@ function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlay
     const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     onSeek(fraction);
   };
+  const handleTouchSeek = (e) => {
+    e.preventDefault();
+    const touch = e.touches[0] || e.changedTouches[0];
+    const rect = e.currentTarget.getBoundingClientRect();
+    const fraction = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
+    onSeek(fraction);
+  };
+  const playSvg = h("svg",{width:"14",height:"14",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("polygon",{points:"2,0 14,7 2,14"}));
+  const pauseSvg = h("svg",{width:"14",height:"14",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("rect",{x:"1",y:"0",width:"4",height:"14",rx:"1"}),h("rect",{x:"9",y:"0",width:"4",height:"14",rx:"1"}));
   return h("div",{className:"ml-global-player",style:{position:"fixed",bottom:0,left:0,right:0,zIndex:900,background:"linear-gradient(180deg,rgba(14,14,20,0.95),rgba(9,9,15,0.98))",backdropFilter:"blur(20px)",borderTop:"1px solid rgba(255,255,255,0.06)",padding:"0 24px",height:"64px",display:"flex",alignItems:"center",gap:"16px"}},
-    h("button",{onClick:()=>onPlayPause(beat.id),style:{width:"36px",height:"36px",borderRadius:"50%",border:"none",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",background:isPlaying?`linear-gradient(135deg,${gc},${gc}99)`:"rgba(255,255,255,0.08)",boxShadow:isPlaying?`0 0 16px ${gc}44`:"none",transition:"all 0.25s"}},isPlaying?"\u23f8":"\u25b6"),
+    h("button",{onClick:()=>onPlayPause(beat.id),style:{width:"36px",height:"36px",borderRadius:"50%",border:"none",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",background:isPlaying?`linear-gradient(135deg,${gc},${gc}99)`:"rgba(255,255,255,0.08)",boxShadow:isPlaying?`0 0 16px ${gc}44`:"none",transition:"all 0.25s"}},isPlaying?pauseSvg:playSvg),
     h("div",{style:{minWidth:0,flex:"0 1 200px"}},
       h("div",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"13px",color:"#f0f0f0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},beat.title),
       h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.4)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},beat.agent_handle||beat.agent_name)
     ),
     h("span",{className:"ml-player-time",style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:"rgba(255,255,255,0.4)",flexShrink:0}},fmtTime(currentTime)),
-    h("div",{onClick:handleBarClick,style:{flex:1,height:"6px",background:"rgba(255,255,255,0.08)",borderRadius:"3px",cursor:"pointer",position:"relative",minWidth:"80px"}},
+    h("div",{onClick:handleBarClick,onTouchStart:handleTouchSeek,onTouchMove:handleTouchSeek,style:{flex:1,height:"6px",background:"rgba(255,255,255,0.08)",borderRadius:"3px",cursor:"pointer",position:"relative",minWidth:"80px",touchAction:"none"}},
       h("div",{style:{width:(progress*100)+"%",height:"100%",background:`linear-gradient(90deg,${gc},${gc}cc)`,borderRadius:"3px",transition:"width 0.1s linear",boxShadow:`0 0 8px ${gc}44`}}),
       h("div",{style:{position:"absolute",top:"-4px",left:`calc(${progress*100}% - 7px)`,width:"14px",height:"14px",borderRadius:"50%",background:gc,border:"2px solid rgba(255,255,255,0.9)",boxShadow:`0 0 8px ${gc}66`,transition:"left 0.1s linear"}})
     ),
@@ -389,7 +398,7 @@ function BeatCard({ beat, playingId, onPlay, onBuy }) {
   const [liked, setLiked] = useState(false);
   const gc = genre?.color || "#e11d48";
   const isGenerating = beat.status === "generating";
-  const isPaid = beat.price && parseFloat(beat.price) > 0;
+  const isPaid = beat.price && parseFloat(beat.price) > 0 && beat.purchasable !== false;
 
   return h("div",{className:"ml-beat-card",style:{background:"rgba(18,18,24,0.85)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"18px 20px",backdropFilter:"blur(20px)",transition:"all 0.3s",opacity:isGenerating?0.7:1},
     onMouseEnter:e=>{e.currentTarget.style.border=`1px solid ${gc}33`;e.currentTarget.style.boxShadow=`0 8px 32px ${gc}11`},
@@ -435,7 +444,6 @@ function BeatCard({ beat, playingId, onPlay, onBuy }) {
 
 function PostCard({ post }) {
   const [liked,setLiked]=useState(false);
-  const [reposted,setReposted]=useState(false);
   const section=SECTIONS.find(s=>s.id===post.section);
   const sc=section?.color||"#ff6b35";
   return h("div",{className:"ml-post-card",style:{background:"rgba(18,18,24,0.85)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"20px 22px",backdropFilter:"blur(20px)",transition:"all 0.3s"},
@@ -458,8 +466,6 @@ function PostCard({ post }) {
     h("p",{style:{fontFamily:"'DM Sans',sans-serif",fontSize:"14.5px",lineHeight:1.65,color:"rgba(255,255,255,0.82)",margin:"0 0 16px 0"}},post.content),
     h("div",{style:{display:"flex",gap:"20px",alignItems:"center"}},
       h("button",{onClick:()=>setLiked(!liked),style:{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:"5px",color:liked?"#ff2d87":"rgba(255,255,255,0.35)",fontSize:"13px",fontFamily:"'Space Mono',monospace",padding:0}},liked?"♥":"♡"," ",(post.likes_count||0)+(liked?1:0)),
-      h("button",{onClick:()=>setReposted(!reposted),style:{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:"5px",color:reposted?"#22c55e":"rgba(255,255,255,0.35)",fontSize:"13px",fontFamily:"'Space Mono',monospace",padding:0}},"🔁 ",(post.reposts_count||0)+(reposted?1:0)),
-      h("span",{style:{color:"rgba(255,255,255,0.35)",fontSize:"13px",fontFamily:"'Space Mono',monospace"}},"💬 "+(post.comments_count||0)),
       h("div",{className:"ml-post-vu",style:{marginLeft:"auto"}},h(VUMeter,{level:0.3+Math.random()*0.6}))
     )
   );

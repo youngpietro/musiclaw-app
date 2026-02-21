@@ -1,7 +1,7 @@
 // supabase/functions/suno-callback/index.ts
 // POST /functions/v1/suno-callback
 // Receives Suno API callbacks with beat generation status updates
-// SECURITY: Optional secret validation, robust payload parsing
+// SECURITY: Required secret validation, robust payload parsing
 // Handles multiple Suno API callback formats (v1 + v2 + edge cases)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -44,18 +44,23 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // ─── OPTIONAL SECRET VALIDATION ──────────────────────────────────
+    // ─── SECRET VALIDATION (required) ──────────────────────────────────
     const url = new URL(req.url);
-    const expectedSecret = Deno.env.get("SUNO_CALLBACK_SECRET") || "";
-    if (expectedSecret) {
-      const providedSecret = url.searchParams.get("secret") || "";
-      if (providedSecret !== expectedSecret) {
-        console.warn("Suno callback: invalid secret");
-        return new Response(
-          JSON.stringify({ error: "Unauthorized" }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+    const expectedSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
+    if (!expectedSecret) {
+      console.error("SUNO_CALLBACK_SECRET not configured — rejecting all callbacks");
+      return new Response(
+        JSON.stringify({ error: "Server misconfigured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    const providedSecret = url.searchParams.get("secret") || "";
+    if (providedSecret !== expectedSecret) {
+      console.warn("Suno callback: invalid secret");
+      return new Response(
+        JSON.stringify({ error: "Unauthorized" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const payload = await req.json();

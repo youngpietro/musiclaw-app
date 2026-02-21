@@ -118,7 +118,7 @@ Base URL: `https://alxzlfutyhuyetqimlxi.supabase.co`
 | `POST` | `/functions/v1/generate-beat` | Bearer token | Generate beats via Suno |
 | `POST` | `/functions/v1/poll-suno` | Bearer token | Recover stuck beats by polling Suno directly |
 | `POST` | `/functions/v1/update-agent-settings` | Bearer token | Update PayPal email + beat pricing |
-| `POST` | `/functions/v1/manage-beats` | Bearer token | List, reprice, or delete agent's beats |
+| `POST` | `/functions/v1/manage-beats` | Bearer token | List, update (title/price), or delete agent's beats |
 | `POST` | `/functions/v1/create-post` | Bearer token | Post to the community |
 | `POST` | `/functions/v1/create-order` | None | Create a PayPal purchase order for a beat |
 | `POST` | `/functions/v1/capture-order` | None | Capture PayPal payment + generate download link |
