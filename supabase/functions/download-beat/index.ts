@@ -37,63 +37,6 @@ async function hmacVerify(
   return await crypto.subtle.verify("HMAC", key, sigBytes, encoder.encode(payload));
 }
 
-// Re-trigger WAV conversion for expired/missing WAV URLs
-async function retriggerWav(beatId: string, sunoId: string, supabase: any): Promise<void> {
-  const platformKey = Deno.env.get("PLATFORM_SUNO_API_KEY");
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
-  if (!platformKey || !callbackSecret) return;
-
-  const wavTaskId = `wav-retrigger-${beatId}-${Date.now()}`;
-  try {
-    await fetch("https://api.kie.ai/api/v1/wav/generate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${platformKey}`,
-      },
-      body: JSON.stringify({
-        taskId: wavTaskId,
-        audioId: sunoId,
-        callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${callbackSecret}&beat_id=${beatId}`,
-      }),
-    });
-    await supabase.from("beats").update({ wav_status: "processing" }).eq("id", beatId);
-    console.log(`WAV re-triggered for beat ${beatId}`);
-  } catch (err) {
-    console.error(`WAV re-trigger failed for beat ${beatId}:`, err.message);
-  }
-}
-
-// Re-trigger stems splitting for expired/missing stem URLs
-async function retriggerStems(beatId: string, sunoId: string, supabase: any): Promise<void> {
-  const platformKey = Deno.env.get("PLATFORM_SUNO_API_KEY");
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
-  if (!platformKey || !callbackSecret) return;
-
-  const stemsTaskId = `stems-retrigger-${beatId}-${Date.now()}`;
-  try {
-    await fetch("https://api.sunoapi.org/api/v1/vocal-removal/generate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${platformKey}`,
-      },
-      body: JSON.stringify({
-        taskId: stemsTaskId,
-        audioId: sunoId,
-        type: "split_stem",
-        callBackUrl: `${supabaseUrl}/functions/v1/stems-callback?secret=${callbackSecret}&beat_id=${beatId}`,
-      }),
-    });
-    await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beatId);
-    console.log(`Stems re-triggered for beat ${beatId}`);
-  } catch (err) {
-    console.error(`Stems re-trigger failed for beat ${beatId}:`, err.message);
-  }
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -228,27 +171,20 @@ serve(async (req) => {
     if (tier === "stems") {
       // Check if stems are available
       if (beat.stems_status !== "complete" || !beat.stems) {
-        // Try re-triggering if we have a suno_id
-        if (beat.suno_id && beat.stems_status !== "processing") {
-          await retriggerStems(beatId, beat.suno_id, supabase);
-        }
-
-        // Also check WAV
-        if (beat.suno_id && beat.wav_status !== "complete" && beat.wav_status !== "processing") {
-          await retriggerWav(beatId, beat.suno_id, supabase);
-        }
-
         // Undo download count increment (not a real download yet)
         await supabase
           .from("purchases")
           .update({ download_count: purchase.download_count })
           .eq("id", purchaseId);
 
+        const isProcessing = beat.stems_status === "processing" || beat.wav_status === "processing";
         return new Response(
           JSON.stringify({
-            status: "processing",
-            message: "Stems are being prepared. Please retry in about 60 seconds.",
-            retry_after: 60,
+            status: isProcessing ? "processing" : "unavailable",
+            message: isProcessing
+              ? "Stems are being prepared. Please retry in about 60 seconds."
+              : "Stems are not yet available for this beat. Please contact the seller.",
+            retry_after: isProcessing ? 60 : null,
           }),
           { status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
@@ -257,10 +193,6 @@ serve(async (req) => {
       // Determine WAV URL (fallback to MP3)
       let wavDownloadUrl = beat.wav_url;
       if (!wavDownloadUrl) {
-        // WAV not available — try re-triggering
-        if (beat.suno_id && beat.wav_status !== "processing") {
-          await retriggerWav(beatId, beat.suno_id, supabase);
-        }
         // Fall back to MP3 for the main track
         wavDownloadUrl = beat.audio_url;
       }
@@ -309,12 +241,8 @@ serve(async (req) => {
       });
     }
 
-    // WAV not ready — try re-triggering if possible
-    if (beat.suno_id && beat.wav_status !== "processing") {
-      await retriggerWav(beatId, beat.suno_id, supabase);
-    }
-
-    // Fallback: proxy MP3 (small enough to proxy, ~3-5MB)
+    // WAV not ready — fallback to MP3
+    // (Agent must call process-stems to trigger WAV conversion)
     if (!beat.audio_url) {
       return new Response("Audio file not available", { status: 404 });
     }

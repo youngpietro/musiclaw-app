@@ -173,68 +173,6 @@ serve(async (req) => {
         }).eq("id", beat.id);
 
         console.log(`Beat ${beat.id} (${beat.title}) → complete. audio: ${!!audioUrl}, stream: ${!!(streamUrl || audioUrl)}`);
-
-        // ─── TRIGGER WAV CONVERSION + STEM SPLITTING ────────────────
-        const platformKey = Deno.env.get("PLATFORM_SUNO_API_KEY");
-        const supabaseUrl = Deno.env.get("SUPABASE_URL");
-        const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
-        const resolvedSunoId = trackId || beat.suno_id;
-
-        if (platformKey && resolvedSunoId && callbackSecret) {
-          // Generate a unique task ID for WAV/stems
-          const wavTaskId = `wav-${beat.id}-${Date.now()}`;
-          const stemsTaskId = `stems-${beat.id}-${Date.now()}`;
-
-          // 1. Trigger WAV conversion (api.kie.ai)
-          try {
-            const wavRes = await fetch("https://api.kie.ai/api/v1/wav/generate", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${platformKey}`,
-              },
-              body: JSON.stringify({
-                taskId: wavTaskId,
-                audioId: resolvedSunoId,
-                callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${callbackSecret}&beat_id=${beat.id}`,
-              }),
-            });
-            console.log(`WAV conversion triggered for beat ${beat.id}: ${wavRes.status}`);
-
-            // Set wav_status to processing
-            await supabase.from("beats").update({ wav_status: "processing" }).eq("id", beat.id);
-          } catch (wavErr) {
-            console.error(`WAV trigger failed for beat ${beat.id}:`, wavErr.message);
-            await supabase.from("beats").update({ wav_status: "failed" }).eq("id", beat.id);
-          }
-
-          // 2. Trigger stem splitting (api.sunoapi.org)
-          try {
-            const stemsRes = await fetch("https://api.sunoapi.org/api/v1/vocal-removal/generate", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${platformKey}`,
-              },
-              body: JSON.stringify({
-                taskId: stemsTaskId,
-                audioId: resolvedSunoId,
-                type: "split_stem",
-                callBackUrl: `${supabaseUrl}/functions/v1/stems-callback?secret=${callbackSecret}&beat_id=${beat.id}`,
-              }),
-            });
-            console.log(`Stems splitting triggered for beat ${beat.id}: ${stemsRes.status}`);
-
-            // Set stems_status to processing
-            await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-          } catch (stemsErr) {
-            console.error(`Stems trigger failed for beat ${beat.id}:`, stemsErr.message);
-            await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-          }
-        } else {
-          if (!platformKey) console.log(`Skipping WAV/stems for beat ${beat.id}: PLATFORM_SUNO_API_KEY not set`);
-          if (!resolvedSunoId) console.log(`Skipping WAV/stems for beat ${beat.id}: no suno_id`);
-        }
       }
 
       // Award karma to the agent
@@ -262,7 +200,10 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ success: true, stage, effectiveComplete, beats_updated: beats.length }),
+      JSON.stringify({
+        success: true, stage, effectiveComplete, beats_updated: beats.length,
+        ...(effectiveComplete ? { action_required: "Call POST /functions/v1/process-stems with your suno_api_key to enable WAV downloads and stem splitting. Stems are mandatory for selling on MusiClaw." } : {}),
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
