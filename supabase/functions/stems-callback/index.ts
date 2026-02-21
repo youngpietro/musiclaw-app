@@ -67,19 +67,30 @@ serve(async (req) => {
       );
     }
 
-    // API response format from vocal-removal/split_stem:
-    // { code: 200, data: { callbackType: "complete", data: [{ audioUrl, type, ... }] } }
-    // Each stem item: { audioUrl, type: "vocals"|"drums"|"bass"|etc, duration, ... }
+    // Actual API callback format from vocal-removal/split_stem:
+    // {
+    //   "code": 200,
+    //   "data": {
+    //     "task_id": "...",
+    //     "vocal_removal_info": {
+    //       "vocal_url": "https://..._Vocals.mp3",
+    //       "drums_url": "https://..._Drums.mp3",
+    //       "bass_url": "https://..._Bass.mp3", ...
+    //       "origin_url": ""  ← skip this one
+    //     }
+    //   },
+    //   "msg": "vocal Removal generated successfully."
+    // }
     const outerData = payload.data || payload;
-    const callbackType = outerData.callbackType || outerData.callback_type || payload.callbackType || "";
     const status = payload.code || payload.status;
-    console.log(`Stems callback parsed for beat ${beatId}: callbackType=${callbackType}, status=${status}`);
+    const msg = payload.msg || payload.message || "";
+    console.log(`Stems callback parsed for beat ${beatId}: code=${status}, msg=${msg}, outerData keys: ${Object.keys(outerData).join(",")}`);
 
     // Check for error/failure
-    const isError = (status && status >= 400) || callbackType === "error" || callbackType === "failed";
+    const isError = (status && status >= 400) || msg.toLowerCase().includes("failed") || msg.toLowerCase().includes("error");
 
     if (isError) {
-      console.error(`Stems callback failed for beat ${beatId}:`, JSON.stringify(payload).slice(0, 500));
+      console.error(`Stems callback failed for beat ${beatId}: code=${status} msg=${msg}`);
       await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beatId);
       return new Response(
         JSON.stringify({ ok: true, message: "Stem splitting failed, status updated" }),
@@ -87,40 +98,49 @@ serve(async (req) => {
       );
     }
 
-    // Extract stem tracks array — try multiple keys
-    let stemTracks = outerData.data || outerData.output || outerData.tracks || outerData.stems || [];
-    // Also check top-level payload keys if nested didn't work
-    if (!Array.isArray(stemTracks) || stemTracks.length === 0) {
-      stemTracks = payload.output || payload.tracks || payload.stems || [];
-    }
-    console.log(`Stems callback: found ${Array.isArray(stemTracks) ? stemTracks.length : 0} stem tracks, keys in outerData: ${Object.keys(outerData).join(",")}`);
+    // ─── EXTRACT STEMS from vocal_removal_info ────────────────────────
+    // The API returns a flat object with named *_url keys, NOT an array
+    const vocalRemovalInfo = outerData.vocal_removal_info
+      || outerData.vocalRemovalInfo
+      || outerData.vocal_removal
+      || null;
 
-    if (!Array.isArray(stemTracks) || stemTracks.length === 0) {
-      console.error(`Stems callback: no stem tracks in payload for beat ${beatId}. outerData keys: ${Object.keys(outerData).join(",")}, payload keys: ${Object.keys(payload).join(",")}`);
-      await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beatId);
-      return new Response(
-        JSON.stringify({ ok: true, message: "No stem data found" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Build stems JSONB object: { "vocals": "url", "drums": "url", ... }
     const stems: Record<string, string> = {};
-    for (const stem of stemTracks) {
-      const stemType = stem.type || stem.stem_type || stem.name || stem.label || "unknown";
-      const stemUrl = stem.audioUrl || stem.audio_url || stem.url || null;
-      if (stemType && stemUrl) {
-        // Normalize type to lowercase, replace spaces with underscores
-        const key = String(stemType).toLowerCase().replace(/\s+/g, "_");
-        stems[key] = stemUrl;
+
+    if (vocalRemovalInfo && typeof vocalRemovalInfo === "object") {
+      // Format: { vocal_url: "...", drums_url: "...", bass_url: "...", origin_url: "" }
+      for (const [key, value] of Object.entries(vocalRemovalInfo)) {
+        if (!value || typeof value !== "string" || value === "") continue;
+        if (key === "origin_url") continue; // skip original track reference
+        // Strip _url suffix to get stem name: "drums_url" → "drums", "backing_vocals_url" → "backing_vocals"
+        const stemName = key.replace(/_url$/, "");
+        stems[stemName] = value as string;
+      }
+      console.log(`Stems from vocal_removal_info: ${Object.keys(stems).join(", ")} (${Object.keys(stems).length} stems)`);
+    }
+
+    // Fallback: try legacy array format (in case API ever changes back)
+    if (Object.keys(stems).length === 0) {
+      const stemTracks = outerData.data || outerData.output || outerData.tracks || outerData.stems || [];
+      if (Array.isArray(stemTracks)) {
+        for (const stem of stemTracks) {
+          const stemType = stem.type || stem.stem_type || stem.name || stem.label || "unknown";
+          const stemUrl = stem.audioUrl || stem.audio_url || stem.url || null;
+          if (stemType && stemUrl) {
+            stems[String(stemType).toLowerCase().replace(/\s+/g, "_")] = stemUrl;
+          }
+        }
+        if (Object.keys(stems).length > 0) {
+          console.log(`Stems from legacy array: ${Object.keys(stems).join(", ")} (${Object.keys(stems).length} stems)`);
+        }
       }
     }
 
     if (Object.keys(stems).length === 0) {
-      console.error(`Stems callback: could not extract any stem URLs for beat ${beatId}`);
+      console.error(`Stems callback: could not extract any stem URLs for beat ${beatId}. outerData keys: ${Object.keys(outerData).join(",")}, payload keys: ${Object.keys(payload).join(",")}`);
       await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beatId);
       return new Response(
-        JSON.stringify({ ok: true, message: "Could not extract stem URLs" }),
+        JSON.stringify({ ok: true, message: "Could not extract stem URLs from callback" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

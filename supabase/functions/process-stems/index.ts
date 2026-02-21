@@ -158,7 +158,7 @@ serve(async (req) => {
     if (beat.wav_status !== "complete") {
       const wavTaskId = `wav-${beat.id}-${Date.now()}`;
       try {
-        const wavRes = await fetch("https://api.kie.ai/api/v1/wav/generate", {
+        const wavRes = await fetch("https://api.sunoapi.org/api/v1/wav/generate", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

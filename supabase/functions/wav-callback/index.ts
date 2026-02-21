@@ -1,6 +1,6 @@
 // supabase/functions/wav-callback/index.ts
 // POST /functions/v1/wav-callback
-// Receives callbacks from Suno WAV conversion API (api.kie.ai)
+// Receives callbacks from Suno WAV conversion API (api.sunoapi.org)
 // Updates the beat record with the WAV download URL
 // SECURITY: Required secret validation via query param
 
