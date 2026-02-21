@@ -48,8 +48,7 @@ async function getPayPalAccessToken(): Promise<string> {
 }
 
 // ─── TEST MODE: $0.01 for all tiers, no sold check ──────────────────────
-// TODO: Set to false when testing is complete
-const TEST_MODE = true;
+const TEST_MODE = false;
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);

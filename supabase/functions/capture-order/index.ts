@@ -60,8 +60,7 @@ async function hmacSign(payload: string, secret: string): Promise<string> {
 }
 
 // ─── TEST MODE: Don't mark beat as sold after purchase ──────────────────
-// TODO: Set to false when testing is complete
-const TEST_MODE = true;
+const TEST_MODE = false;
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);
