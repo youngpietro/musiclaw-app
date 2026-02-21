@@ -1,9 +1,9 @@
 // supabase/functions/download-beat/index.ts
 // GET /functions/v1/download-beat?token=<signed_token>
 // Validates HMAC-signed download token and serves download.
-// Track tier: 302 redirect to WAV file (too large to proxy)
-// Stems tier: returns JSON with WAV + all stem redirect URLs
-// Fallback: if WAV not ready, redirects to MP3
+// Track tier: proxy-streamed WAV file with Content-Disposition filename
+// Stems tier: returns JSON with proxied download URLs, or proxy-streams individual files via ?file=
+// Fallback: if WAV not ready, proxy-streams MP3
 // SECURITY: HMAC verification, expiry check, download count limit
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -161,7 +161,7 @@ serve(async (req) => {
     const nameParts = [title, handle, genre, bpmStr].filter(Boolean);
 
     // ═══════════════════════════════════════════════════════════════════
-    //  STEMS TIER + ?file= : Serve individual file as 302 redirect
+    //  STEMS TIER + ?file= : Proxy-stream individual file with filename
     //  (No download count increment — counted on JSON fetch only)
     // ═══════════════════════════════════════════════════════════════════
     if (tier === "stems" && fileParam) {
@@ -181,10 +181,17 @@ serve(async (req) => {
         return new Response("File not found", { status: 404 });
       }
 
-      return new Response(null, {
-        status: 302,
+      // Proxy-stream: fetch from CDN and pipe through with correct filename
+      const fileRes = await fetch(fileUrl);
+      if (!fileRes.ok || !fileRes.body) {
+        return new Response("Failed to fetch file", { status: 502 });
+      }
+      const isWav = fileName.endsWith(".wav");
+      return new Response(fileRes.body, {
+        status: 200,
         headers: {
-          "Location": fileUrl,
+          ...corsHeaders,
+          "Content-Type": isWav ? "audio/wav" : "audio/mpeg",
           "Content-Disposition": `attachment; filename="${fileName}"`,
           "Cache-Control": "no-store, no-cache",
         },
@@ -263,12 +270,17 @@ serve(async (req) => {
 
     // Prefer WAV, fallback to MP3
     if (beat.wav_url && beat.wav_status === "complete") {
-      // WAV available — 302 redirect (WAV files are ~30MB, too large to proxy)
+      // Proxy-stream WAV through our endpoint for correct filename
       const wavFilename = nameParts.join(" - ") + ".wav";
-      return new Response(null, {
-        status: 302,
+      const wavRes = await fetch(beat.wav_url);
+      if (!wavRes.ok || !wavRes.body) {
+        return new Response("Failed to fetch WAV file", { status: 502 });
+      }
+      return new Response(wavRes.body, {
+        status: 200,
         headers: {
-          "Location": beat.wav_url,
+          ...corsHeaders,
+          "Content-Type": "audio/wav",
           "Content-Disposition": `attachment; filename="${wavFilename}"`,
           "Cache-Control": "no-store, no-cache",
         },
@@ -290,6 +302,7 @@ serve(async (req) => {
     return new Response(audioRes.body, {
       status: 200,
       headers: {
+        ...corsHeaders,
         "Content-Type": "audio/mpeg",
         "Content-Disposition": `attachment; filename="${filename}"`,
         "Cache-Control": "no-store, no-cache",
