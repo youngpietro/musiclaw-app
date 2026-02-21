@@ -114,8 +114,8 @@ serve(async (req) => {
       );
     }
 
-    // Check if already processing or complete
-    if (beat.wav_status === "processing" || beat.stems_status === "processing") {
+    // Check if already processing (both must be processing to skip)
+    if (beat.wav_status === "processing" && beat.stems_status === "processing") {
       return new Response(
         JSON.stringify({
           message: "WAV/stems are already being processed. Please wait for callbacks.",
@@ -136,6 +136,9 @@ serve(async (req) => {
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // If either is "failed", allow retry
+    console.log(`Process-stems for beat ${beat.id}: wav_status=${beat.wav_status}, stems_status=${beat.stems_status} — proceeding`);
 
     // ─── TRIGGER WAV + STEMS ────────────────────────────────────────
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -168,15 +171,25 @@ serve(async (req) => {
           }),
         });
 
-        if (wavRes.ok) {
+        const wavBody = await wavRes.text();
+        console.log(`WAV API response for beat ${beat.id}: status=${wavRes.status} body=${wavBody.slice(0, 500)}`);
+
+        // Check for API-level errors even on 200 responses
+        let wavApiError = false;
+        try {
+          const wavJson = JSON.parse(wavBody);
+          if (wavJson.code && wavJson.code >= 400) wavApiError = true;
+          if (wavJson.error || wavJson.message?.toLowerCase().includes("error")) wavApiError = true;
+        } catch { /* not JSON, check status only */ }
+
+        if (wavRes.ok && !wavApiError) {
           await supabase.from("beats").update({ wav_status: "processing" }).eq("id", beat.id);
           results.push("WAV conversion triggered");
           console.log(`WAV triggered for beat ${beat.id} by agent ${agent.handle}`);
         } else {
-          const errText = await wavRes.text();
-          console.error(`WAV API error for beat ${beat.id}:`, errText);
+          console.error(`WAV API error for beat ${beat.id}: status=${wavRes.status} body=${wavBody.slice(0, 500)}`);
           await supabase.from("beats").update({ wav_status: "failed" }).eq("id", beat.id);
-          results.push("WAV conversion failed: " + (wavRes.status === 401 ? "Invalid API key" : "API error"));
+          results.push("WAV conversion failed: " + (wavRes.status === 401 ? "Invalid API key" : `API error (${wavRes.status})`));
         }
       } catch (wavErr) {
         console.error(`WAV trigger failed for beat ${beat.id}:`, wavErr.message);
@@ -205,15 +218,25 @@ serve(async (req) => {
           }),
         });
 
-        if (stemsRes.ok) {
+        const stemsBody = await stemsRes.text();
+        console.log(`Stems API response for beat ${beat.id}: status=${stemsRes.status} body=${stemsBody.slice(0, 500)}`);
+
+        // Check for API-level errors even on 200 responses
+        let stemsApiError = false;
+        try {
+          const stemsJson = JSON.parse(stemsBody);
+          if (stemsJson.code && stemsJson.code >= 400) stemsApiError = true;
+          if (stemsJson.error || stemsJson.message?.toLowerCase().includes("error")) stemsApiError = true;
+        } catch { /* not JSON, check status only */ }
+
+        if (stemsRes.ok && !stemsApiError) {
           await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
           results.push("Stem splitting triggered (5 credits)");
           console.log(`Stems triggered for beat ${beat.id} by agent ${agent.handle}`);
         } else {
-          const errText = await stemsRes.text();
-          console.error(`Stems API error for beat ${beat.id}:`, errText);
+          console.error(`Stems API error for beat ${beat.id}: status=${stemsRes.status} body=${stemsBody.slice(0, 500)}`);
           await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-          results.push("Stem splitting failed: " + (stemsRes.status === 401 ? "Invalid API key" : "API error"));
+          results.push("Stem splitting failed: " + (stemsRes.status === 401 ? "Invalid API key" : `API error (${stemsRes.status})`));
         }
       } catch (stemsErr) {
         console.error(`Stems trigger failed for beat ${beat.id}:`, stemsErr.message);

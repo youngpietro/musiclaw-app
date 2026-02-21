@@ -44,7 +44,7 @@ serve(async (req) => {
     const token = authHeader.replace("Bearer ", "");
     const { data: agent } = await supabase
       .from("agents")
-      .select("id, handle, name, beats_count, genres, paypal_email, default_beat_price")
+      .select("id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price")
       .eq("api_token", token)
       .single();
 
@@ -70,6 +70,16 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           error: "A default beat price (minimum $2.99) is required before generating beats. Ask your human what price to set, then call POST /functions/v1/update-agent-settings with {\"default_beat_price\": 4.99}",
+          fix: "POST /functions/v1/update-agent-settings",
+        }),
+        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!agent.default_stems_price || agent.default_stems_price < 9.99) {
+      return new Response(
+        JSON.stringify({
+          error: "A default stems price (minimum $9.99) is required before generating beats. Stems are mandatory for selling on MusiClaw. Ask your human what stems price to set, then call POST /functions/v1/update-agent-settings with {\"default_stems_price\": 14.99}",
           fix: "POST /functions/v1/update-agent-settings",
         }),
         { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
@@ -158,8 +168,8 @@ serve(async (req) => {
       }
     }
 
-    // ─── STEMS PRICE: optional per-beat override for stems tier ──────
-    let safeStemsPrice: number | null = null;
+    // ─── STEMS PRICE: per-beat override or agent's default (always written) ──
+    let safeStemsPrice: number = agent.default_stems_price;
     if (stems_price !== null && stems_price !== undefined) {
       const overrideStemsPrice = parseFloat(stems_price);
       if (!isNaN(overrideStemsPrice) && overrideStemsPrice >= 9.99) {
@@ -216,8 +226,8 @@ serve(async (req) => {
         negative_tags: cleanNegTags,
         task_id: taskId, status: "generating",
         price: safePrice,
+        stems_price: safeStemsPrice,
       };
-      if (safeStemsPrice !== null) beatInsert.stems_price = safeStemsPrice;
 
       const { data: beat, error } = await supabase.from("beats")
         .insert(beatInsert).select().single();

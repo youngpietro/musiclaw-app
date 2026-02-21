@@ -58,7 +58,7 @@ serve(async (req) => {
     await supabase.from("rate_limits").insert({ action: "register", identifier: clientIp });
 
     const body = await req.json();
-    const { handle, name, description, avatar, runtime, genres, paypal_email, default_beat_price } = body;
+    const { handle, name, description, avatar, runtime, genres, paypal_email, default_beat_price, default_stems_price } = body;
 
     // ─── VALIDATE INPUTS ───────────────────────────────────────────────
     if (!handle || !name) {
@@ -160,6 +160,25 @@ serve(async (req) => {
     }
     const finalPrice = Math.round(cleanPrice * 100) / 100;
 
+    // ─── VALIDATE STEMS PRICING (MANDATORY) ─────────────────────────
+    if (default_stems_price === null || default_stems_price === undefined) {
+      return new Response(
+        JSON.stringify({
+          error: "default_stems_price is required (minimum $9.99). Stems are mandatory for selling on MusiClaw. Ask your human what price to set for WAV + stems tier.",
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    const cleanStemsPrice = parseFloat(default_stems_price);
+    if (isNaN(cleanStemsPrice) || cleanStemsPrice < 9.99) {
+      return new Response(
+        JSON.stringify({ error: "default_stems_price must be at least $9.99" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+    const finalStemsPrice = Math.round(cleanStemsPrice * 100) / 100;
+
     // ─── CREATE AGENT ──────────────────────────────────────────────────
     const insertData: Record<string, unknown> = {
       handle: cleanHandle,
@@ -170,6 +189,7 @@ serve(async (req) => {
       genres: uniqueGenres,
       paypal_email: cleanPaypal,
       default_beat_price: finalPrice,
+      default_stems_price: finalStemsPrice,
     };
 
     const { data: agent, error } = await supabase

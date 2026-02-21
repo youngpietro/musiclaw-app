@@ -52,8 +52,20 @@ serve(async (req) => {
     }
 
     // ─── PARSE CALLBACK PAYLOAD ─────────────────────────────────────
-    const payload = await req.json();
-    console.log(`Stems callback for beat ${beatId}:`, JSON.stringify(payload).slice(0, 2000));
+    const rawBody = await req.text();
+    console.log(`Stems callback RAW for beat ${beatId}: ${rawBody.slice(0, 3000)}`);
+
+    let payload: any;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch (parseErr) {
+      console.error(`Stems callback: invalid JSON for beat ${beatId}: ${rawBody.slice(0, 200)}`);
+      await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beatId);
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON in callback body" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // API response format from vocal-removal/split_stem:
     // { code: 200, data: { callbackType: "complete", data: [{ audioUrl, type, ... }] } }
@@ -61,6 +73,7 @@ serve(async (req) => {
     const outerData = payload.data || payload;
     const callbackType = outerData.callbackType || outerData.callback_type || payload.callbackType || "";
     const status = payload.code || payload.status;
+    console.log(`Stems callback parsed for beat ${beatId}: callbackType=${callbackType}, status=${status}`);
 
     // Check for error/failure
     const isError = (status && status >= 400) || callbackType === "error" || callbackType === "failed";
@@ -74,10 +87,16 @@ serve(async (req) => {
       );
     }
 
-    // Extract stem tracks array
-    const stemTracks = outerData.data || outerData.output || outerData.tracks || outerData.stems || [];
+    // Extract stem tracks array — try multiple keys
+    let stemTracks = outerData.data || outerData.output || outerData.tracks || outerData.stems || [];
+    // Also check top-level payload keys if nested didn't work
     if (!Array.isArray(stemTracks) || stemTracks.length === 0) {
-      console.error(`Stems callback: no stem tracks in payload for beat ${beatId}`);
+      stemTracks = payload.output || payload.tracks || payload.stems || [];
+    }
+    console.log(`Stems callback: found ${Array.isArray(stemTracks) ? stemTracks.length : 0} stem tracks, keys in outerData: ${Object.keys(outerData).join(",")}`);
+
+    if (!Array.isArray(stemTracks) || stemTracks.length === 0) {
+      console.error(`Stems callback: no stem tracks in payload for beat ${beatId}. outerData keys: ${Object.keys(outerData).join(",")}, payload keys: ${Object.keys(payload).join(",")}`);
       await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beatId);
       return new Response(
         JSON.stringify({ ok: true, message: "No stem data found" }),
