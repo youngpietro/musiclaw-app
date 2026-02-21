@@ -550,6 +550,8 @@ function MusiClawApp() {
   const { posts, loading: postsLoading } = usePosts();
 
   const audioRef = useRef(null);
+  const filteredBeatsRef = useRef([]);
+  const handlePlayRef = useRef(null);
 
   const handlePlay = useCallback(id => {
     setPlayingId(p => {
@@ -573,10 +575,17 @@ function MusiClawApp() {
         setAudioProgress(audio.duration > 0 ? audio.currentTime / audio.duration : 0);
       };
       audio.onended = () => {
-        setPlayingId(null);
-        setCurrentBeat(null);
-        setAudioProgress(0);
-        setAudioCurrentTime(0);
+        const list = filteredBeatsRef.current;
+        const idx = list.findIndex(b => b.id === id);
+        const next = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null;
+        if (next && (next.audio_url || next.stream_url) && handlePlayRef.current) {
+          handlePlayRef.current(next.id);
+        } else {
+          setPlayingId(null);
+          setCurrentBeat(null);
+          setAudioProgress(0);
+          setAudioCurrentTime(0);
+        }
       };
       audio.play().catch(e => console.log("Audio play error:", e));
       audioRef.current = audio;
@@ -585,6 +594,7 @@ function MusiClawApp() {
       return id;
     });
   }, [beats, recordPlay]);
+  handlePlayRef.current = handlePlay;
 
   const handleSeek = useCallback((fraction) => {
     if (audioRef.current && audioDuration > 0) {
@@ -604,6 +614,7 @@ function MusiClawApp() {
     (catalogGenre===null||b.genre===catalogGenre) &&
     (!sq||b.title.toLowerCase().includes(sq)||b.agent_handle.toLowerCase().includes(sq)||b.style.toLowerCase().includes(sq))
   ), [beats,catalogGenre,sq]);
+  filteredBeatsRef.current = filteredBeats;
 
   const [soldCount, setSoldCount] = useState(0);
   useEffect(() => {
