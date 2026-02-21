@@ -3,11 +3,14 @@
 // Validates HMAC-signed download token and serves download.
 // Track tier: proxy-streamed WAV file with Content-Disposition filename
 // Stems tier: returns JSON with proxied download URLs, or proxy-streams individual files via ?file=
+//   ?file=zip: fetches all files in parallel, creates ZIP in memory, returns single ZIP download
+//   ?file=track|drums|bass|vocal|other: proxy-streams individual file with correct filename
 // Fallback: if WAV not ready, proxy-streams MP3
 // SECURITY: HMAC verification, expiry check, download count limit
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import JSZip from "https://esm.sh/jszip@3.10.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -165,6 +168,65 @@ serve(async (req) => {
     //  (No download count increment — counted on JSON fetch only)
     // ═══════════════════════════════════════════════════════════════════
     if (tier === "stems" && fileParam) {
+      // ─── ZIP: Fetch all files in parallel, create ZIP in memory ─────
+      if (fileParam === "zip") {
+        const filesToZip: Array<{ url: string; filename: string }> = [];
+
+        // Add master track
+        const trackUrl = beat.wav_url || beat.audio_url;
+        if (trackUrl) {
+          filesToZip.push({
+            url: trackUrl,
+            filename: nameParts.join(" - ") + (beat.wav_url ? ".wav" : ".mp3"),
+          });
+        }
+
+        // Add all stems
+        if (beat.stems && typeof beat.stems === "object") {
+          for (const [stemType, stemUrl] of Object.entries(beat.stems)) {
+            if (stemUrl && typeof stemUrl === "string") {
+              const label = stemType.charAt(0).toUpperCase() + stemType.slice(1);
+              filesToZip.push({
+                url: stemUrl as string,
+                filename: nameParts.join(" - ") + " - " + label + ".mp3",
+              });
+            }
+          }
+        }
+
+        if (filesToZip.length === 0) {
+          return new Response("No files available for ZIP", { status: 404 });
+        }
+
+        // Fetch all files in parallel (fast datacenter-to-datacenter)
+        const fetchResults = await Promise.all(
+          filesToZip.map(async (f) => {
+            const res = await fetch(f.url);
+            if (!res.ok) throw new Error(`Failed to fetch ${f.filename}: ${res.status}`);
+            return { filename: f.filename, data: new Uint8Array(await res.arrayBuffer()) };
+          })
+        );
+
+        // Create ZIP (STORE = no compression, audio doesn't compress, saves CPU + memory)
+        const zip = new JSZip();
+        for (const { filename, data } of fetchResults) {
+          zip.file(filename, data);
+        }
+        const zipData = await zip.generateAsync({ type: "uint8array", compression: "STORE" });
+
+        const zipFilename = (title || "Beat") + " - WAV + Stems.zip";
+        return new Response(zipData, {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/zip",
+            "Content-Disposition": `attachment; filename="${zipFilename}"`,
+            "Cache-Control": "no-store, no-cache",
+          },
+        });
+      }
+
+      // ─── Individual file: proxy-stream with correct filename ────────
       let fileUrl: string | null = null;
       let fileName = "";
 
@@ -252,6 +314,7 @@ serve(async (req) => {
         JSON.stringify({
           status: "ready",
           tier: "stems",
+          zipUrl: `${baseUrl}&file=zip`,
           track: {
             url: `${baseUrl}&file=track`,
             filename: nameParts.join(" - ") + (beat.wav_url ? ".wav" : ".mp3"),
