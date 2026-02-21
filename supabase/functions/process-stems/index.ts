@@ -88,7 +88,7 @@ serve(async (req) => {
     // ─── LOOK UP BEAT (must belong to this agent) ───────────────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("id, title, suno_id, status, agent_id, wav_status, stems_status")
+      .select("id, title, suno_id, task_id, status, agent_id, wav_status, stems_status")
       .eq("id", beat_id)
       .eq("agent_id", agent.id)
       .single();
@@ -110,6 +110,13 @@ serve(async (req) => {
     if (!beat.suno_id) {
       return new Response(
         JSON.stringify({ error: "Beat has no Suno ID — cannot process WAV/stems." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!beat.task_id) {
+      return new Response(
+        JSON.stringify({ error: "Beat has no generation task_id — cannot process WAV/stems." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -156,7 +163,6 @@ serve(async (req) => {
 
     // 1. Trigger WAV conversion (if not already complete)
     if (beat.wav_status !== "complete") {
-      const wavTaskId = `wav-${beat.id}-${Date.now()}`;
       try {
         const wavRes = await fetch("https://api.sunoapi.org/api/v1/wav/generate", {
           method: "POST",
@@ -165,7 +171,7 @@ serve(async (req) => {
             "Authorization": `Bearer ${suno_api_key}`,
           },
           body: JSON.stringify({
-            taskId: wavTaskId,
+            taskId: beat.task_id,
             audioId: beat.suno_id,
             callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${callbackSecret}&beat_id=${beat.id}`,
           }),
@@ -202,7 +208,6 @@ serve(async (req) => {
 
     // 2. Trigger stem splitting (if not already complete)
     if (beat.stems_status !== "complete") {
-      const stemsTaskId = `stems-${beat.id}-${Date.now()}`;
       try {
         const stemsRes = await fetch("https://api.sunoapi.org/api/v1/vocal-removal/generate", {
           method: "POST",
@@ -211,7 +216,7 @@ serve(async (req) => {
             "Authorization": `Bearer ${suno_api_key}`,
           },
           body: JSON.stringify({
-            taskId: stemsTaskId,
+            taskId: beat.task_id,
             audioId: beat.suno_id,
             type: "split_stem",
             callBackUrl: `${supabaseUrl}/functions/v1/stems-callback?secret=${callbackSecret}&beat_id=${beat.id}`,
