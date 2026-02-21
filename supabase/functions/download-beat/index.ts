@@ -6,11 +6,38 @@
 //   ?file=zip: fetches all files in parallel, creates ZIP in memory, returns single ZIP download
 //   ?file=track|drums|bass|vocal|other: proxy-streams individual file with correct filename
 // Fallback: if WAV not ready, proxy-streams MP3
-// SECURITY: HMAC verification, expiry check, download count limit
+// SECURITY: HMAC verification, expiry check, download count limit, SSRF prevention
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import JSZip from "https://esm.sh/jszip@3.10.1";
+
+// ─── SSRF PREVENTION ──────────────────────────────────────────────────
+// Validates that audio URLs are HTTPS and not targeting internal/private networks.
+// All URLs fetched by this function come from DB (audio_url, wav_url, stems),
+// but a compromised DB record could point to internal services.
+function isAllowedAudioUrl(urlStr: string): boolean {
+  try {
+    const u = new URL(urlStr);
+    if (u.protocol !== "https:") return false;
+    const h = u.hostname.toLowerCase();
+    // Block internal/private hostnames
+    if (h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h === "[::1]") return false;
+    if (h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".localhost")) return false;
+    // Block private IP ranges (RFC 1918 + link-local)
+    if (h.startsWith("10.") || h.startsWith("192.168.")) return false;
+    if (h.startsWith("172.")) {
+      const second = parseInt(h.split(".")[1], 10);
+      if (second >= 16 && second <= 31) return false;
+    }
+    if (h.startsWith("169.254.")) return false; // link-local
+    // Block metadata endpoints (cloud providers)
+    if (h === "metadata.google.internal" || h === "169.254.169.254") return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -198,6 +225,14 @@ serve(async (req) => {
           return new Response("No files available for ZIP", { status: 404 });
         }
 
+        // Validate all URLs before fetching (SSRF prevention)
+        for (const f of filesToZip) {
+          if (!isAllowedAudioUrl(f.url)) {
+            console.error(`SSRF blocked: disallowed URL for ZIP file "${f.filename}": ${f.url}`);
+            return new Response("Blocked: invalid audio source URL", { status: 403 });
+          }
+        }
+
         // Fetch all files in parallel (fast datacenter-to-datacenter)
         const fetchResults = await Promise.all(
           filesToZip.map(async (f) => {
@@ -241,6 +276,12 @@ serve(async (req) => {
 
       if (!fileUrl) {
         return new Response("File not found", { status: 404 });
+      }
+
+      // SSRF prevention: validate URL before fetching
+      if (!isAllowedAudioUrl(fileUrl)) {
+        console.error(`SSRF blocked: disallowed URL for file "${fileParam}": ${fileUrl}`);
+        return new Response("Blocked: invalid audio source URL", { status: 403 });
       }
 
       // Proxy-stream: fetch from CDN and pipe through with correct filename
@@ -333,6 +374,11 @@ serve(async (req) => {
 
     // Prefer WAV, fallback to MP3
     if (beat.wav_url && beat.wav_status === "complete") {
+      // SSRF prevention: validate WAV URL before fetching
+      if (!isAllowedAudioUrl(beat.wav_url)) {
+        console.error(`SSRF blocked: disallowed WAV URL for beat ${beatId}: ${beat.wav_url}`);
+        return new Response("Blocked: invalid audio source URL", { status: 403 });
+      }
       // Proxy-stream WAV through our endpoint for correct filename
       const wavFilename = nameParts.join(" - ") + ".wav";
       const wavRes = await fetch(beat.wav_url);
@@ -354,6 +400,12 @@ serve(async (req) => {
     // (Agent must call process-stems to trigger WAV conversion)
     if (!beat.audio_url) {
       return new Response("Audio file not available", { status: 404 });
+    }
+
+    // SSRF prevention: validate MP3 URL before fetching
+    if (!isAllowedAudioUrl(beat.audio_url)) {
+      console.error(`SSRF blocked: disallowed audio URL for beat ${beatId}: ${beat.audio_url}`);
+      return new Response("Blocked: invalid audio source URL", { status: 403 });
     }
 
     const filename = nameParts.join(" - ") + ".mp3";

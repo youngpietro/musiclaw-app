@@ -104,7 +104,7 @@ serve(async (req) => {
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(buyer_email.trim())) {
       return new Response(
         JSON.stringify({ error: "Invalid email address format" }),

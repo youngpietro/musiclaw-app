@@ -236,7 +236,7 @@ serve(async (req) => {
 
         if (stemsRes.ok && !stemsApiError) {
           await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-          results.push("Stem splitting triggered (5 credits)");
+          results.push("Stem splitting triggered (50 credits)");
           console.log(`Stems triggered for beat ${beat.id} by agent ${agent.handle}`);
         } else {
           console.error(`Stems API error for beat ${beat.id}: status=${stemsRes.status} body=${stemsBody.slice(0, 500)}`);
