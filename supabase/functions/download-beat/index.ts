@@ -132,6 +132,7 @@ serve(async (req) => {
     }
 
     const tier = purchase.purchase_tier || "track";
+    const fileParam = url.searchParams.get("file"); // e.g., "track", "drums", "bass", "vocal"
 
     // ─── GET BEAT DATA ────────────────────────────────────────────────
     const { data: beat } = await supabase
@@ -159,14 +160,45 @@ serve(async (req) => {
     const bpmStr = beat.bpm && beat.bpm > 0 ? `${beat.bpm}BPM` : "";
     const nameParts = [title, handle, genre, bpmStr].filter(Boolean);
 
-    // ─── INCREMENT DOWNLOAD COUNT ─────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    //  STEMS TIER + ?file= : Serve individual file as 302 redirect
+    //  (No download count increment — counted on JSON fetch only)
+    // ═══════════════════════════════════════════════════════════════════
+    if (tier === "stems" && fileParam) {
+      let fileUrl: string | null = null;
+      let fileName = "";
+
+      if (fileParam === "track") {
+        fileUrl = beat.wav_url || beat.audio_url;
+        fileName = nameParts.join(" - ") + (beat.wav_url ? ".wav" : ".mp3");
+      } else if (beat.stems && typeof beat.stems === "object" && (beat.stems as Record<string, string>)[fileParam]) {
+        fileUrl = (beat.stems as Record<string, string>)[fileParam];
+        const label = fileParam.charAt(0).toUpperCase() + fileParam.slice(1);
+        fileName = nameParts.join(" - ") + " - " + label + ".mp3";
+      }
+
+      if (!fileUrl) {
+        return new Response("File not found", { status: 404 });
+      }
+
+      return new Response(null, {
+        status: 302,
+        headers: {
+          "Location": fileUrl,
+          "Content-Disposition": `attachment; filename="${fileName}"`,
+          "Cache-Control": "no-store, no-cache",
+        },
+      });
+    }
+
+    // ─── INCREMENT DOWNLOAD COUNT (only for JSON/track requests) ─────
     await supabase
       .from("purchases")
       .update({ download_count: purchase.download_count + 1 })
       .eq("id", purchaseId);
 
     // ═══════════════════════════════════════════════════════════════════
-    //  STEMS TIER: Return JSON with all download URLs
+    //  STEMS TIER: Return JSON with proxied download URLs
     // ═══════════════════════════════════════════════════════════════════
     if (tier === "stems") {
       // Check if stems are available
@@ -190,21 +222,19 @@ serve(async (req) => {
         );
       }
 
-      // Determine WAV URL (fallback to MP3)
-      let wavDownloadUrl = beat.wav_url;
-      if (!wavDownloadUrl) {
-        // Fall back to MP3 for the main track
-        wavDownloadUrl = beat.audio_url;
-      }
+      // Build proxied URLs that go through this same endpoint with ?file= param
+      // This avoids CORS issues (browser downloads from our domain, we redirect to CDN)
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const baseUrl = `${supabaseUrl}/functions/v1/download-beat?token=${encodeURIComponent(token)}`;
 
-      // Build stems download data with proper filenames
+      // Build stems download data with proxied URLs and proper filenames
       const stemsData: Record<string, { url: string; filename: string }> = {};
       if (beat.stems && typeof beat.stems === "object") {
         for (const [stemType, stemUrl] of Object.entries(beat.stems)) {
           if (stemUrl && typeof stemUrl === "string") {
             const stemLabel = stemType.charAt(0).toUpperCase() + stemType.slice(1);
             stemsData[stemType] = {
-              url: stemUrl as string,
+              url: `${baseUrl}&file=${encodeURIComponent(stemType)}`,
               filename: nameParts.join(" - ") + " - " + stemLabel + ".mp3",
             };
           }
@@ -216,7 +246,7 @@ serve(async (req) => {
           status: "ready",
           tier: "stems",
           track: {
-            url: wavDownloadUrl,
+            url: `${baseUrl}&file=track`,
             filename: nameParts.join(" - ") + (beat.wav_url ? ".wav" : ".mp3"),
             format: beat.wav_url ? "wav" : "mp3",
           },

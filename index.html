@@ -58,7 +58,6 @@
       .ml-player-time{font-size:9px !important}
     }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -410,51 +409,27 @@ function DownloadSuccessModal({ downloadUrl, beatTitle, tier, onClose }) {
   const [stemData, setStemData] = useState(null);
   const [stemLoading, setStemLoading] = useState(false);
   const [stemError, setStemError] = useState(null);
-  const [zipProgress, setZipProgress] = useState(null);
   const isStemsTier = tier === "stems";
 
-  // Helper: fetch file as blob and trigger download with custom filename
-  const fetchAndDownload = (fileUrl, filename) => {
-    fetch(fileUrl).then(r=>r.blob()).then(blob=>{
-      const a=document.createElement("a");
-      a.href=URL.createObjectURL(blob);
-      a.download=filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(a.href);
-    }).catch(err=>console.error("Download failed:",err));
+  // Download All: trigger each file download with staggered timing
+  const downloadAll = () => {
+    if (!stemData) return;
+    const urls = [];
+    if (stemData.track) urls.push(stemData.track.url);
+    Object.values(stemData.stems || {}).forEach(s => urls.push(s.url));
+    urls.forEach((u, i) => {
+      setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = u;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }, i * 500);
+    });
   };
 
-  // Download All as ZIP
-  const downloadAllZip = async () => {
-    if(!stemData||!window.JSZip)return;
-    setZipProgress("zipping");
-    try {
-      const zip=new JSZip();
-      if(stemData.track&&stemData.track.url){
-        const r=await fetch(stemData.track.url);
-        zip.file(stemData.track.filename,await r.blob());
-      }
-      if(stemData.stems){
-        for(const [n,stem] of Object.entries(stemData.stems)){
-          const r=await fetch(stem.url);
-          zip.file(stem.filename,await r.blob());
-        }
-      }
-      const zipBlob=await zip.generateAsync({type:"blob"});
-      const a=document.createElement("a");
-      a.href=URL.createObjectURL(zipBlob);
-      a.download=(stemData.beat_title||beatTitle||"Beat")+" - WAV + Stems.zip";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(a.href);
-      setZipProgress("done");
-    } catch(err){console.error("ZIP creation failed:",err);setZipProgress(null);}
-  };
-
-  // For stems tier, fetch the download endpoint to get stem URLs
+  // For stems tier, fetch the download endpoint to get proxied URLs
   useEffect(() => {
     if (!isStemsTier || !downloadUrl) return;
     setStemLoading(true);
@@ -477,21 +452,19 @@ function DownloadSuccessModal({ downloadUrl, beatTitle, tier, onClose }) {
       h("h3",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"20px",color:"#f0f0f0",margin:"0 0 6px"}},"Purchase Complete!"),
       h("p",{style:{fontSize:"13px",color:"rgba(255,255,255,0.5)",fontFamily:"'DM Sans',sans-serif",margin:"0 0 6px"}},beatTitle),
       h("p",{style:{fontSize:"11px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",margin:"0 0 24px"}},isStemsTier?"WAV + Stems Package":"WAV Track"),
-      // Track-only tier: direct download (302 redirect works fine)
-      !isStemsTier&&h("a",{href:downloadUrl,target:"_blank",rel:"noopener noreferrer",style:dlBtnStyle},"⬇ Download WAV"),
+      // Track-only tier: direct download (302 redirect)
+      !isStemsTier&&h("a",{href:downloadUrl,style:dlBtnStyle},"⬇ Download WAV"),
       // Stems tier: loading state
       isStemsTier&&stemLoading&&h("div",{style:{padding:"16px",color:"rgba(255,255,255,0.4)",fontSize:"12px",fontFamily:"'Space Mono',monospace"}},"Loading stem files..."),
       isStemsTier&&stemError&&h("div",{style:{padding:"12px",background:"rgba(239,68,68,0.1)",borderRadius:"10px",color:"#ef4444",fontSize:"12px",fontFamily:"'Space Mono',monospace",marginBottom:"12px"}},stemError),
-      // Download All as ZIP (prominent button at top)
-      isStemsTier&&stemData&&stemData.stems&&h("button",{onClick:downloadAllZip,disabled:zipProgress==="zipping",style:{...dlBtnStyle,background:zipProgress==="zipping"?"rgba(34,197,94,0.3)":zipProgress==="done"?"linear-gradient(135deg,#16a34a,#15803d)":"linear-gradient(135deg,#22c55e,#16a34a)",marginBottom:"16px"}},
-        zipProgress==="zipping"?"Preparing ZIP...":zipProgress==="done"?"ZIP Downloaded!":"⬇ Download All (ZIP)"
-      ),
-      // Master track download
-      isStemsTier&&stemData&&stemData.track&&h("button",{onClick:()=>fetchAndDownload(stemData.track.url,stemData.track.filename),style:{...dlBtnStyle,background:"rgba(34,197,94,0.15)",color:"#22c55e",boxShadow:"none",border:"1px solid rgba(34,197,94,0.3)"}},"⬇ Download "+stemData.track.format.toUpperCase()+" Master"),
-      // Individual stem buttons
+      // Download All button (triggers all downloads with staggered timing)
+      isStemsTier&&stemData&&stemData.stems&&h("button",{onClick:downloadAll,style:{...dlBtnStyle,marginBottom:"16px"}},"⬇ Download All"),
+      // Master track download (302 redirect via our proxy)
+      isStemsTier&&stemData&&stemData.track&&h("a",{href:stemData.track.url,style:{...dlBtnStyle,background:"rgba(34,197,94,0.15)",color:"#22c55e",boxShadow:"none",border:"1px solid rgba(34,197,94,0.3)"}},"⬇ Download "+stemData.track.format.toUpperCase()+" Master"),
+      // Individual stem buttons (302 redirects via our proxy)
       isStemsTier&&stemData&&stemData.stems&&h("div",{style:{marginTop:"8px"}},
         h("p",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",marginBottom:"8px"}},"Individual Stems:"),
-        ...Object.entries(stemData.stems).map(([name,stem])=>h("button",{key:name,onClick:()=>fetchAndDownload(stem.url,stem.filename),style:stemBtnStyle},"⬇ "+name.charAt(0).toUpperCase()+name.slice(1)))
+        ...Object.entries(stemData.stems).map(([name,stem])=>h("a",{key:name,href:stem.url,style:stemBtnStyle},"⬇ "+name.charAt(0).toUpperCase()+name.slice(1)))
       ),
       h("p",{style:{fontSize:"11px",color:"rgba(255,255,255,0.25)",marginTop:"16px",fontFamily:"'Space Mono',monospace"}},"Link expires in 24 hours · Max 5 downloads · Check your email too"),
       h("button",{onClick:onClose,style:{marginTop:"16px",background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",fontSize:"12px",cursor:"pointer",padding:"8px"}},"Close")
