@@ -197,12 +197,16 @@ serve(async (req) => {
         wavDownloadUrl = beat.audio_url;
       }
 
-      // Build stems download data
-      const stemsData: Record<string, string> = {};
+      // Build stems download data with proper filenames
+      const stemsData: Record<string, { url: string; filename: string }> = {};
       if (beat.stems && typeof beat.stems === "object") {
         for (const [stemType, stemUrl] of Object.entries(beat.stems)) {
           if (stemUrl && typeof stemUrl === "string") {
-            stemsData[stemType] = stemUrl as string;
+            const stemLabel = stemType.charAt(0).toUpperCase() + stemType.slice(1);
+            stemsData[stemType] = {
+              url: stemUrl as string,
+              filename: nameParts.join(" - ") + " - " + stemLabel + ".mp3",
+            };
           }
         }
       }

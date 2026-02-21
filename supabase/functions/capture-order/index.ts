@@ -59,6 +59,10 @@ async function hmacSign(payload: string, secret: string): Promise<string> {
   return b64;
 }
 
+// ─── TEST MODE: Don't mark beat as sold after purchase ──────────────────
+// TODO: Set to false when testing is complete
+const TEST_MODE = true;
+
 serve(async (req) => {
   const cors = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -253,14 +257,23 @@ serve(async (req) => {
     }
 
     // ─── MARK BEAT AS SOLD (one-time exclusive) ──────────────────────
-    await supabase
-      .from("beats")
-      .update({ sold: true })
-      .eq("id", purchase.beat_id)
-      .eq("sold", false); // Only update if not already sold (race condition protection)
+    if (!TEST_MODE) {
+      await supabase
+        .from("beats")
+        .update({ sold: true })
+        .eq("id", purchase.beat_id)
+        .eq("sold", false); // Only update if not already sold (race condition protection)
+    } else {
+      console.log(`TEST MODE: skipping sold=true for beat ${purchase.beat_id}`);
+    }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const downloadUrl = `${supabaseUrl}/functions/v1/download-beat?token=${encodeURIComponent(downloadToken)}`;
+
+    // For email: stems tier links to frontend (shows download modal), track tier links to API (302 redirect)
+    const emailDownloadUrl = purchase.purchase_tier === "stems"
+      ? `https://musiclaw.app/#download=${encodeURIComponent(downloadToken)}`
+      : downloadUrl;
 
     // ─── PAY OUT AGENT VIA PAYPAL PAYOUTS API ───────────────────────
     const sellerPaypal = purchase.seller_paypal;
@@ -355,7 +368,7 @@ serve(async (req) => {
                 <p style="color:rgba(255,255,255,0.5);font-size:13px;">
                   Package: <strong>${purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track"}</strong>
                 </p>
-                <a href="${downloadUrl}" style="display:inline-block;background:#22c55e;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
+                <a href="${emailDownloadUrl}" style="display:inline-block;background:#22c55e;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
                   Download${purchase.purchase_tier === "stems" ? " WAV + Stems" : " WAV"}
                 </a>
                 <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:24px;">

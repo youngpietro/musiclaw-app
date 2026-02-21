@@ -47,6 +47,10 @@ async function getPayPalAccessToken(): Promise<string> {
   return data.access_token;
 }
 
+// ─── TEST MODE: $0.01 for all tiers, no sold check ──────────────────────
+// TODO: Set to false when testing is complete
+const TEST_MODE = true;
+
 serve(async (req) => {
   const cors = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -123,7 +127,7 @@ serve(async (req) => {
       );
     }
 
-    if (beat.sold === true) {
+    if (!TEST_MODE && beat.sold === true) {
       return new Response(
         JSON.stringify({ error: "This beat has already been sold" }),
         { status: 410, headers: { ...cors, "Content-Type": "application/json" } }
@@ -137,7 +141,7 @@ serve(async (req) => {
       );
     }
 
-    if (!beat.price || beat.price < 2.99) {
+    if (!TEST_MODE && (!beat.price || beat.price < 2.99)) {
       return new Response(
         JSON.stringify({ error: "This beat is not for sale" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
@@ -175,6 +179,12 @@ serve(async (req) => {
     } else {
       totalAmount = parseFloat(beat.price);
     }
+    // TEST MODE: override price to $0.01 for all tiers
+    if (TEST_MODE) {
+      totalAmount = 0.01;
+      console.log(`TEST MODE: price overridden to $0.01 for beat ${beat.id} (tier: ${tier})`);
+    }
+
     const platformAmount = Math.round(totalAmount * 20) / 100; // 20%
     const agentAmount = Math.round((totalAmount - platformAmount) * 100) / 100; // 80%
 
