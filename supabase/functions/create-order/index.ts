@@ -1,7 +1,8 @@
 // supabase/functions/create-order/index.ts
 // POST /functions/v1/create-order
-// Body: { beat_id }
+// Body: { beat_id, buyer_email, tier? }
 // Creates a PayPal order for purchasing a beat. No auth required (anonymous buyers).
+// tier: "track" (WAV only, default) or "stems" (WAV + all stems)
 // SECURITY: Price from DB (not client), CORS restricted, rate limited
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -84,6 +85,7 @@ serve(async (req) => {
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
     const { beat_id, buyer_email } = body;
+    const tier = body.tier === "stems" ? "stems" : "track"; // default to "track"
 
     if (!beat_id) {
       return new Response(
@@ -110,7 +112,7 @@ serve(async (req) => {
     // ─── LOOK UP BEAT (price comes from DB, never from client) ────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("id, title, genre, price, agent_id, status, sold")
+      .select("id, title, genre, price, stems_price, stems_status, agent_id, status, sold")
       .eq("id", beat_id)
       .single();
 
@@ -142,10 +144,18 @@ serve(async (req) => {
       );
     }
 
+    // ─── VALIDATE STEMS TIER ────────────────────────────────────────
+    if (tier === "stems" && beat.stems_status !== "complete") {
+      return new Response(
+        JSON.stringify({ error: "Stems are not yet available for this beat. Please try again later or purchase the track only." }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── VERIFY AGENT HAS PAYPAL (live schema: paypal_email on agents) ─
     const { data: agent } = await supabase
       .from("agents")
-      .select("handle, name, paypal_email")
+      .select("handle, name, paypal_email, default_stems_price")
       .eq("id", beat.agent_id)
       .single();
 
@@ -156,8 +166,15 @@ serve(async (req) => {
       );
     }
 
-    // ─── CALCULATE SPLIT ──────────────────────────────────────────────
-    const totalAmount = parseFloat(beat.price);
+    // ─── CALCULATE SPLIT (tier-aware) ─────────────────────────────────
+    let totalAmount: number;
+    if (tier === "stems") {
+      // Stems tier: use beat.stems_price → agent.default_stems_price → 9.99
+      totalAmount = parseFloat(beat.stems_price || agent?.default_stems_price || 9.99);
+      if (totalAmount < 9.99) totalAmount = 9.99; // enforce minimum
+    } else {
+      totalAmount = parseFloat(beat.price);
+    }
     const platformAmount = Math.round(totalAmount * 20) / 100; // 20%
     const agentAmount = Math.round((totalAmount - platformAmount) * 100) / 100; // 80%
 
@@ -170,7 +187,7 @@ serve(async (req) => {
       purchase_units: [
         {
           reference_id: beat.id,
-          description: `Beat: ${beat.title} by ${agent?.handle || "unknown"}`.slice(0, 127),
+          description: `${tier === "stems" ? "Beat + Stems" : "Beat"}: ${beat.title} by ${agent?.handle || "unknown"}`.slice(0, 127),
           amount: {
             currency_code: "USD",
             value: totalAmount.toFixed(2),
@@ -210,6 +227,7 @@ serve(async (req) => {
       platform_fee: platformAmount,
       seller_paypal: agent.paypal_email,
       paypal_status: "pending",
+      purchase_tier: tier,
     });
 
     if (insertError) throw insertError;
@@ -219,6 +237,7 @@ serve(async (req) => {
         order_id: orderId,
         amount: totalAmount.toFixed(2),
         currency: "USD",
+        tier,
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
     );

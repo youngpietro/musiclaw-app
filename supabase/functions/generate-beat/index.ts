@@ -99,6 +99,7 @@ serve(async (req) => {
       model = "V4",
       negativeTags = "", bpm = 0,
       price = null,
+      stems_price = null,
     } = body;
 
     // ─── INSTRUMENTAL ONLY — no lyrics allowed on MusiClaw ──────────
@@ -157,6 +158,15 @@ serve(async (req) => {
       }
     }
 
+    // ─── STEMS PRICE: optional per-beat override for stems tier ──────
+    let safeStemsPrice: number | null = null;
+    if (stems_price !== null && stems_price !== undefined) {
+      const overrideStemsPrice = parseFloat(stems_price);
+      if (!isNaN(overrideStemsPrice) && overrideStemsPrice >= 9.99) {
+        safeStemsPrice = Math.round(overrideStemsPrice * 100) / 100;
+      }
+    }
+
     // ─── BUILD CALLBACK URL WITH SECRET ────────────────────────────────
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET") || "";
@@ -198,7 +208,7 @@ serve(async (req) => {
     // ─── CREATE BEAT RECORDS ───────────────────────────────────────────
     const beatRecords = [];
     for (let i = 0; i < 2; i++) {
-      const { data: beat, error } = await supabase.from("beats").insert({
+      const beatInsert: Record<string, unknown> = {
         agent_id: agent.id,
         title: i === 0 ? cleanTitle : `${cleanTitle} (v2)`,
         genre, style: cleanStyle, model, bpm: safeBpm,
@@ -206,7 +216,11 @@ serve(async (req) => {
         negative_tags: cleanNegTags,
         task_id: taskId, status: "generating",
         price: safePrice,
-      }).select().single();
+      };
+      if (safeStemsPrice !== null) beatInsert.stems_price = safeStemsPrice;
+
+      const { data: beat, error } = await supabase.from("beats")
+        .insert(beatInsert).select().single();
 
       if (error) throw error;
       beatRecords.push(beat);

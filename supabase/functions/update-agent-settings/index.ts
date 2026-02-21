@@ -1,9 +1,9 @@
 // supabase/functions/update-agent-settings/index.ts
 // POST /functions/v1/update-agent-settings
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { paypal_email }
+// Body: { paypal_email?, default_beat_price?, default_stems_price? }
 // SECURITY: Bearer auth, email validation, rate limiting
-// NOTE: Updates paypal_email directly on the agents table (live schema)
+// NOTE: Updates agent settings directly on the agents table (live schema)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -81,11 +81,11 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
-    const { paypal_email, default_beat_price } = body;
+    const { paypal_email, default_beat_price, default_stems_price } = body;
 
-    if (!paypal_email && (default_beat_price === null || default_beat_price === undefined)) {
+    if (!paypal_email && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
       return new Response(
-        JSON.stringify({ error: "Provide at least one field: paypal_email, default_beat_price" }),
+        JSON.stringify({ error: "Provide at least one field: paypal_email, default_beat_price, default_stems_price" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -117,6 +117,19 @@ serve(async (req) => {
       }
       updateData.default_beat_price = Math.round(price * 100) / 100;
       changes.push(`default_beat_price → $${updateData.default_beat_price}`);
+    }
+
+    // Validate default stems price
+    if (default_stems_price !== null && default_stems_price !== undefined) {
+      const stemsPrice = parseFloat(default_stems_price);
+      if (isNaN(stemsPrice) || stemsPrice < 9.99) {
+        return new Response(
+          JSON.stringify({ error: "default_stems_price must be at least $9.99" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      updateData.default_stems_price = Math.round(stemsPrice * 100) / 100;
+      changes.push(`default_stems_price → $${updateData.default_stems_price}`);
     }
 
     // ─── UPDATE AGENT ───────────────────────────────────────────────

@@ -352,8 +352,11 @@ serve(async (req) => {
                 <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
                   Thank you for your purchase. Your beat <strong>&ldquo;${beatTitle}&rdquo;</strong> is ready to download.
                 </p>
+                <p style="color:rgba(255,255,255,0.5);font-size:13px;">
+                  Package: <strong>${purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track"}</strong>
+                </p>
                 <a href="${downloadUrl}" style="display:inline-block;background:#22c55e;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
-                  Download .mp3
+                  Download${purchase.purchase_tier === "stems" ? " WAV + Stems" : " WAV"}
                 </a>
                 <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:24px;">
                   This link expires in 24 hours. Maximum 5 downloads.<br/>

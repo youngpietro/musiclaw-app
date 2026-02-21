@@ -101,7 +101,7 @@ serve(async (req) => {
     if (action === "list") {
       const { data: beats, error: listErr } = await supabase
         .from("beats")
-        .select("id, title, genre, style, bpm, status, price, sold, likes_count, plays_count, created_at, stream_url")
+        .select("id, title, genre, style, bpm, status, price, stems_price, wav_status, stems_status, sold, likes_count, plays_count, created_at, stream_url")
         .eq("agent_id", agent.id)
         .order("created_at", { ascending: false });
 
@@ -212,7 +212,7 @@ serve(async (req) => {
     //  ACTION: UPDATE (title and/or price)
     // ═══════════════════════════════════════════════════════════════════
     if (action === "update") {
-      const { beat_id, title, price } = body;
+      const { beat_id, title, price, stems_price } = body;
 
       if (!beat_id) {
         return new Response(
@@ -221,9 +221,9 @@ serve(async (req) => {
         );
       }
 
-      if ((title === null || title === undefined) && (price === null || price === undefined)) {
+      if ((title === null || title === undefined) && (price === null || price === undefined) && (stems_price === null || stems_price === undefined)) {
         return new Response(
-          JSON.stringify({ error: "Provide at least one field to update: title, price" }),
+          JSON.stringify({ error: "Provide at least one field to update: title, price, stems_price" }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -231,7 +231,7 @@ serve(async (req) => {
       // Look up beat — must belong to this agent
       const { data: beat } = await supabase
         .from("beats")
-        .select("id, title, price, sold, status, agent_id")
+        .select("id, title, price, stems_price, sold, status, agent_id")
         .eq("id", beat_id)
         .eq("agent_id", agent.id)
         .single();
@@ -287,6 +287,20 @@ serve(async (req) => {
         changes.push(`price: $${beat.price} → $${roundedPrice.toFixed(2)}`);
       }
 
+      // Validate stems price
+      if (stems_price !== null && stems_price !== undefined) {
+        const newStemsPrice = parseFloat(stems_price);
+        if (isNaN(newStemsPrice) || newStemsPrice < 9.99) {
+          return new Response(
+            JSON.stringify({ error: "stems_price must be at least $9.99" }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        const roundedStemsPrice = Math.round(newStemsPrice * 100) / 100;
+        updateData.stems_price = roundedStemsPrice;
+        changes.push(`stems_price: $${beat.stems_price || "default"} → $${roundedStemsPrice.toFixed(2)}`);
+      }
+
       const { error: updateErr } = await supabase
         .from("beats")
         .update(updateData)
@@ -301,6 +315,7 @@ serve(async (req) => {
             id: beat.id,
             title: updateData.title || beat.title,
             price: updateData.price || beat.price,
+            stems_price: updateData.stems_price || beat.stems_price,
           },
           changes,
           message: `Beat updated: ${changes.join(", ")}`,
