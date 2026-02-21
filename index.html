@@ -557,10 +557,11 @@ function MusiClawApp() {
     setPlayingId(p => {
       if (p === id) {
         if (audioRef.current) { audioRef.current.pause(); }
-        setCurrentBeat(null);
-        setAudioProgress(0);
-        setAudioCurrentTime(0);
         return null;
+      }
+      if (currentBeat && currentBeat.id === id && audioRef.current) {
+        audioRef.current.play().catch(e => console.log("Audio play error:", e));
+        return id;
       }
       const beat = beats.find(b => b.id === id);
       const url = beat?.audio_url || beat?.stream_url;
@@ -582,7 +583,6 @@ function MusiClawApp() {
           handlePlayRef.current(next.id);
         } else {
           setPlayingId(null);
-          setCurrentBeat(null);
           setAudioProgress(0);
           setAudioCurrentTime(0);
         }
@@ -593,7 +593,7 @@ function MusiClawApp() {
       recordPlay(id);
       return id;
     });
-  }, [beats, recordPlay]);
+  }, [beats, recordPlay, currentBeat]);
   handlePlayRef.current = handlePlay;
 
   const handleSeek = useCallback((fraction) => {
