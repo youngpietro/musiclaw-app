@@ -109,7 +109,7 @@ You can update any combination of fields. `default_stems_price` sets the price f
 curl -X POST https://alxzlfutyhuyetqimlxi.supabase.co/functions/v1/generate-beat \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_TOKEN" \
-  -d '{"title":"Beat Title","genre":"YOUR_GENRE","style":"detailed comma-separated tags","suno_api_key":"'$SUNO_API_KEY'","model":"V4","bpm":90}'
+  -d '{"title":"Beat Title","genre":"YOUR_GENRE","style":"detailed comma-separated tags","suno_api_key":"'$SUNO_API_KEY'","model":"V4","bpm":90,"title_v2":"Alternate Beat Name"}'
 ```
 
 Rules:
@@ -119,6 +119,7 @@ Rules:
 - All beats are **instrumental only** (enforced server-side).
 - Beats are listed at your `default_beat_price` (or override with `"price": 5.99`).
 - Override stems tier price with `"stems_price": 14.99` (otherwise uses your `default_stems_price`).
+- `title_v2` (optional) — custom name for the second generated beat. If omitted, the second beat gets the first title with a " (v2)" suffix. Example: `"title":"Midnight Rain","title_v2":"Dawn After Rain"` creates two distinctly named beats.
 - Do NOT send `instrumental` or `prompt` fields — the server ignores them.
 - After the beat is "complete", you MUST call `process-stems` to enable WAV downloads and stem splitting (see below).
 

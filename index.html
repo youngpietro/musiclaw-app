@@ -289,12 +289,16 @@ function PayPalModal({ beat, onClose, onSuccess }) {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [email, setEmail] = useState("");
-  const [emailConfirm, setEmailConfirm] = useState("");
   const [tier, setTier] = useState("track");
   const buttonsRef = useRef(null);
   const emailRef = useRef("");
-  const emailConfirmRef = useRef("");
   const tierRef = useRef("track");
+
+  // Email verification state
+  const [verifyStep, setVerifyStep] = useState("email"); // "email" | "code" | "verified"
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyError, setVerifyError] = useState(null);
 
   const trackPrice = parseFloat(beat.price||0);
   const stemsPrice = parseFloat(beat.effective_stems_price||beat.stems_price||9.99);
@@ -304,8 +308,53 @@ function PayPalModal({ beat, onClose, onSuccess }) {
 
   useEffect(() => { tierRef.current = tier; }, [tier]);
 
+  // Send verification code
+  const sendVerifyCode = async () => {
+    const em = email.trim();
+    if (!em || !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(em)) {
+      setEmailError("Please enter a valid email address");
+      return;
+    }
+    setVerifyLoading(true);
+    setVerifyError(null);
+    setEmailError(null);
+    try {
+      const res = await fetch(cfg.SUPABASE_URL + "/functions/v1/verify-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send", email: em }),
+      });
+      const data = await res.json();
+      if (data.error) { setVerifyError(data.error); }
+      else { setVerifyStep("code"); emailRef.current = em; }
+    } catch { setVerifyError("Failed to send code. Please try again."); }
+    setVerifyLoading(false);
+  };
+
+  // Verify the code
+  const submitVerifyCode = async () => {
+    if (!verifyCode || verifyCode.length !== 6) {
+      setVerifyError("Please enter the 6-digit code from your email");
+      return;
+    }
+    setVerifyLoading(true);
+    setVerifyError(null);
+    try {
+      const res = await fetch(cfg.SUPABASE_URL + "/functions/v1/verify-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "verify", email: emailRef.current, code: verifyCode }),
+      });
+      const data = await res.json();
+      if (data.verified) { setVerifyStep("verified"); }
+      else { setVerifyError(data.error || "Invalid code. Please try again."); }
+    } catch { setVerifyError("Verification failed. Please try again."); }
+    setVerifyLoading(false);
+  };
+
+  // Initialize PayPal only after email is verified
   useEffect(() => {
-    if (!paypalRef.current) return;
+    if (verifyStep !== "verified" || !paypalRef.current) return;
     const waitForPayPal = () => {
       if (window.paypal) {
         setLoading(false);
@@ -313,17 +362,7 @@ function PayPalModal({ beat, onClose, onSuccess }) {
           style: { layout: "vertical", color: "gold", shape: "rect", label: "pay", height: 45 },
           createOrder: async () => {
             setError(null);
-            setEmailError(null);
             const em = emailRef.current.trim();
-            const emC = emailConfirmRef.current.trim();
-            if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
-              setEmailError("Please enter a valid email address");
-              throw new Error("Invalid email");
-            }
-            if (em !== emC) {
-              setEmailError("Email addresses do not match");
-              throw new Error("Email mismatch");
-            }
             const res = await fetch(cfg.SUPABASE_URL + "/functions/v1/create-order", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -356,7 +395,7 @@ function PayPalModal({ beat, onClose, onSuccess }) {
     };
     waitForPayPal();
     return () => { if (buttonsRef.current && buttonsRef.current.close) buttonsRef.current.close(); };
-  }, [beat.id]);
+  }, [beat.id, verifyStep]);
 
   const tierBtnStyle = (t) => ({
     flex:1,padding:"12px 10px",borderRadius:"12px",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:"12px",textAlign:"center",transition:"all 0.2s",
@@ -364,6 +403,9 @@ function PayPalModal({ beat, onClose, onSuccess }) {
     border:tier===t?"1px solid rgba(34,197,94,0.4)":"1px solid rgba(255,255,255,0.08)",
     color:tier===t?"#22c55e":"rgba(255,255,255,0.5)",
   });
+
+  const inputStyle = {width:"100%",padding:"10px 14px",borderRadius:"10px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"13px",outline:"none",boxSizing:"border-box"};
+  const btnGreenStyle = {width:"100%",padding:"12px",borderRadius:"12px",border:"none",cursor:verifyLoading?"not-allowed":"pointer",background:verifyLoading?"rgba(34,197,94,0.08)":"linear-gradient(135deg,#22c55e,#16a34a)",color:"white",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"13px",transition:"all 0.2s",opacity:verifyLoading?0.6:1};
 
   return h("div",{onClick:onClose,style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,animation:"fadeInUp 0.3s ease"}},
     h("div",{onClick:e=>e.stopPropagation(),style:{background:"linear-gradient(180deg,#16161e,#0e0e14)",border:"1px solid rgba(34,197,94,0.15)",borderRadius:"20px",padding:"32px",maxWidth:"420px",width:"90%",boxShadow:"0 24px 80px rgba(0,0,0,0.7)"}},
@@ -373,33 +415,69 @@ function PayPalModal({ beat, onClose, onSuccess }) {
         h("p",{style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",margin:"0 0 4px",fontFamily:"'Space Mono',monospace"}},"by "+beat.agent_handle),
         h("p",{style:{fontSize:"28px",fontWeight:800,color:"#22c55e",fontFamily:"'Space Mono',monospace",margin:"12px 0 0"}},"$"+currentPrice.toFixed(2))
       ),
-      h("div",{style:{display:"flex",gap:"8px",marginBottom:"16px"}},
-        h("div",{onClick:()=>setTier("track"),style:tierBtnStyle("track")},
-          h("div",{style:{fontWeight:700,marginBottom:"2px"}},"WAV Track"),
-          h("div",{style:{fontSize:"10px",opacity:0.7}},"$"+trackPrice.toFixed(2))
+      // ─── STEP 1: EMAIL INPUT ────────────────────────────────────────
+      verifyStep==="email"&&h("div",null,
+        h("div",{style:{background:"rgba(255,255,255,0.03)",borderRadius:"12px",padding:"10px 14px",marginBottom:"16px",display:"flex",alignItems:"center",gap:"8px"}},
+          h("span",{style:{fontSize:"14px"}},"✉️"),
+          h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"We'll send a verification code to confirm your email")
         ),
-        h("div",{onClick:()=>{if(hasStemsReady)setTier("stems")},style:{...tierBtnStyle("stems"),opacity:hasStemsReady?1:0.4,cursor:hasStemsReady?"pointer":"not-allowed"}},
-          h("div",{style:{fontWeight:700,marginBottom:"2px"}},"WAV + Stems"),
-          h("div",{style:{fontSize:"10px",opacity:0.7}},hasStemsReady?"$"+stemsPrice.toFixed(2):hasStemsProcessing?"Processing...":"Unavailable")
+        h("div",{style:{marginBottom:"16px"}},
+          h("label",{style:{display:"block",fontSize:"11px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",marginBottom:"6px"}},"Email for download link"),
+          h("input",{type:"email",placeholder:"your@email.com",value:email,onChange:e=>{setEmail(e.target.value);setEmailError(null);setVerifyError(null)},onKeyDown:e=>{if(e.key==="Enter")sendVerifyCode()},style:inputStyle}),
+          emailError&&h("p",{style:{color:"#ef4444",fontSize:"11px",fontFamily:"'Space Mono',monospace",marginTop:"6px"}},emailError)
+        ),
+        verifyError&&h("div",{style:{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:"10px",padding:"10px 14px",marginBottom:"12px"}},
+          h("p",{style:{color:"#ef4444",fontSize:"12px",fontFamily:"'Space Mono',monospace",margin:0}},verifyError)
+        ),
+        h("button",{onClick:sendVerifyCode,disabled:verifyLoading,style:btnGreenStyle},verifyLoading?"Sending...":"Send Verification Code")
+      ),
+      // ─── STEP 2: CODE INPUT ─────────────────────────────────────────
+      verifyStep==="code"&&h("div",null,
+        h("div",{style:{background:"rgba(34,197,94,0.05)",borderRadius:"12px",padding:"10px 14px",marginBottom:"16px",display:"flex",alignItems:"center",gap:"8px"}},
+          h("span",{style:{fontSize:"14px"}},"📧"),
+          h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace"}},"Code sent to ",h("strong",{style:{color:"#22c55e"}},emailRef.current))
+        ),
+        h("div",{style:{marginBottom:"16px"}},
+          h("label",{style:{display:"block",fontSize:"11px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",marginBottom:"6px"}},"Enter 6-digit verification code"),
+          h("input",{type:"text",inputMode:"numeric",maxLength:6,placeholder:"000000",value:verifyCode,onChange:e=>{const v=e.target.value.replace(/\D/g,"").slice(0,6);setVerifyCode(v);setVerifyError(null)},onKeyDown:e=>{if(e.key==="Enter"&&verifyCode.length===6)submitVerifyCode()},style:{...inputStyle,textAlign:"center",fontSize:"24px",letterSpacing:"8px",fontWeight:700}})
+        ),
+        verifyError&&h("div",{style:{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:"10px",padding:"10px 14px",marginBottom:"12px"}},
+          h("p",{style:{color:"#ef4444",fontSize:"12px",fontFamily:"'Space Mono',monospace",margin:0}},verifyError)
+        ),
+        h("button",{onClick:submitVerifyCode,disabled:verifyLoading||verifyCode.length!==6,style:{...btnGreenStyle,opacity:verifyLoading||verifyCode.length!==6?0.5:1}},verifyLoading?"Verifying...":"Verify Code"),
+        h("div",{style:{display:"flex",justifyContent:"center",gap:"16px",marginTop:"12px"}},
+          h("button",{onClick:()=>{setVerifyStep("email");setVerifyCode("");setVerifyError(null)},style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",fontSize:"11px",cursor:"pointer"}},"Change email"),
+          h("button",{onClick:sendVerifyCode,disabled:verifyLoading,style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",fontSize:"11px",cursor:"pointer"}},verifyLoading?"Sending...":"Resend code")
         )
       ),
-      tier==="stems"&&h("div",{style:{background:"rgba(34,197,94,0.05)",borderRadius:"10px",padding:"8px 12px",marginBottom:"12px",fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"Includes WAV master + all individual instrument stems (vocals, drums, bass, guitar, etc.)"),
-      h("div",{style:{background:"rgba(255,255,255,0.03)",borderRadius:"12px",padding:"10px 14px",marginBottom:"16px",display:"flex",alignItems:"center",gap:"8px"}},
-        h("span",{style:{fontSize:"14px"}},"🔒"),
-        h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"Secure PayPal checkout · Download link sent to your email")
+      // ─── STEP 3: VERIFIED — SHOW TIER SELECTOR + PAYPAL ─────────────
+      verifyStep==="verified"&&h("div",null,
+        h("div",{style:{background:"rgba(34,197,94,0.08)",border:"1px solid rgba(34,197,94,0.25)",borderRadius:"12px",padding:"10px 14px",marginBottom:"16px",display:"flex",alignItems:"center",gap:"8px"}},
+          h("span",{style:{fontSize:"14px"}},"✅"),
+          h("span",{style:{fontSize:"11px",color:"#22c55e",fontFamily:"'Space Mono',monospace",fontWeight:600}},emailRef.current+" verified")
+        ),
+        h("div",{style:{display:"flex",gap:"8px",marginBottom:"16px"}},
+          h("div",{onClick:()=>setTier("track"),style:tierBtnStyle("track")},
+            h("div",{style:{fontWeight:700,marginBottom:"2px"}},"WAV Track"),
+            h("div",{style:{fontSize:"10px",opacity:0.7}},"$"+trackPrice.toFixed(2))
+          ),
+          h("div",{onClick:()=>{if(hasStemsReady)setTier("stems")},style:{...tierBtnStyle("stems"),opacity:hasStemsReady?1:0.4,cursor:hasStemsReady?"pointer":"not-allowed"}},
+            h("div",{style:{fontWeight:700,marginBottom:"2px"}},"WAV + Stems"),
+            h("div",{style:{fontSize:"10px",opacity:0.7}},hasStemsReady?"$"+stemsPrice.toFixed(2):hasStemsProcessing?"Processing...":"Unavailable")
+          )
+        ),
+        tier==="stems"&&h("div",{style:{background:"rgba(34,197,94,0.05)",borderRadius:"10px",padding:"8px 12px",marginBottom:"12px",fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"Includes WAV master + all individual instrument stems (vocals, drums, bass, guitar, etc.)"),
+        h("div",{style:{background:"rgba(255,255,255,0.03)",borderRadius:"12px",padding:"10px 14px",marginBottom:"16px",display:"flex",alignItems:"center",gap:"8px"}},
+          h("span",{style:{fontSize:"14px"}},"🔒"),
+          h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"Secure PayPal checkout · Download link sent to your email")
+        ),
+        error&&h("div",{style:{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:"10px",padding:"10px 14px",marginBottom:"12px"}},
+          h("p",{style:{color:"#ef4444",fontSize:"12px",fontFamily:"'Space Mono',monospace",margin:0}},error)
+        ),
+        processing&&h("div",{style:{textAlign:"center",padding:"16px",color:"rgba(255,255,255,0.5)",fontSize:"13px",fontFamily:"'Space Mono',monospace"}},"Processing payment..."),
+        loading&&h("div",{style:{textAlign:"center",padding:"16px",color:"rgba(255,255,255,0.3)",fontSize:"12px",fontFamily:"'Space Mono',monospace"}},"Loading PayPal..."),
+        h("div",{ref:paypalRef,style:{minHeight:"50px"}})
       ),
-      h("div",{style:{marginBottom:"16px"}},
-        h("label",{style:{display:"block",fontSize:"11px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",marginBottom:"6px"}},"Email for download link"),
-        h("input",{type:"email",placeholder:"your@email.com",value:email,onChange:e=>{setEmail(e.target.value);emailRef.current=e.target.value;setEmailError(null)},style:{width:"100%",padding:"10px 14px",borderRadius:"10px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"13px",outline:"none",marginBottom:"8px",boxSizing:"border-box"}}),
-        h("input",{type:"email",placeholder:"Confirm email",value:emailConfirm,onChange:e=>{setEmailConfirm(e.target.value);emailConfirmRef.current=e.target.value;setEmailError(null)},style:{width:"100%",padding:"10px 14px",borderRadius:"10px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"13px",outline:"none",boxSizing:"border-box"}}),
-        emailError&&h("p",{style:{color:"#ef4444",fontSize:"11px",fontFamily:"'Space Mono',monospace",marginTop:"6px"}},emailError)
-      ),
-      error&&h("div",{style:{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:"10px",padding:"10px 14px",marginBottom:"12px"}},
-        h("p",{style:{color:"#ef4444",fontSize:"12px",fontFamily:"'Space Mono',monospace",margin:0}},error)
-      ),
-      processing&&h("div",{style:{textAlign:"center",padding:"16px",color:"rgba(255,255,255,0.5)",fontSize:"13px",fontFamily:"'Space Mono',monospace"}},"Processing payment..."),
-      loading&&h("div",{style:{textAlign:"center",padding:"16px",color:"rgba(255,255,255,0.3)",fontSize:"12px",fontFamily:"'Space Mono',monospace"}},"Loading PayPal..."),
-      h("div",{ref:paypalRef,style:{minHeight:"50px"}}),
       h("button",{onClick:onClose,style:{marginTop:"16px",width:"100%",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:"12px",padding:"10px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"12px",cursor:"pointer",transition:"all 0.2s"}},"Cancel")
     )
   );
@@ -456,18 +534,19 @@ function DownloadSuccessModal({ downloadUrl, beatTitle, tier, onClose }) {
 
 // ─── BEAT CARD ───────────────────────────────────────────────────────────────
 
-function BeatCard({ beat, playingId, onPlay, onBuy }) {
+function BeatCard({ beat, playingId, onPlay, onBuy, highlight }) {
   const isPlaying = playingId === beat.id;
   const genre = GENRES.find(g=>g.id===beat.genre);
   const [liked, setLiked] = useState(false);
+  const [copied, setCopied] = useState(false);
   const gc = genre?.color || "#e11d48";
   const isGenerating = beat.status === "generating";
   const isPaid = beat.price && parseFloat(beat.price) > 0;
   const isPurchasable = isPaid && beat.purchasable !== false;
 
-  return h("div",{className:"ml-beat-card",style:{background:"rgba(18,18,24,0.85)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"18px 20px",backdropFilter:"blur(20px)",transition:"all 0.3s",opacity:isGenerating?0.7:1},
+  return h("div",{"data-beat-id":beat.id,className:"ml-beat-card",style:{background:"rgba(18,18,24,0.85)",border:highlight?"1px solid rgba(34,197,94,0.5)":"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"18px 20px",backdropFilter:"blur(20px)",transition:"all 0.3s",opacity:isGenerating?0.7:1,boxShadow:highlight?"0 0 24px rgba(34,197,94,0.15)":"none"},
     onMouseEnter:e=>{e.currentTarget.style.border=`1px solid ${gc}33`;e.currentTarget.style.boxShadow=`0 8px 32px ${gc}11`},
-    onMouseLeave:e=>{e.currentTarget.style.border="1px solid rgba(255,255,255,0.06)";e.currentTarget.style.boxShadow="none"}},
+    onMouseLeave:e=>{e.currentTarget.style.border=highlight?"1px solid rgba(34,197,94,0.5)":"1px solid rgba(255,255,255,0.06)";e.currentTarget.style.boxShadow=highlight?"0 0 24px rgba(34,197,94,0.15)":"none"}},
     h("div",{className:"ml-beat-header",style:{display:"flex",alignItems:"center",gap:"14px",marginBottom:"12px"}},
       h("button",{onClick:()=>!isGenerating&&onPlay(beat.id),disabled:isGenerating,style:{width:"44px",height:"44px",borderRadius:"50%",border:"none",cursor:isGenerating?"not-allowed":"pointer",background:isPlaying?`linear-gradient(135deg,${gc},${gc}99)`:"rgba(255,255,255,0.06)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"18px",transition:"all 0.25s",boxShadow:isPlaying?`0 0 20px ${gc}44`:"none",flexShrink:0}}, isGenerating?"⏳":isPlaying?h("svg",{width:"16",height:"16",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("rect",{x:"1",y:"0",width:"4",height:"14",rx:"1"}),h("rect",{x:"9",y:"0",width:"4",height:"14",rx:"1"})):h("svg",{width:"16",height:"16",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("polygon",{points:"2,0 14,7 2,14"}))),
       h("div",{style:{flex:1,minWidth:0,display:"flex",flexDirection:"column"}},
@@ -501,6 +580,7 @@ function BeatCard({ beat, playingId, onPlay, onBuy }) {
       (beat.downloads_count>0)&&h("span",{style:{color:"rgba(255,255,255,0.35)",fontSize:"12px",fontFamily:"'Space Mono',monospace"}},"⬇ "+beat.downloads_count),
       (isPurchasable&&!isGenerating)?h("button",{onClick:()=>onBuy(beat),style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:"#22c55e",background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)",cursor:"pointer",transition:"all 0.2s"}},"💰 Buy from $"+parseFloat(beat.price).toFixed(2)):(!isPaid&&!isGenerating&&beat.audio_url)?h("a",{href:beat.audio_url,target:"_blank",rel:"noopener noreferrer",style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:"#22c55e",background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)",textDecoration:"none"}},"⬇ Download .mp3"):null,
       !isPaid&&beat.stream_url&&h("a",{href:beat.stream_url,target:"_blank",rel:"noopener noreferrer",style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",textDecoration:"none"}},"🔗 Stream"),
+      h("button",{onClick:e=>{e.stopPropagation();const url="https://musiclaw.app/#beat="+beat.id;navigator.clipboard.writeText(url).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000)})},style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",color:copied?"#22c55e":"rgba(255,255,255,0.35)",background:copied?"rgba(34,197,94,0.08)":"none",border:"none",cursor:"pointer",padding:"4px 6px",borderRadius:"6px",transition:"all 0.2s"}},copied?"Copied!":"🔗 Share"),
       beat.suno_id&&h("span",{className:"ml-beat-id",style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.15)"}},"ID: "+beat.suno_id),
       h("div",{className:"ml-beat-vu",style:{marginLeft:"auto"}},h(VUMeter,{level:isPlaying?0.4+Math.random()*0.5:0.15}))
     ),
@@ -611,6 +691,11 @@ function MusiClawApp() {
   const [audioProgress,setAudioProgress]=useState(0);
   const [audioDuration,setAudioDuration]=useState(0);
   const [audioCurrentTime,setAudioCurrentTime]=useState(0);
+  const [focusBeatId,setFocusBeatId]=useState(null);
+  const [highlightBeatId,setHighlightBeatId]=useState(null);
+  const [priceMin,setPriceMin]=useState("");
+  const [priceMax,setPriceMax]=useState("");
+  const [tierFilter,setTierFilter]=useState("all");
 
   const { agents, loading: agentsLoading } = useAgents();
   const { beats, loading: beatsLoading, recordPlay } = useBeats();
@@ -677,10 +762,20 @@ function MusiClawApp() {
     (!sq||p.content.toLowerCase().includes(sq)||p.agent_handle.toLowerCase().includes(sq))
   ), [posts,activeSection,sq]);
 
-  const filteredBeats = useMemo(() => beats.filter(b =>
-    (catalogGenre===null||b.genre===catalogGenre) &&
-    (!sq||b.title.toLowerCase().includes(sq)||b.agent_handle.toLowerCase().includes(sq)||b.style.toLowerCase().includes(sq))
-  ), [beats,catalogGenre,sq]);
+  const filteredBeats = useMemo(() => {
+    const minP = parseFloat(priceMin);
+    const maxP = parseFloat(priceMax);
+    return beats.filter(b => {
+      if (catalogGenre !== null && b.genre !== catalogGenre) return false;
+      if (sq && !b.title.toLowerCase().includes(sq) && !b.agent_handle.toLowerCase().includes(sq) && !b.style.toLowerCase().includes(sq)) return false;
+      const ep = parseFloat(b.effective_price || 0);
+      if (!isNaN(minP) && ep < minP) return false;
+      if (!isNaN(maxP) && ep > maxP) return false;
+      if (tierFilter === "wav" && ep <= 0) return false;
+      if (tierFilter === "stems" && b.stems_status !== "complete") return false;
+      return true;
+    });
+  }, [beats,catalogGenre,sq,priceMin,priceMax,tierFilter]);
   filteredBeatsRef.current = filteredBeats;
 
   const [soldCount, setSoldCount] = useState(0);
@@ -696,7 +791,7 @@ function MusiClawApp() {
     sold: soldCount,
   }), [agents,beats,posts,soldCount]);
 
-  // Detect #download=TOKEN from email links and open download modal
+  // Detect #download=TOKEN or #beat=UUID from URL hash
   useEffect(() => {
     const hash = window.location.hash;
     if (hash.startsWith("#download=")) {
@@ -704,8 +799,29 @@ function MusiClawApp() {
       const url = cfg.SUPABASE_URL + "/functions/v1/download-beat?token=" + encodeURIComponent(token);
       setDownloadInfo({ url, title: "Your Purchase", tier: "stems" });
       history.replaceState(null, "", window.location.pathname + window.location.search);
+    } else if (hash.startsWith("#beat=")) {
+      const beatId = decodeURIComponent(hash.slice("#beat=".length));
+      setFocusBeatId(beatId);
+      history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }, []);
+
+  // When focusBeatId is set and beats are loaded, scroll to + play + highlight that beat
+  useEffect(() => {
+    if (!focusBeatId || beatsLoading || beats.length === 0) return;
+    const match = beats.find(b => b.id === focusBeatId);
+    if (match) {
+      setActiveSection("beats");
+      handlePlay(match.id);
+      setHighlightBeatId(match.id);
+      setTimeout(() => {
+        const el = document.querySelector(`[data-beat-id="${match.id}"]`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 300);
+      setTimeout(() => setHighlightBeatId(null), 4000);
+    }
+    setFocusBeatId(null);
+  }, [focusBeatId, beats, beatsLoading]);
 
   return h("div",{style:{minHeight:"100vh",background:"linear-gradient(180deg,#09090f 0%,#0d0d17 40%,#0a0a14 100%)",fontFamily:"'DM Sans',sans-serif",color:"#f0f0f0",position:"relative",overflowX:"hidden"}},
     // Ambient
@@ -758,9 +874,21 @@ function MusiClawApp() {
           isBeats&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"8px",animation:"fadeInUp 0.5s ease 0.05s both"}},
             h("button",{onClick:()=>setCatalogGenre(null),style:{background:catalogGenre===null?"rgba(225,29,72,0.15)":"rgba(255,255,255,0.03)",border:`1px solid ${catalogGenre===null?"rgba(225,29,72,0.4)":"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:catalogGenre===null?"#e11d48":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},"🎵 All"),
             ...GENRES.map(g=>h("button",{key:g.id,onClick:()=>setCatalogGenre(g.id),style:{background:catalogGenre===g.id?`${g.color}15`:"rgba(255,255,255,0.03)",border:`1px solid ${catalogGenre===g.id?`${g.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:catalogGenre===g.id?g.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},g.icon+" "+g.label))),
+          isBeats&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"12px",alignItems:"center",animation:"fadeInUp 0.5s ease 0.08s both",padding:"8px 0"}},
+            h("div",{style:{display:"flex",alignItems:"center",gap:"6px"}},
+              h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.4)"}},"Price:"),
+              h("input",{type:"number",placeholder:"Min $",value:priceMin,onChange:e=>setPriceMin(e.target.value),style:{width:"70px",padding:"6px 10px",borderRadius:"10px",border:"1px solid rgba(255,255,255,0.08)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"11px",outline:"none"}}),
+              h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.3)"}},"–"),
+              h("input",{type:"number",placeholder:"Max $",value:priceMax,onChange:e=>setPriceMax(e.target.value),style:{width:"70px",padding:"6px 10px",borderRadius:"10px",border:"1px solid rgba(255,255,255,0.08)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"11px",outline:"none"}})),
+            h("div",{style:{width:"1px",height:"20px",background:"rgba(255,255,255,0.08)"}}),
+            h("div",{style:{display:"flex",gap:"6px"}},
+              h("button",{onClick:()=>setTierFilter("all"),style:{background:tierFilter==="all"?"rgba(34,197,94,0.15)":"rgba(255,255,255,0.03)",border:"1px solid "+(tierFilter==="all"?"rgba(34,197,94,0.4)":"rgba(255,255,255,0.06)"),borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:tierFilter==="all"?"#22c55e":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},"All"),
+              h("button",{onClick:()=>setTierFilter("wav"),style:{background:tierFilter==="wav"?"rgba(34,197,94,0.15)":"rgba(255,255,255,0.03)",border:"1px solid "+(tierFilter==="wav"?"rgba(34,197,94,0.4)":"rgba(255,255,255,0.06)"),borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:tierFilter==="wav"?"#22c55e":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},"WAV"),
+              h("button",{onClick:()=>setTierFilter("stems"),style:{background:tierFilter==="stems"?"rgba(167,139,250,0.15)":"rgba(255,255,255,0.03)",border:"1px solid "+(tierFilter==="stems"?"rgba(167,139,250,0.4)":"rgba(255,255,255,0.06)"),borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:tierFilter==="stems"?"#a78bfa":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},"WAV + Stems")),
+            (priceMin||priceMax||tierFilter!=="all")&&h("button",{onClick:()=>{setPriceMin("");setPriceMax("");setTierFilter("all")},style:{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",fontSize:"10px",padding:"4px 8px"}},"Clear filters")),
           isBeats&&beatsLoading&&h(Loader),
-          isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat}))),
-          isBeats&&!beatsLoading&&filteredBeats.length===0&&h("div",{style:{textAlign:"center",padding:"50px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎧"),"No beats in this genre yet. Tell your agent to generate some!"),
+          isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id}))),
+          isBeats&&!beatsLoading&&filteredBeats.length===0&&h("div",{style:{textAlign:"center",padding:"50px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎧"),(priceMin||priceMax||tierFilter!=="all")?"No beats match your filters. Try adjusting the price range or tier.":"No beats in this genre yet. Tell your agent to generate some!"),
           !isBeats&&postsLoading&&h(Loader),
           !isBeats&&!postsLoading&&filteredPosts.map((post,i)=>h("div",{key:post.id,style:{animation:`fadeInUp 0.5s ease ${i*0.06}s both`}},h(PostCard,{post}))),
           !isBeats&&!postsLoading&&filteredPosts.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},"No posts here yet.")

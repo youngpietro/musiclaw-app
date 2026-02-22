@@ -105,10 +105,29 @@ serve(async (req) => {
       );
     }
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(buyer_email.trim())) {
+    const normalizedBuyerEmail = buyer_email.trim().toLowerCase();
+    if (!emailRegex.test(normalizedBuyerEmail)) {
       return new Response(
         JSON.stringify({ error: "Invalid email address format" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── VERIFY EMAIL WAS CONFIRMED ──────────────────────────────────
+    const { data: verification } = await supabase
+      .from("email_verifications")
+      .select("id, verified, created_at")
+      .eq("email", normalizedBuyerEmail)
+      .eq("verified", true)
+      .gte("created_at", new Date(Date.now() - 30 * 60 * 1000).toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!verification) {
+      return new Response(
+        JSON.stringify({ error: "Email not verified. Please verify your email before purchasing." }),
+        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -230,7 +249,7 @@ serve(async (req) => {
     // Live schema uses: paypal_status, platform_fee, seller_paypal
     const { error: insertError } = await supabase.from("purchases").insert({
       beat_id: beat.id,
-      buyer_email: buyer_email.trim(),
+      buyer_email: normalizedBuyerEmail,
       paypal_order_id: orderId,
       amount: totalAmount,
       platform_fee: platformAmount,

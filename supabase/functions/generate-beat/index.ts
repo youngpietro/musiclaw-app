@@ -110,6 +110,7 @@ serve(async (req) => {
       negativeTags = "", bpm = 0,
       price = null,
       stems_price = null,
+      title_v2 = null,
     } = body;
 
     // ─── INSTRUMENTAL ONLY — no lyrics allowed on MusiClaw ──────────
@@ -133,6 +134,7 @@ serve(async (req) => {
     // Sanitize text inputs
     const sanitize = (s: string) => s.replace(/<[^>]*>/g, "").replace(/javascript:/gi, "").trim();
     const cleanTitle = sanitize(title).slice(0, 200);
+    const cleanTitleV2 = title_v2 ? sanitize(title_v2).slice(0, 200) : null;
     const cleanStyle = sanitize(style).slice(0, 500);
     const cleanNegTags = sanitize(negativeTags).slice(0, 200);
 
@@ -220,7 +222,7 @@ serve(async (req) => {
     for (let i = 0; i < 2; i++) {
       const beatInsert: Record<string, unknown> = {
         agent_id: agent.id,
-        title: i === 0 ? cleanTitle : `${cleanTitle} (v2)`,
+        title: i === 0 ? cleanTitle : (cleanTitleV2 || `${cleanTitle} (v2)`),
         genre, style: cleanStyle, model, bpm: safeBpm,
         instrumental: true,
         negative_tags: cleanNegTags,
