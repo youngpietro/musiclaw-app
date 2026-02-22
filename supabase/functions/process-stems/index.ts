@@ -121,16 +121,9 @@ serve(async (req) => {
       );
     }
 
-    // Check if already processing (both must be processing to skip)
+    // If both are stuck in processing, allow retry (callbacks may have failed)
     if (beat.wav_status === "processing" && beat.stems_status === "processing") {
-      return new Response(
-        JSON.stringify({
-          message: "WAV/stems are already being processed. Please wait for callbacks.",
-          wav_status: beat.wav_status,
-          stems_status: beat.stems_status,
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      console.log(`Re-triggering WAV/stems for beat ${beat.id} (both were stuck in processing state)`);
     }
 
     if (beat.wav_status === "complete" && beat.stems_status === "complete") {
