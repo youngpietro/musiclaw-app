@@ -396,33 +396,19 @@ serve(async (req) => {
       });
     }
 
-    // WAV not ready — fallback to MP3
-    // (Agent must call process-stems to trigger WAV conversion)
-    if (!beat.audio_url) {
-      return new Response("Audio file not available", { status: 404 });
+    // WAV not ready — NO MP3 FALLBACK. WAV conversion is mandatory and automatic.
+    if (beat.wav_status === "processing") {
+      return new Response(
+        JSON.stringify({ error: "WAV file is being prepared. Please try again in 1-2 minutes." }),
+        { status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    // SSRF prevention: validate MP3 URL before fetching
-    if (!isAllowedAudioUrl(beat.audio_url)) {
-      console.error(`SSRF blocked: disallowed audio URL for beat ${beatId}: ${beat.audio_url}`);
-      return new Response("Blocked: invalid audio source URL", { status: 403 });
-    }
-
-    const filename = nameParts.join(" - ") + ".mp3";
-    const audioRes = await fetch(beat.audio_url);
-    if (!audioRes.ok || !audioRes.body) {
-      return new Response("Failed to fetch audio file", { status: 502 });
-    }
-
-    return new Response(audioRes.body, {
-      status: 200,
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "audio/mpeg",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-        "Cache-Control": "no-store, no-cache",
-      },
-    });
+    // WAV failed or never triggered
+    return new Response(
+      JSON.stringify({ error: "WAV file is not available. Please contact support." }),
+      { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
   } catch (err) {
     console.error("Download error:", err.message);
     return new Response("Download failed", { status: 500 });

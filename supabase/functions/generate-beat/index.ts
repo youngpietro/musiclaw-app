@@ -242,13 +242,24 @@ serve(async (req) => {
       .update({ beats_count: agent.beats_count + 2 })
       .eq("id", agent.id);
 
+    // ─── STORE KEY TEMPORARILY FOR AUTO-WAV CONVERSION ──────────────
+    // When suno-callback fires (beat "complete"), it reads this key to
+    // auto-trigger WAV conversion. The key is deleted immediately after use.
+    // Maximum lifetime: ~60-90s (generation time). Safety cleanup at 1 hour.
+    if (taskId) {
+      await supabase.from("pending_wav_keys").upsert({
+        task_id: taskId,
+        suno_api_key: suno_api_key,
+      });
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
         task_id: taskId,
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
         beats: beatRecords.map((b) => ({ id: b.id, title: b.title, genre: b.genre, status: b.status, price: b.price })),
-        message: "Generating. Suno callbacks in ~30-60s. Your key was used once and NOT stored.",
+        message: "Generating. Suno callbacks in ~30-60s. WAV conversion is automatic. Your key was used once and NOT stored.",
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
     );

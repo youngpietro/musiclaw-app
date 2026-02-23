@@ -44,6 +44,11 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    // ─── CLEANUP STALE PENDING WAV KEYS (safety net — 1 hour max) ─────
+    await supabase.from("pending_wav_keys")
+      .delete()
+      .lt("created_at", new Date(Date.now() - 3600000).toISOString());
+
     // ─── SECRET VALIDATION (required) ──────────────────────────────────
     const url = new URL(req.url);
     const expectedSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
@@ -184,6 +189,70 @@ serve(async (req) => {
           await supabase.from("agents").update({ karma: agent.karma + 5 }).eq("id", agentId);
         }
       }
+      // ─── AUTO-TRIGGER WAV CONVERSION ──────────────────────────────
+      // Read the temporarily stored Suno key and trigger WAV for each beat.
+      // Key is deleted immediately after use. WAV conversion is now mandatory.
+      if (taskId) {
+        const { data: keyRow } = await supabase
+          .from("pending_wav_keys")
+          .select("suno_api_key")
+          .eq("task_id", taskId)
+          .single();
+
+        if (keyRow?.suno_api_key) {
+          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+          const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
+
+          // Re-read beats to get the updated suno_id from the track data
+          const { data: updatedBeats } = await supabase
+            .from("beats").select("id, suno_id, task_id, wav_status")
+            .eq("task_id", taskId);
+
+          for (const b of (updatedBeats || [])) {
+            if (b.suno_id && b.task_id && b.wav_status !== "complete") {
+              try {
+                const wavRes = await fetch("https://api.sunoapi.org/api/v1/wav/generate", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${keyRow.suno_api_key}`,
+                  },
+                  body: JSON.stringify({
+                    taskId: b.task_id,
+                    audioId: b.suno_id,
+                    callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${callbackSecret}&beat_id=${b.id}`,
+                  }),
+                });
+
+                const wavBody = await wavRes.text();
+                let wavApiError = false;
+                try {
+                  const wavJson = JSON.parse(wavBody);
+                  if (wavJson.code && wavJson.code >= 400) wavApiError = true;
+                  if (wavJson.error || wavJson.message?.toLowerCase().includes("error")) wavApiError = true;
+                } catch { /* not JSON */ }
+
+                if (wavRes.ok && !wavApiError) {
+                  await supabase.from("beats").update({ wav_status: "processing" }).eq("id", b.id);
+                  console.log(`Auto-WAV triggered for beat ${b.id}`);
+                } else {
+                  console.error(`Auto-WAV failed for beat ${b.id}: status=${wavRes.status} body=${wavBody.slice(0, 300)}`);
+                  await supabase.from("beats").update({ wav_status: "failed" }).eq("id", b.id);
+                }
+              } catch (e) {
+                console.error(`Auto-WAV error for beat ${b.id}:`, e.message);
+                await supabase.from("beats").update({ wav_status: "failed" }).eq("id", b.id);
+              }
+            }
+          }
+
+          // Delete the temporary key — used once, now gone
+          await supabase.from("pending_wav_keys").delete().eq("task_id", taskId);
+          console.log(`Deleted pending WAV key for task ${taskId}`);
+        } else {
+          console.log(`No pending WAV key found for task ${taskId} — agent must call process-stems manually`);
+        }
+      }
     } else if (isFirst && tracks.length > 0) {
       for (let i = 0; i < Math.min(tracks.length, beats.length); i++) {
         const track = tracks[i];
@@ -202,7 +271,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true, stage, effectiveComplete, beats_updated: beats.length,
-        ...(effectiveComplete ? { action_required: "Call POST /functions/v1/process-stems with your suno_api_key to enable WAV downloads and stem splitting. Stems are mandatory for selling on MusiClaw." } : {}),
+        ...(effectiveComplete ? { wav_conversion: "auto-triggered", note: "WAV conversion is automatic. Call process-stems separately if you want stem splitting (50 Suno credits)." } : {}),
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

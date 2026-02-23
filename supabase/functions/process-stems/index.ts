@@ -154,8 +154,9 @@ serve(async (req) => {
 
     const results: string[] = [];
 
-    // 1. Trigger WAV conversion (if not already complete)
-    if (beat.wav_status !== "complete") {
+    // 1. WAV conversion — now AUTOMATIC (triggered by suno-callback)
+    // If WAV failed for some reason, allow manual retry here as a fallback
+    if (beat.wav_status === "failed" || (beat.wav_status !== "complete" && beat.wav_status !== "processing")) {
       try {
         const wavRes = await fetch("https://api.sunoapi.org/api/v1/wav/generate", {
           method: "POST",
@@ -171,30 +172,29 @@ serve(async (req) => {
         });
 
         const wavBody = await wavRes.text();
-        console.log(`WAV API response for beat ${beat.id}: status=${wavRes.status} body=${wavBody.slice(0, 500)}`);
+        console.log(`WAV retry for beat ${beat.id}: status=${wavRes.status} body=${wavBody.slice(0, 500)}`);
 
-        // Check for API-level errors even on 200 responses
         let wavApiError = false;
         try {
           const wavJson = JSON.parse(wavBody);
           if (wavJson.code && wavJson.code >= 400) wavApiError = true;
           if (wavJson.error || wavJson.message?.toLowerCase().includes("error")) wavApiError = true;
-        } catch { /* not JSON, check status only */ }
+        } catch { /* not JSON */ }
 
         if (wavRes.ok && !wavApiError) {
           await supabase.from("beats").update({ wav_status: "processing" }).eq("id", beat.id);
-          results.push("WAV conversion triggered");
-          console.log(`WAV triggered for beat ${beat.id} by agent ${agent.handle}`);
+          results.push("WAV conversion re-triggered (was failed/missing)");
         } else {
-          console.error(`WAV API error for beat ${beat.id}: status=${wavRes.status} body=${wavBody.slice(0, 500)}`);
           await supabase.from("beats").update({ wav_status: "failed" }).eq("id", beat.id);
-          results.push("WAV conversion failed: " + (wavRes.status === 401 ? "Invalid API key" : `API error (${wavRes.status})`));
+          results.push("WAV conversion retry failed: " + (wavRes.status === 401 ? "Invalid API key" : `API error (${wavRes.status})`));
         }
       } catch (wavErr) {
-        console.error(`WAV trigger failed for beat ${beat.id}:`, wavErr.message);
+        console.error(`WAV retry failed for beat ${beat.id}:`, wavErr.message);
         await supabase.from("beats").update({ wav_status: "failed" }).eq("id", beat.id);
-        results.push("WAV conversion failed: network error");
+        results.push("WAV conversion retry failed: network error");
       }
+    } else if (beat.wav_status === "processing") {
+      results.push("WAV conversion in progress (auto-triggered)");
     } else {
       results.push("WAV already complete");
     }
@@ -251,7 +251,7 @@ serve(async (req) => {
         beat_id: beat.id,
         beat_title: beat.title,
         results,
-        message: "Processing started. WAV and stems callbacks will update the beat record. Your key was used and NOT stored. Poll beats_feed to check wav_status and stems_status.",
+        message: "Processing started. WAV is auto-triggered on beat completion; stems require this call. Callbacks will update the beat record. Your key was used and NOT stored.",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
