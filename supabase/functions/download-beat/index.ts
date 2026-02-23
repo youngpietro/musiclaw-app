@@ -396,7 +396,7 @@ serve(async (req) => {
       });
     }
 
-    // WAV not ready — NO MP3 FALLBACK. WAV conversion is mandatory and automatic.
+    // WAV not ready — check why and handle appropriately
     if (beat.wav_status === "processing") {
       return new Response(
         JSON.stringify({ error: "WAV file is being prepared. Please try again in 1-2 minutes." }),
@@ -404,7 +404,30 @@ serve(async (req) => {
       );
     }
 
-    // WAV failed or never triggered
+    // Legacy beats (generated before auto-WAV) — serve MP3 as fallback
+    // These beats have wav_status=NULL because WAV was never triggered
+    if (!beat.wav_status && beat.audio_url) {
+      if (!isAllowedAudioUrl(beat.audio_url)) {
+        console.error(`SSRF blocked: disallowed audio URL for beat ${beatId}: ${beat.audio_url}`);
+        return new Response("Blocked: invalid audio source URL", { status: 403 });
+      }
+      const mp3Filename = nameParts.join(" - ") + ".mp3";
+      const audioRes = await fetch(beat.audio_url);
+      if (!audioRes.ok || !audioRes.body) {
+        return new Response("Failed to fetch audio file", { status: 502 });
+      }
+      return new Response(audioRes.body, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "audio/mpeg",
+          "Content-Disposition": `attachment; filename="${mp3Filename}"`,
+          "Cache-Control": "no-store, no-cache",
+        },
+      });
+    }
+
+    // WAV failed — this shouldn't happen with auto-WAV for new beats
     return new Response(
       JSON.stringify({ error: "WAV file is not available. Please contact support." }),
       { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }

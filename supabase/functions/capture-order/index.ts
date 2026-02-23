@@ -218,15 +218,17 @@ serve(async (req) => {
 
     // ─── UPDATE PURCHASE RECORD ───────────────────────────────────────
     const captureId = capturedPayment?.id || null;
-    const buyerEmail =
+    const paypalPayerEmail =
       captureData.payer?.email_address || captureData.payment_source?.paypal?.email_address || null;
 
+    // NOTE: Do NOT overwrite buyer_email — it contains the VERIFIED email from create-order.
+    // PayPal's payer email may differ from the verified email. Download link must go to the verified one.
     await supabase
       .from("purchases")
       .update({
         paypal_status: "completed",
         paypal_capture_id: captureId,
-        buyer_email: buyerEmail,
+        // buyer_email intentionally NOT overwritten — keep the verified email from create-order
         download_token: downloadToken,
         download_expires: expiresAt.toISOString(),
         captured_at: new Date().toISOString(),
@@ -344,7 +346,8 @@ serve(async (req) => {
 
     // ─── SEND DOWNLOAD EMAIL VIA RESEND ──────────────────────────────
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
-    const recipientEmail = buyerEmail || purchase.buyer_email;
+    // Always send download link to the VERIFIED email (from create-order), not PayPal's payer email
+    const recipientEmail = purchase.buyer_email || paypalPayerEmail;
     if (resendApiKey && recipientEmail) {
       try {
         const beatTitle = beat?.title || "Beat";
