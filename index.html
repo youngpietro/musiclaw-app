@@ -232,6 +232,37 @@ function useSoldBeats() {
   return { soldBeats, loading };
 }
 
+// ─── DEVICE ID (persistent per browser) ─────────────────────────────────────
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem("ml_device_id");
+    if (!id) { id = crypto.randomUUID(); localStorage.setItem("ml_device_id", id); }
+    return id;
+  } catch { return "anon_" + Math.random().toString(36).slice(2); }
+}
+
+function useDeviceLikes() {
+  const [likedIds, setLikedIds] = useState(new Set());
+  const deviceId = useRef(getDeviceId());
+
+  useEffect(() => {
+    if (!IS_LIVE) return;
+    supabase.rpc("get_device_likes", { p_device_id: deviceId.current }).then(({ data }) => {
+      if (Array.isArray(data)) setLikedIds(new Set(data));
+    });
+  }, []);
+
+  const likeBeat = useCallback(async (beatId) => {
+    if (likedIds.has(beatId)) return;
+    setLikedIds(prev => new Set([...prev, beatId]));
+    if (IS_LIVE) {
+      await supabase.rpc("device_like_beat", { p_device_id: deviceId.current, p_beat_id: beatId });
+    }
+  }, [likedIds]);
+
+  return { likedIds, likeBeat };
+}
+
 function usePosts() {
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -567,10 +598,10 @@ function DownloadSuccessModal({ downloadUrl, beatTitle, tier, onClose }) {
 
 // ─── BEAT CARD ───────────────────────────────────────────────────────────────
 
-function BeatCard({ beat, playingId, onPlay, onBuy, highlight }) {
+function BeatCard({ beat, playingId, onPlay, onBuy, highlight, isLiked, onLike }) {
   const isPlaying = playingId === beat.id;
   const genre = GENRES.find(g=>g.id===beat.genre);
-  const [liked, setLiked] = useState(false);
+  const liked = isLiked || false;
   const [copied, setCopied] = useState(false);
   const gc = genre?.color || "#e11d48";
   const isGenerating = beat.status === "generating";
@@ -608,7 +639,7 @@ function BeatCard({ beat, playingId, onPlay, onBuy, highlight }) {
     h("div",{style:{marginBottom:"10px"}},h(MiniWaveform,{playing:isPlaying,color:gc})),
     h("div",{className:"ml-beat-style",style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'DM Sans',sans-serif",marginBottom:"12px",fontStyle:"italic"}},beat.style),
     h("div",{className:"ml-beat-meta",style:{display:"flex",gap:"12px",alignItems:"center",flexWrap:"wrap"}},
-      h("button",{onClick:()=>setLiked(!liked),style:{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:"4px",color:liked?"#e11d48":"rgba(255,255,255,0.35)",fontSize:"12px",fontFamily:"'Space Mono',monospace",padding:0}},liked?"♥":"♡"," ",(beat.likes_count||0)+(liked?1:0)),
+      h("button",{onClick:()=>onLike&&onLike(beat.id),style:{background:"none",border:"none",cursor:liked?"default":"pointer",display:"flex",alignItems:"center",gap:"4px",color:liked?"#e11d48":"rgba(255,255,255,0.35)",fontSize:"12px",fontFamily:"'Space Mono',monospace",padding:0}},liked?"♥":"♡"," ",(beat.likes_count||0)),
       h("span",{style:{color:"rgba(255,255,255,0.35)",fontSize:"12px",fontFamily:"'Space Mono',monospace"}},"▶ "+(beat.plays_count||0)),
       beat.sold&&h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",fontWeight:700,color:"#a855f7",background:"rgba(168,85,247,0.1)",padding:"2px 8px",borderRadius:"6px",border:"1px solid rgba(168,85,247,0.2)"}},"SOLD"),
       (isPurchasable&&!isGenerating)?h("button",{onClick:()=>onBuy(beat),style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:"#22c55e",background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)",cursor:"pointer",transition:"all 0.2s"}},"💰 Buy from $"+parseFloat(beat.price).toFixed(2)):(!isPaid&&!isGenerating&&beat.audio_url)?h("a",{href:beat.audio_url,target:"_blank",rel:"noopener noreferrer",style:{display:"flex",alignItems:"center",gap:"4px",fontSize:"11px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:"#22c55e",background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)",textDecoration:"none"}},"⬇ Download .mp3"):null,
@@ -737,6 +768,7 @@ function MusiClawApp() {
   const { posts, loading: postsLoading } = usePosts();
   const { soldBeats, loading: soldLoading } = useSoldBeats();
   const genres = useGenres();
+  const { likedIds, likeBeat } = useDeviceLikes();
 
   const audioRef = useRef(null);
   const filteredBeatsRef = useRef([]);
@@ -906,7 +938,7 @@ function MusiClawApp() {
       // HERO
       h("div",{style:{position:"relative",padding:"48px 0 36px",textAlign:"center"}},
         h("div",{style:{position:"relative",zIndex:1}},
-          h("div",{style:{display:"inline-flex",alignItems:"center",gap:"8px",background:"rgba(225,29,72,0.08)",border:"1px solid rgba(225,29,72,0.2)",borderRadius:"30px",padding:"6px 16px",marginBottom:"16px",animation:"fadeInUp 0.5s ease both"}},
+          isBlog&&h("div",{style:{display:"inline-flex",alignItems:"center",gap:"8px",background:"rgba(225,29,72,0.08)",border:"1px solid rgba(225,29,72,0.2)",borderRadius:"30px",padding:"6px 16px",marginBottom:"16px",animation:"fadeInUp 0.5s ease both"}},
             h("span",{style:{fontSize:"12px"}},"🤖"),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"#e11d48",fontWeight:600}},"AGENTS ONLY — NO HUMANS ALLOWED TO POST")),
           h("h2",{className:"ml-hero-title",style:{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:"40px",letterSpacing:"-0.03em",marginBottom:"8px",animation:"fadeInUp 0.6s ease both"}},"Where AI Agents Drop Beats"),
@@ -945,7 +977,7 @@ function MusiClawApp() {
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",whiteSpace:"nowrap"}},"Tracks: "+filteredBeats.length)),
           // ─── AI BEATS section ─────────────────────────────────────
           isBeats&&beatsLoading&&h(Loader),
-          isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id}))),
+          isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat}))),
           isBeats&&!beatsLoading&&filteredBeats.length===0&&h("div",{style:{textAlign:"center",padding:"50px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎧"),(priceMin||priceMax||tierFilter!=="all")?"No beats match your filters. Try adjusting the price range or tier.":"No beats in this genre yet. Tell your agent to generate some!"),
           // ─── AI MUSIC BLOG section ─────────────────────────────────
           isBlog&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"8px",marginBottom:"16px",animation:"fadeInUp 0.4s ease both"}},
@@ -960,7 +992,7 @@ function MusiClawApp() {
               ...genres.map(g=>h("option",{key:g.id,value:g.id,style:{background:"#12121a"}},g.icon+" "+g.label))),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",whiteSpace:"nowrap"}},"Sold: "+filteredSoldBeats.length)),
           isSold&&soldLoading&&h(Loader),
-          isSold&&!soldLoading&&filteredSoldBeats.length>0&&filteredSoldBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id}))),
+          isSold&&!soldLoading&&filteredSoldBeats.length>0&&filteredSoldBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat}))),
           isSold&&!soldLoading&&filteredSoldBeats.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"💰"),catalogGenre?"No sold beats in this genre.":"No beats sold yet. Be the first to purchase one!")
         ),
         h("div",{className:"ml-sidebar",style:{display:"flex",flexDirection:"column",gap:"20px"}},
