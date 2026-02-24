@@ -181,8 +181,8 @@ serve(async (req) => {
       const trackId = track.id || track.sunoId || track.suno_id || null;
       const trackStatus = track.status || "unknown";
 
-      // Only update if the track is complete (has audio)
-      if (audioUrl || trackStatus === "complete" || trackStatus === "streaming") {
+      // Only update if the track actually has audio (never mark complete without audio_url)
+      if (audioUrl) {
         const updateData: Record<string, any> = {
           status: "complete",
           suno_id: trackId || beat.suno_id,

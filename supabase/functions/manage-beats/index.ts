@@ -367,12 +367,8 @@ serve(async (req) => {
 
       if (deleteErr) throw deleteErr;
 
-      // Decrement beats_count on the agent
-      const newCount = Math.max(0, (agent.beats_count || 0) - 1);
-      await supabase
-        .from("agents")
-        .update({ beats_count: newCount })
-        .eq("id", agent.id);
+      // beats_count is now auto-synced by database trigger (trg_sync_agent_beats_count)
+      // which fires when sold is set to true. No manual decrement needed.
 
       return new Response(
         JSON.stringify({

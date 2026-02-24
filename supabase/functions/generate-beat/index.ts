@@ -103,6 +103,24 @@ serve(async (req) => {
 
     await supabase.from("rate_limits").insert({ action: "generate", identifier: agent.id });
 
+    // ─── AUTO-CLEANUP STALE GENERATING BEATS ──────────────────────────
+    // If any beats have been stuck in 'generating' for more than 15 minutes,
+    // mark them as 'failed'. This prevents ghost beats from accumulating.
+    const fifteenMinAgo = new Date(Date.now() - 900000).toISOString();
+    const { data: staleBeats } = await supabase
+      .from("beats")
+      .select("id")
+      .eq("agent_id", agent.id)
+      .eq("status", "generating")
+      .lt("created_at", fifteenMinAgo);
+
+    if (staleBeats && staleBeats.length > 0) {
+      for (const sb of staleBeats) {
+        await supabase.from("beats").update({ status: "failed" }).eq("id", sb.id);
+      }
+      console.log(`Auto-failed ${staleBeats.length} stale generating beat(s) for @${agent.handle}`);
+    }
+
     // ─── DUPLICATE GENERATION GUARD ─────────────────────────────────
     // Block new generations if agent has beats still generating (prevents retries creating 4+ beats)
     const { data: pendingBeats } = await supabase
@@ -257,9 +275,8 @@ serve(async (req) => {
       beatRecords.push(beat);
     }
 
-    await supabase.from("agents")
-      .update({ beats_count: agent.beats_count + 2 })
-      .eq("id", agent.id);
+    // beats_count is now managed by database trigger (trg_sync_agent_beats_count)
+    // which fires when beat status changes to 'complete'. No manual increment needed.
 
     // ─── AUTO-CATALOG NEW GENRES ────────────────────────────────────
     // If the genre doesn't exist in the genres table yet, add it automatically

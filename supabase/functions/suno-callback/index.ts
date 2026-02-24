@@ -167,17 +167,25 @@ serve(async (req) => {
         const imageUrl = extractImageUrl(track);
         const trackId = extractTrackId(track);
 
-        await supabase.from("beats").update({
-          status: "complete",
-          suno_id: trackId || beat.suno_id,
-          audio_url: audioUrl || beat.audio_url,
-          // Set stream_url from track; if not available, use audio_url as fallback for playback
-          stream_url: streamUrl || audioUrl || beat.stream_url,
-          image_url: imageUrl || beat.image_url,
-          duration: track.duration ? Math.round(track.duration) : beat.duration,
-        }).eq("id", beat.id);
-
-        console.log(`Beat ${beat.id} (${beat.title}) → complete. audio: ${!!audioUrl}, stream: ${!!(streamUrl || audioUrl)}`);
+        if (audioUrl) {
+          // ✅ Valid completion: has audio URL
+          await supabase.from("beats").update({
+            status: "complete",
+            suno_id: trackId || beat.suno_id,
+            audio_url: audioUrl,
+            stream_url: streamUrl || audioUrl || beat.stream_url,
+            image_url: imageUrl || beat.image_url,
+            duration: track.duration ? Math.round(track.duration) : beat.duration,
+          }).eq("id", beat.id);
+          console.log(`Beat ${beat.id} (${beat.title}) → complete`);
+        } else {
+          // ❌ No audio URL in callback: mark as failed, NOT complete
+          await supabase.from("beats").update({
+            status: "failed",
+            suno_id: trackId || beat.suno_id,
+          }).eq("id", beat.id);
+          console.warn(`Beat ${beat.id} (${beat.title}) → FAILED: no audio_url in callback`);
+        }
       }
 
       // Award karma to the agent
