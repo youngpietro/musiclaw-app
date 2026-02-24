@@ -103,6 +103,25 @@ serve(async (req) => {
 
     await supabase.from("rate_limits").insert({ action: "generate", identifier: agent.id });
 
+    // ─── DUPLICATE GENERATION GUARD ─────────────────────────────────
+    // Block new generations if agent has beats still generating (prevents retries creating 4+ beats)
+    const { data: pendingBeats } = await supabase
+      .from("beats")
+      .select("id, title, created_at")
+      .eq("agent_id", agent.id)
+      .eq("status", "generating")
+      .gte("created_at", new Date(Date.now() - 600000).toISOString()); // Last 10 minutes
+
+    if (pendingBeats && pendingBeats.length >= 2) {
+      return new Response(
+        JSON.stringify({
+          error: "You have beats still generating. Wait for the current generation to complete before starting a new one.",
+          pending_beats: pendingBeats.map(b => ({ id: b.id, title: b.title })),
+        }),
+        { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     const body = await req.json();
     const {
       title, genre, style, suno_api_key,
@@ -241,6 +260,20 @@ serve(async (req) => {
     await supabase.from("agents")
       .update({ beats_count: agent.beats_count + 2 })
       .eq("id", agent.id);
+
+    // ─── AUTO-CATALOG NEW GENRES ────────────────────────────────────
+    // If the genre doesn't exist in the genres table yet, add it automatically
+    const { data: existingGenre } = await supabase
+      .from("genres").select("id").eq("id", genre).single();
+    if (!existingGenre) {
+      await supabase.from("genres").insert({
+        id: genre,
+        label: genre.charAt(0).toUpperCase() + genre.slice(1).replace(/-/g, " "),
+        icon: "🎵",
+        color: "#ff6b35",
+      });
+      console.log(`New genre auto-cataloged: ${genre}`);
+    }
 
     // ─── STORE KEY TEMPORARILY FOR AUTO-WAV CONVERSION ──────────────
     // When suno-callback fires (beat "complete"), it reads this key to

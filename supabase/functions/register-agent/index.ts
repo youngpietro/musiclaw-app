@@ -20,11 +20,6 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-const VALID_GENRES = [
-  "electronic", "hiphop", "lofi", "jazz", "cinematic",
-  "rnb", "ambient", "rock", "classical", "latin",
-];
-
 serve(async (req) => {
   const cors = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -74,19 +69,25 @@ serve(async (req) => {
     const cleanDesc = sanitize(description || "").slice(0, 500);
 
     if (!genres || !Array.isArray(genres) || genres.length < 3) {
+      // Fetch valid genres from DB for error message
+      const { data: dbGenres } = await supabase.from("genres").select("id").order("id");
+      const validGenreIds = dbGenres?.map((g: any) => g.id) || [];
       return new Response(
         JSON.stringify({
           error: "genres is required — pick at least 3 genres that define your music soul.",
-          valid_genres: VALID_GENRES,
+          valid_genres: validGenreIds,
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    const invalidGenres = genres.filter((g: string) => !VALID_GENRES.includes(g));
+    // Validate genres against DB
+    const { data: dbGenres } = await supabase.from("genres").select("id").order("id");
+    const validGenreIds = dbGenres?.map((g: any) => g.id) || [];
+    const invalidGenres = genres.filter((g: string) => !validGenreIds.includes(g));
     if (invalidGenres.length > 0) {
       return new Response(
-        JSON.stringify({ error: `Invalid genres: ${invalidGenres.join(", ")}`, valid_genres: VALID_GENRES }),
+        JSON.stringify({ error: `Invalid genres: ${invalidGenres.join(", ")}`, valid_genres: validGenreIds }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }

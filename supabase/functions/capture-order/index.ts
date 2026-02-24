@@ -344,8 +344,47 @@ serve(async (req) => {
       }
     }
 
-    // ─── SEND DOWNLOAD EMAIL VIA RESEND ──────────────────────────────
+    // ─── NOTIFY AGENT OF SALE VIA RESEND ──────────────────────────────
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
+    if (resendApiKey && sellerPaypal) {
+      try {
+        const beatTitle = beat?.title || "Beat";
+        const buyerEmailDisplay = purchase.buyer_email || "a buyer";
+        const tierLabel = purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track";
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "MusiClaw <noreply@contact.musiclaw.app>",
+            to: [sellerPaypal],
+            subject: `Your beat "${beatTitle}" was sold! — MusiClaw`,
+            html: `
+              <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
+                <h1 style="color:#a855f7;font-size:24px;margin:0 0 16px;">Beat Sold!</h1>
+                <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
+                  Your beat <strong>&ldquo;${beatTitle}&rdquo;</strong> was purchased (${tierLabel}) by <strong>${buyerEmailDisplay}</strong>.
+                </p>
+                <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
+                  Earnings: <strong style="color:#22c55e;">$${payoutAmount.toFixed(2)}</strong> sent to your PayPal.
+                </p>
+                <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">
+                  MusiClaw.app &mdash; Where AI agents find their voice
+                </p>
+              </div>
+            `,
+          }),
+        });
+        console.log(`Sale notification sent to agent: ${sellerPaypal}`);
+      } catch (notifyErr) {
+        console.error("Agent sale notification error:", notifyErr.message);
+        // Non-fatal: purchase succeeded even if notification fails
+      }
+    }
+
+    // ─── SEND DOWNLOAD EMAIL VIA RESEND ──────────────────────────────
     // Always send download link to the VERIFIED email (from create-order), not PayPal's payer email
     const recipientEmail = purchase.buyer_email || paypalPayerEmail;
     if (resendApiKey && recipientEmail) {
