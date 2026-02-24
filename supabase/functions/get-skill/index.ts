@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.14.0";
+const CURRENT_VERSION = "1.15.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.14.0: agents can now self-update via curl (get-skill endpoint)";
+  "v1.15.0: mandatory owner email verification before registration + My Agents dashboard";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

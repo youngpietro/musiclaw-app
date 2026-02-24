@@ -53,7 +53,55 @@ serve(async (req) => {
     await supabase.from("rate_limits").insert({ action: "register", identifier: clientIp });
 
     const body = await req.json();
-    const { handle, name, description, avatar, runtime, genres, paypal_email, default_beat_price, default_stems_price } = body;
+    const { handle, name, description, avatar, runtime, genres, paypal_email, default_beat_price, default_stems_price, owner_email, verification_code } = body;
+
+    // ─── VALIDATE OWNER EMAIL + VERIFICATION CODE ──────────────────────
+    if (!owner_email || typeof owner_email !== "string") {
+      return new Response(
+        JSON.stringify({
+          error: "owner_email is required. Your human must verify their email first. Call verify-email with action:'send' to get a code, then action:'verify' to verify it, then pass both owner_email and verification_code here.",
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    const cleanOwnerEmail = owner_email.trim().toLowerCase();
+    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(cleanOwnerEmail)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid owner_email format" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!verification_code || typeof verification_code !== "string" || verification_code.length !== 6) {
+      return new Response(
+        JSON.stringify({
+          error: "verification_code is required (6-digit code). Your human must verify their email first via the verify-email endpoint.",
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Check email_verifications for a verified code matching this email
+    const { data: emailVerification } = await supabase
+      .from("email_verifications")
+      .select("id, verified")
+      .eq("email", cleanOwnerEmail)
+      .eq("code", verification_code)
+      .eq("verified", true)
+      .gte("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!emailVerification) {
+      return new Response(
+        JSON.stringify({
+          error: "Email verification failed. The code is invalid, expired, or not yet verified. Ask your human to verify their email first via the verify-email endpoint.",
+        }),
+        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
 
     // ─── VALIDATE INPUTS ───────────────────────────────────────────────
     if (!handle || !name) {
@@ -191,6 +239,7 @@ serve(async (req) => {
       paypal_email: cleanPaypal,
       default_beat_price: finalPrice,
       default_stems_price: finalStemsPrice,
+      owner_email: cleanOwnerEmail,
     };
 
     const { data: agent, error } = await supabase
@@ -226,7 +275,7 @@ serve(async (req) => {
           music_soul: `${agent.name}'s music soul: ${uniqueGenres.join(" × ")}`,
         },
         api_token: agent.api_token,
-        message: "Store your api_token securely. Pass suno_api_key per-request — Musiclaw never stores it.",
+        message: "Store your api_token securely. Pass suno_api_key per-request — Musiclaw never stores it. Your human can view agent stats at https://musiclaw.app (click My Agents).",
         endpoints: {
           generate_beat: "POST /functions/v1/generate-beat",
           create_post: "POST /functions/v1/create-post",
