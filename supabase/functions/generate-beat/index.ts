@@ -21,6 +21,8 @@ function getCorsHeaders(req: Request) {
 }
 
 const VALID_MODELS = ["V5", "V4_5PLUS", "V4_5ALL", "V4_5", "V4"];
+const MAX_BEAT_PRICE = 499.99;
+const MAX_STEMS_PRICE = 999.99;
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);
@@ -101,6 +103,20 @@ serve(async (req) => {
       );
     }
 
+    // ─── DAILY LIMIT: max 50 beats per 24 hours per agent ──────────
+    const { data: dailyBeats } = await supabase
+      .from("beats")
+      .select("id")
+      .eq("agent_id", agent.id)
+      .gte("created_at", new Date(Date.now() - 86400000).toISOString());
+
+    if (dailyBeats && dailyBeats.length >= 50) {
+      return new Response(
+        JSON.stringify({ error: "Daily limit reached: max 50 beats per 24 hours. Try again tomorrow." }),
+        { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     await supabase.from("rate_limits").insert({ action: "generate", identifier: agent.id });
 
     // ─── AUTO-CLEANUP STALE GENERATING BEATS ──────────────────────────
@@ -175,6 +191,18 @@ serve(async (req) => {
     const cleanStyle = sanitize(style).slice(0, 500);
     const cleanNegTags = sanitize(negativeTags).slice(0, 200);
 
+    // ─── INSTRUMENTAL ONLY: block vocal/lyric keywords ───────────
+    const VOCAL_KEYWORDS = /\b(vocals?|singing|singer|lyric|lyrics|rapper|rapping|acapella|a\s*cappella|choir|verse|hook|chorus|spoken\s*word)\b/i;
+    if (VOCAL_KEYWORDS.test(cleanStyle) || VOCAL_KEYWORDS.test(cleanTitle) || (cleanTitleV2 && VOCAL_KEYWORDS.test(cleanTitleV2))) {
+      return new Response(
+        JSON.stringify({
+          error: "MusiClaw is instrumental-only. Remove vocal/lyric references (vocals, singing, rapper, lyrics, chorus, etc.) from your title and style.",
+          tip: "Use negative_tags to suppress vocals instead: negativeTags: \"vocals, singing, voice\"",
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     // Genre must match music soul
     const agentGenres = agent.genres || [];
     if (agentGenres.length > 0 && !agentGenres.includes(genre)) {
@@ -202,8 +230,13 @@ serve(async (req) => {
     let safePrice: number = agent.default_beat_price;
     if (price !== null && price !== undefined) {
       const overridePrice = parseFloat(price);
-      if (!isNaN(overridePrice) && overridePrice >= 2.99) {
+      if (!isNaN(overridePrice) && overridePrice >= 2.99 && overridePrice <= MAX_BEAT_PRICE) {
         safePrice = Math.round(overridePrice * 100) / 100;
+      } else if (!isNaN(overridePrice) && overridePrice > MAX_BEAT_PRICE) {
+        return new Response(
+          JSON.stringify({ error: `Beat price cannot exceed $${MAX_BEAT_PRICE}` }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
       }
     }
 
@@ -211,8 +244,13 @@ serve(async (req) => {
     let safeStemsPrice: number = agent.default_stems_price;
     if (stems_price !== null && stems_price !== undefined) {
       const overrideStemsPrice = parseFloat(stems_price);
-      if (!isNaN(overrideStemsPrice) && overrideStemsPrice >= 9.99) {
+      if (!isNaN(overrideStemsPrice) && overrideStemsPrice >= 9.99 && overrideStemsPrice <= MAX_STEMS_PRICE) {
         safeStemsPrice = Math.round(overrideStemsPrice * 100) / 100;
+      } else if (!isNaN(overrideStemsPrice) && overrideStemsPrice > MAX_STEMS_PRICE) {
+        return new Response(
+          JSON.stringify({ error: `Stems price cannot exceed $${MAX_STEMS_PRICE}` }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
       }
     }
 

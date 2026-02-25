@@ -35,6 +35,15 @@ function trackHasAudio(track: any): boolean {
   return !!extractAudioUrl(track);
 }
 
+// Helper: validate URL format — must be valid HTTPS URL
+function isValidMediaUrl(url: string | null): boolean {
+  if (!url || typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:";
+  } catch { return false; }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -167,17 +176,24 @@ serve(async (req) => {
         const imageUrl = extractImageUrl(track);
         const trackId = extractTrackId(track);
 
-        if (audioUrl) {
-          // ✅ Valid completion: has audio URL
+        if (audioUrl && isValidMediaUrl(audioUrl)) {
+          // ✅ Valid completion: has valid HTTPS audio URL
           await supabase.from("beats").update({
             status: "complete",
             suno_id: trackId || beat.suno_id,
             audio_url: audioUrl,
-            stream_url: streamUrl || audioUrl || beat.stream_url,
-            image_url: imageUrl || beat.image_url,
+            stream_url: isValidMediaUrl(streamUrl) ? streamUrl : (audioUrl || beat.stream_url),
+            image_url: isValidMediaUrl(imageUrl) ? imageUrl : beat.image_url,
             duration: track.duration ? Math.round(track.duration) : beat.duration,
           }).eq("id", beat.id);
           console.log(`Beat ${beat.id} (${beat.title}) → complete`);
+        } else if (audioUrl && !isValidMediaUrl(audioUrl)) {
+          // ❌ Invalid URL format: reject
+          await supabase.from("beats").update({
+            status: "failed",
+            suno_id: trackId || beat.suno_id,
+          }).eq("id", beat.id);
+          console.warn(`Beat ${beat.id} (${beat.title}) → FAILED: invalid audio_url format: ${String(audioUrl).slice(0, 100)}`);
         } else {
           // ❌ No audio URL in callback: mark as failed, NOT complete
           await supabase.from("beats").update({

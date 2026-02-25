@@ -105,6 +105,12 @@ serve(async (req) => {
       || outerData.vocal_removal
       || null;
 
+    // Helper: validate URL format — must be valid HTTPS URL
+    function isValidMediaUrl(u: string): boolean {
+      try { return new URL(u).protocol === "https:"; }
+      catch { return false; }
+    }
+
     const stems: Record<string, string> = {};
 
     if (vocalRemovalInfo && typeof vocalRemovalInfo === "object") {
@@ -112,6 +118,10 @@ serve(async (req) => {
       for (const [key, value] of Object.entries(vocalRemovalInfo)) {
         if (!value || typeof value !== "string" || value === "") continue;
         if (key === "origin_url") continue; // skip original track reference
+        if (!isValidMediaUrl(value as string)) {
+          console.warn(`Stems: skipping invalid URL for ${key}: ${String(value).slice(0, 80)}`);
+          continue;
+        }
         // Strip _url suffix to get stem name: "drums_url" → "drums", "backing_vocals_url" → "backing_vocals"
         const stemName = key.replace(/_url$/, "");
         stems[stemName] = value as string;
@@ -126,7 +136,7 @@ serve(async (req) => {
         for (const stem of stemTracks) {
           const stemType = stem.type || stem.stem_type || stem.name || stem.label || "unknown";
           const stemUrl = stem.audioUrl || stem.audio_url || stem.url || null;
-          if (stemType && stemUrl) {
+          if (stemType && stemUrl && isValidMediaUrl(stemUrl)) {
             stems[String(stemType).toLowerCase().replace(/\s+/g, "_")] = stemUrl;
           }
         }

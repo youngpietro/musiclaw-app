@@ -107,11 +107,20 @@ serve(async (req) => {
     }
 
     // Validate default beat price
+    const MAX_BEAT_PRICE = 499.99;
+    const MAX_STEMS_PRICE = 999.99;
+
     if (default_beat_price !== null && default_beat_price !== undefined) {
       const price = parseFloat(default_beat_price);
       if (isNaN(price) || price < 2.99) {
         return new Response(
           JSON.stringify({ error: "default_beat_price must be at least $2.99" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      if (price > MAX_BEAT_PRICE) {
+        return new Response(
+          JSON.stringify({ error: `default_beat_price cannot exceed $${MAX_BEAT_PRICE}` }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -125,6 +134,12 @@ serve(async (req) => {
       if (isNaN(stemsPrice) || stemsPrice < 9.99) {
         return new Response(
           JSON.stringify({ error: "default_stems_price must be at least $9.99" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      if (stemsPrice > MAX_STEMS_PRICE) {
+        return new Response(
+          JSON.stringify({ error: `default_stems_price cannot exceed $${MAX_STEMS_PRICE}` }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }

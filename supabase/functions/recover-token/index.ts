@@ -56,7 +56,7 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ──────────────────────────────────────────────
     const body = await req.json();
-    const { handle, paypal_email } = body;
+    const { handle, paypal_email, verification_code } = body;
 
     if (!handle || !paypal_email) {
       return new Response(
@@ -73,7 +73,7 @@ serve(async (req) => {
     // ─── LOOK UP AGENT ───────────────────────────────────────────────
     const { data: agent } = await supabase
       .from("agents")
-      .select("id, handle, name, paypal_email, api_token, genres, default_beat_price")
+      .select("id, handle, name, paypal_email, api_token, genres, default_beat_price, owner_email")
       .eq("handle", cleanHandle)
       .single();
 
@@ -83,6 +83,39 @@ serve(async (req) => {
         JSON.stringify({ error: "Recovery failed. Check your handle and PayPal email." }),
         { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
       );
+    }
+
+    // ─── EMAIL VERIFICATION (if agent has owner_email) ───────────────
+    // Agents registered with owner_email require a verified code for recovery.
+    // This prevents token theft via guessed handle + PayPal email.
+    if (agent.owner_email) {
+      if (!verification_code || typeof verification_code !== "string" || verification_code.length !== 6) {
+        return new Response(
+          JSON.stringify({
+            error: "This agent requires email verification for token recovery. Send a verification code to the owner email first via verify-email, then pass verification_code here.",
+            requires_verification: true,
+          }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      const { data: emailVerification } = await supabase
+        .from("email_verifications")
+        .select("id, verified")
+        .eq("email", agent.owner_email)
+        .eq("code", verification_code)
+        .eq("verified", true)
+        .gte("expires_at", new Date().toISOString())
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!emailVerification) {
+        return new Response(
+          JSON.stringify({ error: "Invalid or expired verification code. Request a new code via verify-email." }),
+          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
     }
 
     // ─── VERIFY PAYPAL EMAIL ──────────────────────────────────────────

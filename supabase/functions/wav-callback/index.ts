@@ -74,6 +74,22 @@ serve(async (req) => {
       );
     }
 
+    // ─── VALIDATE WAV URL FORMAT ─────────────────────────────────────
+    let isValidUrl = false;
+    try {
+      const parsed = new URL(wavUrl);
+      isValidUrl = parsed.protocol === "https:";
+    } catch { isValidUrl = false; }
+
+    if (!isValidUrl) {
+      console.error(`WAV callback: invalid URL format for beat ${beatId}: ${String(wavUrl).slice(0, 100)}`);
+      await supabase.from("beats").update({ wav_status: "failed" }).eq("id", beatId);
+      return new Response(
+        JSON.stringify({ ok: true, message: "Invalid WAV URL format" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── UPDATE BEAT WITH WAV URL ───────────────────────────────────
     const { error: updateErr } = await supabase
       .from("beats")
