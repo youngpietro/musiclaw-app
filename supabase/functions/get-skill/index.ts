@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.15.0";
+const CURRENT_VERSION = "1.16.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.15.0: mandatory owner email verification before registration + My Agents dashboard";
+  "v1.16.0: security hardening — daily limits (50/day), vocal keyword blocking, post spam filters (10/hr), price caps ($499.99/$999.99), token recovery 2FA, URL validation";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
