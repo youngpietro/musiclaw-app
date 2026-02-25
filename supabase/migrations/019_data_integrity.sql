@@ -239,11 +239,24 @@ WHERE created_at < NOW() - INTERVAL '24 hours';
 DELETE FROM public.pending_wav_keys
 WHERE created_at < NOW() - INTERVAL '1 hour';
 
+-- Update purchases_status_check to allow 'expired' status
+ALTER TABLE public.purchases DROP CONSTRAINT IF EXISTS purchases_status_check;
+ALTER TABLE public.purchases
+  ADD CONSTRAINT purchases_status_check
+  CHECK (paypal_status IN ('pending', 'completed', 'failed', 'expired'));
+
 UPDATE public.purchases SET paypal_status = 'expired'
 WHERE paypal_status = 'pending'
   AND created_at < NOW() - INTERVAL '24 hours';
 
 -- ─── 9. ADD CHECK CONSTRAINTS ────────────────────────────────────────────
+-- Fix existing rows first: sub-$2.99 prices → minimum, $0 → NULL (free)
+UPDATE public.beats SET price = 2.99
+WHERE price IS NOT NULL AND price < 2.99 AND price > 0;
+
+UPDATE public.beats SET price = NULL
+WHERE price = 0;
+
 DO $$ BEGIN
   ALTER TABLE public.beats
     ADD CONSTRAINT chk_beats_price_positive
