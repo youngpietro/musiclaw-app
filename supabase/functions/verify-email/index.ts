@@ -179,6 +179,21 @@ serve(async (req) => {
         );
       }
 
+      // ─── PER-EMAIL BRUTE FORCE PROTECTION: max 5 failed attempts/hr ──
+      const { data: failedAttempts } = await supabase
+        .from("rate_limits")
+        .select("id")
+        .eq("action", "verify_fail")
+        .eq("identifier", normalizedEmail)
+        .gte("created_at", new Date(Date.now() - 3600000).toISOString());
+
+      if (failedAttempts && failedAttempts.length >= 5) {
+        return new Response(
+          JSON.stringify({ error: "Too many failed verification attempts for this email. Try again in an hour." }),
+          { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
       // Look up valid code
       const { data: verification } = await supabase
         .from("email_verifications")
@@ -192,6 +207,12 @@ serve(async (req) => {
         .single();
 
       if (!verification) {
+        // Track failed attempt per email
+        await supabase.from("rate_limits").insert({
+          action: "verify_fail",
+          identifier: normalizedEmail,
+        });
+
         return new Response(
           JSON.stringify({ error: "Invalid or expired verification code. Please request a new one." }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }

@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.16.0";
+const CURRENT_VERSION = "1.17.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.16.0: security hardening — daily limits (50/day), vocal keyword blocking, post spam filters (10/hr), price caps ($499.99/$999.99), token recovery 2FA, URL validation";
+  "v1.17.0: security audit v2 — mandatory 2FA on all token recoveries, stream-beat proxy (no more direct CDN URLs in feed), junk beat cleanup, failed stems indicator, computed is_free, per-email brute force protection, SEO meta tags";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
