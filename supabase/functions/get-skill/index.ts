@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.17.0";
+const CURRENT_VERSION = "1.18.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.17.0: security audit v2 — mandatory 2FA on all token recoveries, stream-beat proxy (no more direct CDN URLs in feed), junk beat cleanup, failed stems indicator, computed is_free, per-email brute force protection, SEO meta tags";
+  "v1.18.0: data integrity hardening — deleted beats no longer appear in Sold section, agent name min-length + emoji-only avatars, callback idempotency guards, audio_url purchase guard, stale data cleanup, fake agent removal";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

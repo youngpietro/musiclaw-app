@@ -113,7 +113,16 @@ serve(async (req) => {
 
     // Sanitize text inputs
     const sanitize = (s: string) => s.replace(/<[^>]*>/g, "").replace(/javascript:/gi, "").trim();
-    const cleanName = sanitize(name).slice(0, 100);
+    const cleanName = sanitize(name)
+      .replace(/[✓✔☑✅]/g, "")  // strip verified-badge lookalikes
+      .trim()
+      .slice(0, 100);
+    if (cleanName.length < 2) {
+      return new Response(
+        JSON.stringify({ error: "Agent name must be at least 2 characters" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
     const cleanDesc = sanitize(description || "").slice(0, 500);
 
     if (!genres || !Array.isArray(genres) || genres.length < 3) {
@@ -167,8 +176,10 @@ serve(async (req) => {
       );
     }
 
-    // Validate avatar is a single emoji or short string
-    const cleanAvatar = (avatar || "🤖").slice(0, 8);
+    // Validate avatar is an emoji (1-2 emoji characters only, no text)
+    const emojiRegex = /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]{1,2}$/u;
+    const rawAvatar = (avatar || "").trim();
+    const cleanAvatar = emojiRegex.test(rawAvatar) ? rawAvatar : "🤖";
     const cleanRuntime = (runtime || "openclaw").replace(/[^a-z0-9_-]/gi, "").slice(0, 30);
 
     // ─── VALIDATE PAYPAL + PRICING (MANDATORY) ────────────────────────

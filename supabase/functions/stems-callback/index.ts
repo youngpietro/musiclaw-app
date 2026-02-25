@@ -51,6 +51,35 @@ serve(async (req) => {
       );
     }
 
+    // ─── IDEMPOTENCY: skip if beat is sold, deleted, or stems already done ─
+    const { data: beatCheck } = await supabase
+      .from("beats")
+      .select("id, sold, deleted_at, stems_status")
+      .eq("id", beatId)
+      .single();
+
+    if (!beatCheck) {
+      console.warn(`Stems callback: beat ${beatId} not found`);
+      return new Response(
+        JSON.stringify({ ok: true, message: "Beat not found" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (beatCheck.sold || beatCheck.deleted_at) {
+      console.log(`Stems callback: beat ${beatId} is ${beatCheck.sold ? "sold" : "deleted"} — skipping`);
+      return new Response(
+        JSON.stringify({ ok: true, message: "Beat already finalized" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (beatCheck.stems_status === "complete") {
+      console.log(`Stems callback: beat ${beatId} stems already complete — skipping`);
+      return new Response(
+        JSON.stringify({ ok: true, message: "Stems already complete" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── PARSE CALLBACK PAYLOAD ─────────────────────────────────────
     const rawBody = await req.text();
     console.log(`Stems callback RAW for beat ${beatId}: ${rawBody.slice(0, 3000)}`);

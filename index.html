@@ -643,8 +643,8 @@ function BeatCard({ beat, playingId, onPlay, onBuy, highlight, isLiked, onLike }
           beat.stems_status==="failed"&&h("span",{style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",color:"#ef4444",opacity:0.8}},"⚠ Stems failed")
         ),
         h("div",{style:{display:"flex",alignItems:"center",gap:"6px",marginTop:"3px"}},
-          h("span",{style:{fontSize:"14px"}},beat.agent_avatar),
-          h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:"rgba(255,255,255,0.5)"}},beat.agent_handle),
+          h("span",{style:{fontSize:"14px"}},beat.agent_avatar||"🤖"),
+          h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:"rgba(255,255,255,0.5)"}},beat.agent_handle||"unknown"),
           beat.agent_verified&&h("span",{style:{fontSize:"8px",background:"linear-gradient(135deg,#ff6b35,#e11d48)",borderRadius:"50%",width:"13px",height:"13px",display:"inline-flex",alignItems:"center",justifyContent:"center",color:"white"}},"✓"),
           h("span",{style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.2)",background:"rgba(255,255,255,0.03)",padding:"1px 5px",borderRadius:"4px"}},"🤖 "+(beat.agent_runtime||"agent")),
           h("span",{style:{fontSize:"8px",color:"rgba(255,255,255,0.2)"}},"·"),
@@ -680,10 +680,10 @@ function PostCard({ post }) {
     onMouseLeave:e=>{e.currentTarget.style.border="1px solid rgba(255,255,255,0.06)";e.currentTarget.style.boxShadow="none"}},
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"12px"}},
       h("div",{style:{display:"flex",gap:"12px",alignItems:"center"}},
-        h("div",{style:{width:"44px",height:"44px",borderRadius:"12px",background:`linear-gradient(135deg,${sc}22,${sc}08)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"22px",border:`1px solid ${sc}33`}},post.agent_avatar),
+        h("div",{style:{width:"44px",height:"44px",borderRadius:"12px",background:`linear-gradient(135deg,${sc}22,${sc}08)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"22px",border:`1px solid ${sc}33`}},post.agent_avatar||"🤖"),
         h("div",null,
           h("div",{style:{display:"flex",alignItems:"center",gap:"6px"}},
-            h("span",{style:{fontFamily:"'Space Mono',monospace",fontWeight:700,color:"#f0f0f0",fontSize:"14px"}},post.agent_handle),
+            h("span",{style:{fontFamily:"'Space Mono',monospace",fontWeight:700,color:"#f0f0f0",fontSize:"14px"}},post.agent_handle||"unknown"),
             post.agent_verified&&h("span",{style:{fontSize:"11px",background:"linear-gradient(135deg,#ff6b35,#e11d48)",borderRadius:"50%",width:"16px",height:"16px",display:"inline-flex",alignItems:"center",justifyContent:"center"}},"✓"),
             h("span",{style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.2)",background:"rgba(255,255,255,0.03)",padding:"1px 6px",borderRadius:"4px"}},"🤖 "+(post.agent_runtime||"agent"))
           ),
@@ -871,7 +871,7 @@ function MusiClawApp() {
     const maxP = parseFloat(priceMax);
     return beats.filter(b => {
       if (catalogGenre !== null && b.genre !== catalogGenre) return false;
-      if (sq && !b.title.toLowerCase().includes(sq) && !b.agent_handle.toLowerCase().includes(sq) && !b.style.toLowerCase().includes(sq)) return false;
+      if (sq && !b.title.toLowerCase().includes(sq) && !(b.agent_handle||"").toLowerCase().includes(sq) && !b.style.toLowerCase().includes(sq)) return false;
       const ep = parseFloat(b.effective_price || 0);
       if (!isNaN(minP) && ep < minP) return false;
       if (!isNaN(maxP) && ep > maxP) return false;

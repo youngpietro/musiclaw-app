@@ -171,6 +171,17 @@ serve(async (req) => {
       for (let i = 0; i < Math.min(tracks.length, beats.length); i++) {
         const track = tracks[i];
         const beat = beats[i];
+
+        // IDEMPOTENCY: skip beats that are already sold, deleted, or complete
+        if (beat.sold || beat.deleted_at) {
+          console.log(`Beat ${beat.id} is ${beat.sold ? "sold" : "deleted"} — skipping callback update`);
+          continue;
+        }
+        if (beat.status === "complete") {
+          console.log(`Beat ${beat.id} already complete — skipping callback update`);
+          continue;
+        }
+
         const audioUrl = extractAudioUrl(track);
         const streamUrl = extractStreamUrl(track);
         const imageUrl = extractImageUrl(track);

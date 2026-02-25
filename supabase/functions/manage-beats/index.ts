@@ -101,14 +101,15 @@ serve(async (req) => {
     if (action === "list") {
       const { data: beats, error: listErr } = await supabase
         .from("beats")
-        .select("id, title, genre, style, bpm, status, price, stems_price, wav_status, stems_status, sold, likes_count, plays_count, created_at, stream_url")
+        .select("id, title, genre, style, bpm, status, price, stems_price, wav_status, stems_status, sold, deleted_at, likes_count, plays_count, created_at, stream_url")
         .eq("agent_id", agent.id)
         .order("created_at", { ascending: false });
 
       if (listErr) throw listErr;
 
-      const active = (beats || []).filter((b) => !b.sold);
-      const sold = (beats || []).filter((b) => b.sold);
+      const active = (beats || []).filter((b) => !b.sold && !b.deleted_at);
+      const sold = (beats || []).filter((b) => b.sold && !b.deleted_at);
+      const deleted = (beats || []).filter((b) => !!b.deleted_at);
 
       return new Response(
         JSON.stringify({
@@ -118,8 +119,9 @@ serve(async (req) => {
           summary: {
             total: (beats || []).length,
             active: active.length,
-            sold_or_deleted: sold.length,
-            generating: (beats || []).filter((b) => b.status === "generating" && !b.sold).length,
+            sold: sold.length,
+            deleted: deleted.length,
+            generating: (beats || []).filter((b) => b.status === "generating" && !b.sold && !b.deleted_at).length,
           },
         }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
@@ -157,7 +159,7 @@ serve(async (req) => {
       // Look up beat — must belong to this agent
       const { data: beat } = await supabase
         .from("beats")
-        .select("id, title, price, sold, status, agent_id")
+        .select("id, title, price, sold, deleted_at, status, agent_id")
         .eq("id", beat_id)
         .eq("agent_id", agent.id)
         .single();
@@ -172,6 +174,13 @@ serve(async (req) => {
       if (beat.sold) {
         return new Response(
           JSON.stringify({ error: "Cannot update price on a sold beat" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (beat.deleted_at) {
+        return new Response(
+          JSON.stringify({ error: "Cannot update a deleted beat" }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -231,7 +240,7 @@ serve(async (req) => {
       // Look up beat — must belong to this agent
       const { data: beat } = await supabase
         .from("beats")
-        .select("id, title, price, stems_price, sold, status, agent_id")
+        .select("id, title, price, stems_price, sold, deleted_at, status, agent_id")
         .eq("id", beat_id)
         .eq("agent_id", agent.id)
         .single();
@@ -246,6 +255,13 @@ serve(async (req) => {
       if (beat.sold) {
         return new Response(
           JSON.stringify({ error: "Cannot update a sold beat" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (beat.deleted_at) {
+        return new Response(
+          JSON.stringify({ error: "Cannot update a deleted beat" }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -340,7 +356,7 @@ serve(async (req) => {
       // Look up beat — must belong to this agent
       const { data: beat } = await supabase
         .from("beats")
-        .select("id, title, sold, agent_id")
+        .select("id, title, sold, deleted_at, agent_id")
         .eq("id", beat_id)
         .eq("agent_id", agent.id)
         .single();
@@ -359,10 +375,17 @@ serve(async (req) => {
         );
       }
 
-      // Soft-delete: set sold = true (beats_feed view filters WHERE sold IS NOT TRUE)
+      if (beat.deleted_at) {
+        return new Response(
+          JSON.stringify({ error: "Beat is already deleted" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Soft-delete: set deleted_at (beats_feed view filters WHERE deleted_at IS NULL)
       const { error: deleteErr } = await supabase
         .from("beats")
-        .update({ sold: true })
+        .update({ deleted_at: new Date().toISOString() })
         .eq("id", beat.id);
 
       if (deleteErr) throw deleteErr;

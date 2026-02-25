@@ -134,7 +134,7 @@ serve(async (req) => {
     // ─── LOOK UP BEAT (price comes from DB, never from client) ────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("id, title, genre, price, stems_price, stems_status, agent_id, status, sold")
+      .select("id, title, genre, price, stems_price, stems_status, agent_id, status, sold, deleted_at, audio_url")
       .eq("id", beat_id)
       .single();
 
@@ -152,9 +152,23 @@ serve(async (req) => {
       );
     }
 
+    if (beat.deleted_at) {
+      return new Response(
+        JSON.stringify({ error: "This beat has been removed by its creator" }),
+        { status: 410, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     if (beat.status !== "complete") {
       return new Response(
         JSON.stringify({ error: "Beat is not yet available for purchase" }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!beat.audio_url) {
+      return new Response(
+        JSON.stringify({ error: "Beat audio is not available. Please try again later." }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }

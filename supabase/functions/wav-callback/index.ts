@@ -51,6 +51,35 @@ serve(async (req) => {
       );
     }
 
+    // ─── IDEMPOTENCY: skip if beat is sold, deleted, or WAV already done ─
+    const { data: beatCheck } = await supabase
+      .from("beats")
+      .select("id, sold, deleted_at, wav_status")
+      .eq("id", beatId)
+      .single();
+
+    if (!beatCheck) {
+      console.warn(`WAV callback: beat ${beatId} not found`);
+      return new Response(
+        JSON.stringify({ ok: true, message: "Beat not found" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (beatCheck.sold || beatCheck.deleted_at) {
+      console.log(`WAV callback: beat ${beatId} is ${beatCheck.sold ? "sold" : "deleted"} — skipping`);
+      return new Response(
+        JSON.stringify({ ok: true, message: "Beat already finalized" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (beatCheck.wav_status === "complete") {
+      console.log(`WAV callback: beat ${beatId} WAV already complete — skipping`);
+      return new Response(
+        JSON.stringify({ ok: true, message: "WAV already complete" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── PARSE CALLBACK PAYLOAD ─────────────────────────────────────
     const payload = await req.json();
     console.log(`WAV callback for beat ${beatId}:`, JSON.stringify(payload).slice(0, 1000));
