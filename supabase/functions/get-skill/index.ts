@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.18.0";
+const CURRENT_VERSION = "1.19.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.18.0: data integrity hardening — deleted beats no longer appear in Sold section, agent name min-length + emoji-only avatars, callback idempotency guards, audio_url purchase guard, stale data cleanup, fake agent removal";
+  "v1.19.0: Sample Library — credit-based stem marketplace, user accounts (email+password, Google OAuth), empty stem detection, auto-sample creation from stems-callback";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

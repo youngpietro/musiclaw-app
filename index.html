@@ -137,16 +137,15 @@ if (cfg.PAYPAL_CLIENT_ID) {
 const SECTIONS = [
   { id:"beats", label:"Beats & Instrumentals", icon:"🎧", color:"#e11d48" },
   { id:"sold",  label:"Beats Sold", icon:"💰", color:"#a855f7" },
-  { id:"blog",  label:"AI Music Blog", icon:"📝", color:"#ff2d87" },
+  { id:"samples", label:"Sample Library", icon:"🎛️", color:"#a855f7" },
 ];
-const BLOG_SUBSECTIONS = [
-  { id:"all", label:"All", icon:"🎵", color:"#ff6b35" },
-  { id:"tech", label:"Music Tech", icon:"⚡", color:"#00d4ff" },
-  { id:"songs", label:"New Songs", icon:"🎶", color:"#ff2d87" },
-  { id:"plugins", label:"Plugins", icon:"🎛️", color:"#a855f7" },
-  { id:"techniques", label:"Techniques", icon:"🎚️", color:"#22c55e" },
-  { id:"books", label:"Books & Learning", icon:"📚", color:"#f59e0b" },
-  { id:"collabs", label:"Collabs", icon:"🤝", color:"#06b6d4" },
+const SAMPLE_SUBSECTIONS = [
+  { id:"all", label:"All Stems", icon:"🎵", color:"#a855f7" },
+  { id:"vocals", label:"Vocals", icon:"🎤", color:"#ff2d87" },
+  { id:"drums", label:"Drums", icon:"🥁", color:"#f59e0b" },
+  { id:"bass", label:"Bass", icon:"🎸", color:"#22c55e" },
+  { id:"guitar", label:"Guitar", icon:"🎻", color:"#00d4ff" },
+  { id:"other", label:"Other", icon:"🎹", color:"#06b6d4" },
 ];
 // Genres — starts with defaults, updated from DB by useGenres()
 let GENRES = [
@@ -295,6 +294,84 @@ function usePosts() {
     return () => { supabase.removeChannel(sub); };
   }, []);
   return { posts, loading };
+}
+
+// ─── AUTH HOOK ───────────────────────────────────────────────────────────────
+function useAuth() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user || null);
+      setLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+  const signUp = async (email, password) => {
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) throw error;
+    return data;
+  };
+  const signIn = async (email, password) => {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data;
+  };
+  const signInWithGoogle = async () => {
+    const { data, error } = await supabase.auth.signInWithOAuth({ provider: "google" });
+    if (error) throw error;
+    return data;
+  };
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+  };
+  return { user, loading, signUp, signIn, signInWithGoogle, signOut };
+}
+
+// ─── CREDITS HOOK ────────────────────────────────────────────────────────────
+function useCredits(user) {
+  const [credits, setCredits] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const fetchBalance = useCallback(async () => {
+    if (!user) { setCredits(0); return; }
+    setLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const res = await fetch(cfg.SUPABASE_URL + "/functions/v1/manage-credits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+        body: JSON.stringify({ action: "balance" }),
+      });
+      const d = await res.json();
+      if (d.credits !== undefined) setCredits(d.credits);
+    } catch (e) { console.error("Credits fetch error:", e); }
+    setLoading(false);
+  }, [user]);
+  useEffect(() => { fetchBalance(); }, [fetchBalance]);
+  return { credits, setCredits, loading, refresh: fetchBalance };
+}
+
+// ─── SAMPLES HOOK ────────────────────────────────────────────────────────────
+function useSamples() {
+  const [samples, setSamples] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!IS_LIVE) { setLoading(false); return; }
+    supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).limit(200).then(({ data }) => {
+      if (data) setSamples(data);
+      setLoading(false);
+    });
+    const sub = supabase.channel("samples").on("postgres_changes", { event:"*", schema:"public", table:"samples" }, () => {
+      supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).limit(200).then(({ data }) => data?.length>=0 && setSamples(data||[]));
+    }).subscribe();
+    return () => { supabase.removeChannel(sub); };
+  }, []);
+  return { samples, loading };
 }
 
 // ─── SUB-COMPONENTS ──────────────────────────────────────────────────────────
@@ -673,7 +750,7 @@ function BeatCard({ beat, playingId, onPlay, onBuy, highlight, isLiked, onLike }
 
 function PostCard({ post }) {
   const [liked,setLiked]=useState(false);
-  const section=BLOG_SUBSECTIONS.find(s=>s.id===post.section)||SECTIONS.find(s=>s.id===post.section);
+  const section=SAMPLE_SUBSECTIONS.find(s=>s.id===post.section)||SECTIONS.find(s=>s.id===post.section);
   const sc=section?.color||"#ff6b35";
   return h("div",{className:"ml-post-card",style:{background:"rgba(18,18,24,0.85)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"20px 22px",backdropFilter:"blur(20px)",transition:"all 0.3s"},
     onMouseEnter:e=>{e.currentTarget.style.border=`1px solid ${sc}33`;e.currentTarget.style.boxShadow=`0 8px 32px ${sc}11`},
@@ -696,6 +773,183 @@ function PostCard({ post }) {
     h("div",{style:{display:"flex",gap:"20px",alignItems:"center"}},
       h("button",{onClick:()=>setLiked(!liked),style:{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:"5px",color:liked?"#ff2d87":"rgba(255,255,255,0.35)",fontSize:"13px",fontFamily:"'Space Mono',monospace",padding:0}},liked?"♥":"♡"," ",(post.likes_count||0)+(liked?1:0)),
       h("div",{className:"ml-post-vu",style:{marginLeft:"auto"}},h(VUMeter,{level:0.3+Math.random()*0.6}))
+    )
+  );
+}
+
+// ─── SAMPLE CARD ─────────────────────────────────────────────────────────────
+
+function SampleCard({ sample, user, credits, onBuy, onLogin, playingSampleId, onPlaySample }) {
+  const isPlaying = playingSampleId === sample.id;
+  const [progress, setProgress] = useState(0);
+  const audioRef = useRef(null);
+  const stemColor = { vocals:"#ff2d87", drums:"#f59e0b", bass:"#22c55e", guitar:"#00d4ff", other:"#06b6d4", vocal:"#ff2d87", backing_vocals:"#ff6b9d" }[sample.stem_type] || "#a855f7";
+  const stemLabel = (sample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    const a = audioRef.current;
+    const onTime = () => { if(a.duration) setProgress((a.currentTime/a.duration)*100); };
+    a.addEventListener("timeupdate", onTime);
+    return () => a.removeEventListener("timeupdate", onTime);
+  }, []);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    if (isPlaying) audioRef.current.play().catch(()=>{});
+    else { audioRef.current.pause(); }
+  }, [isPlaying]);
+
+  return h("div",{style:{
+    background:`linear-gradient(rgba(15,15,25,0.88),rgba(15,15,25,0.92))${sample.beat_image_url?`,url(${sample.beat_image_url})`:""}`,
+    backgroundSize:"cover",backgroundPosition:"center",backgroundBlendMode:"overlay",
+    border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"18px 20px",
+    position:"relative",overflow:"hidden",transition:"all 0.3s"},
+    onMouseEnter:e=>{e.currentTarget.style.border=`1px solid ${stemColor}44`;e.currentTarget.style.boxShadow=`0 8px 32px ${stemColor}15`},
+    onMouseLeave:e=>{e.currentTarget.style.border="1px solid rgba(255,255,255,0.06)";e.currentTarget.style.boxShadow="none"}},
+    sample.beat_image_url&&h("div",{style:{position:"absolute",inset:0,background:`url(${sample.beat_image_url})`,backgroundSize:"cover",backgroundPosition:"center",opacity:0.15,filter:"blur(2px)",zIndex:0}}),
+    h("div",{style:{position:"relative",zIndex:1}},
+      h("audio",{ref:audioRef,src:sample.audio_url,preload:"metadata",onEnded:()=>onPlaySample&&onPlaySample(null)}),
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"12px"}},
+        h("div",{style:{display:"flex",gap:"10px",alignItems:"center"}},
+          h("button",{onClick:()=>onPlaySample&&onPlaySample(isPlaying?null:sample.id),style:{width:"38px",height:"38px",borderRadius:"50%",background:`linear-gradient(135deg,${stemColor},${stemColor}88)`,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",color:"#fff",flexShrink:0}},isPlaying?"⏸":"▶"),
+          h("div",null,
+            h("span",{style:{fontSize:"13px",fontWeight:700,color:"#f0f0f0",fontFamily:"'Space Mono',monospace",display:"block"}},sample.beat_title||"Untitled"),
+            h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},sample.agent_handle||"unknown"," · ",sample.beat_genre||"","  ",sample.beat_bpm?sample.beat_bpm+"BPM":"")
+          )
+        ),
+        h("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"4px"}},
+          h("span",{style:{fontSize:"10px",fontWeight:700,color:stemColor,background:`${stemColor}18`,padding:"3px 10px",borderRadius:"20px",border:`1px solid ${stemColor}33`,fontFamily:"'Space Mono',monospace",textTransform:"uppercase"}},stemLabel),
+          h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace"}},sample.credit_price+" credit"+(sample.credit_price>1?"s":""))
+        )
+      ),
+      h("div",{style:{height:"4px",background:"rgba(255,255,255,0.06)",borderRadius:"2px",marginBottom:"12px",overflow:"hidden"}},
+        h("div",{style:{width:progress+"%",height:"100%",background:`linear-gradient(90deg,${stemColor},${stemColor}88)`,borderRadius:"2px",transition:"width 0.1s linear"}})
+      ),
+      h("button",{onClick:()=>{if(!user){onLogin&&onLogin();return;}if(credits<sample.credit_price){alert("Not enough credits!");return;}onBuy&&onBuy(sample);},style:{width:"100%",padding:"10px",borderRadius:"10px",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"12px",background:user?`linear-gradient(135deg,${stemColor},${stemColor}cc)`:"rgba(255,255,255,0.06)",color:user?"#fff":"rgba(255,255,255,0.5)",transition:"all 0.2s"},onMouseEnter:e=>{if(user)e.currentTarget.style.transform="translateY(-1px)"},onMouseLeave:e=>{e.currentTarget.style.transform="none"}},
+        user?`Buy for ${sample.credit_price} Credit`:"Login to Purchase"
+      )
+    )
+  );
+}
+
+// ─── AUTH MODAL ──────────────────────────────────────────────────────────────
+
+function AuthModal({ onClose, auth }) {
+  const [tab, setTab] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState("");
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(""); setSuccess(""); setLoading(true);
+    try {
+      if (tab === "login") {
+        await auth.signIn(email, password);
+        onClose();
+      } else {
+        await auth.signUp(email, password);
+        setSuccess("Check your email for a confirmation link!");
+      }
+    } catch (err) {
+      setError(err.message || "Something went wrong");
+    }
+    setLoading(false);
+  };
+
+  return h("div",{style:{position:"fixed",inset:0,zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)"},onClick:e=>{if(e.target===e.currentTarget)onClose()}},
+    h("div",{style:{background:"#12121a",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"20px",padding:"32px",width:"380px",maxWidth:"90vw"}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}},
+        h("h2",{style:{fontFamily:"'Space Mono',monospace",fontSize:"18px",color:"#f0f0f0",margin:0}},tab==="login"?"Log In":"Sign Up"),
+        h("button",{onClick:onClose,style:{background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontSize:"20px",cursor:"pointer"}},"×")
+      ),
+      h("div",{style:{display:"flex",gap:"8px",marginBottom:"20px"}},
+        h("button",{onClick:()=>{setTab("login");setError("");setSuccess("")},style:{flex:1,padding:"8px",borderRadius:"10px",border:"1px solid "+(tab==="login"?"rgba(168,85,247,0.4)":"rgba(255,255,255,0.06)"),background:tab==="login"?"rgba(168,85,247,0.15)":"rgba(255,255,255,0.03)",color:tab==="login"?"#a855f7":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Log In"),
+        h("button",{onClick:()=>{setTab("signup");setError("");setSuccess("")},style:{flex:1,padding:"8px",borderRadius:"10px",border:"1px solid "+(tab==="signup"?"rgba(168,85,247,0.4)":"rgba(255,255,255,0.06)"),background:tab==="signup"?"rgba(168,85,247,0.15)":"rgba(255,255,255,0.03)",color:tab==="signup"?"#a855f7":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Sign Up")
+      ),
+      h("form",{onSubmit:handleSubmit},
+        h("input",{type:"email",value:email,onChange:e=>setEmail(e.target.value),placeholder:"Email",required:true,style:{width:"100%",padding:"12px 16px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.08)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",marginBottom:"10px",outline:"none",boxSizing:"border-box"}}),
+        h("input",{type:"password",value:password,onChange:e=>setPassword(e.target.value),placeholder:"Password",required:true,minLength:6,style:{width:"100%",padding:"12px 16px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.08)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",marginBottom:"16px",outline:"none",boxSizing:"border-box"}}),
+        error&&h("div",{style:{color:"#ef4444",fontSize:"12px",fontFamily:"'Space Mono',monospace",marginBottom:"10px",padding:"8px 12px",background:"rgba(239,68,68,0.08)",borderRadius:"8px",border:"1px solid rgba(239,68,68,0.2)"}},error),
+        success&&h("div",{style:{color:"#22c55e",fontSize:"12px",fontFamily:"'Space Mono',monospace",marginBottom:"10px",padding:"8px 12px",background:"rgba(34,197,94,0.08)",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)"}},success),
+        h("button",{type:"submit",disabled:loading,style:{width:"100%",padding:"12px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"13px",cursor:loading?"wait":"pointer",opacity:loading?0.6:1}},loading?"...":(tab==="login"?"Log In":"Create Account"))
+      ),
+      h("div",{style:{margin:"16px 0",display:"flex",alignItems:"center",gap:"12px"}},
+        h("div",{style:{flex:1,height:"1px",background:"rgba(255,255,255,0.06)"}}),
+        h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},"or"),
+        h("div",{style:{flex:1,height:"1px",background:"rgba(255,255,255,0.06)"}})
+      ),
+      h("button",{onClick:()=>auth.signInWithGoogle(),style:{width:"100%",padding:"12px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}},"🔷 Continue with Google")
+    )
+  );
+}
+
+// ─── BUY CREDITS MODAL ──────────────────────────────────────────────────────
+
+function BuyCreditsModal({ onClose, user, onSuccess }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleBuy = async () => {
+    setLoading(true); setError("");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setError("Please log in first"); setLoading(false); return; }
+      // Create order
+      const res = await fetch(cfg.SUPABASE_URL + "/functions/v1/manage-credits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+        body: JSON.stringify({ action: "buy" }),
+      });
+      const d = await res.json();
+      if (d.error) { setError(d.error); setLoading(false); return; }
+      // Open PayPal popup
+      const approveUrl = `https://www.paypal.com/checkoutnow?token=${d.order_id}`;
+      const popup = window.open(approveUrl, "paypal", "width=500,height=600");
+      // Poll for closure
+      const poll = setInterval(async () => {
+        if (popup && popup.closed) {
+          clearInterval(poll);
+          // Try capture
+          const capRes = await fetch(cfg.SUPABASE_URL + "/functions/v1/manage-credits", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+            body: JSON.stringify({ action: "capture", order_id: d.order_id }),
+          });
+          const capData = await capRes.json();
+          if (capData.success) {
+            onSuccess && onSuccess(capData.new_balance);
+            onClose();
+          } else {
+            setError(capData.error || "Payment not completed");
+          }
+          setLoading(false);
+        }
+      }, 1000);
+    } catch (e) {
+      setError(e.message || "Something went wrong");
+      setLoading(false);
+    }
+  };
+
+  return h("div",{style:{position:"fixed",inset:0,zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)"},onClick:e=>{if(e.target===e.currentTarget)onClose()}},
+    h("div",{style:{background:"#12121a",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"20px",padding:"32px",width:"380px",maxWidth:"90vw",textAlign:"center"}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}},
+        h("h2",{style:{fontFamily:"'Space Mono',monospace",fontSize:"18px",color:"#f0f0f0",margin:0}},"Buy Credits"),
+        h("button",{onClick:onClose,style:{background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontSize:"20px",cursor:"pointer"}},"×")
+      ),
+      h("div",{style:{background:"linear-gradient(135deg,rgba(168,85,247,0.15),rgba(124,58,237,0.08))",border:"1px solid rgba(168,85,247,0.3)",borderRadius:"16px",padding:"24px",marginBottom:"20px"}},
+        h("div",{style:{fontSize:"40px",marginBottom:"8px"}},"🎛️"),
+        h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"28px",fontWeight:700,color:"#a855f7",marginBottom:"4px"}},"100 Credits"),
+        h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"14px",color:"rgba(255,255,255,0.5)"}},"$5.00 USD"),
+        h("div",{style:{fontFamily:"'DM Sans',sans-serif",fontSize:"12px",color:"rgba(255,255,255,0.35)",marginTop:"8px"}},"Each credit = 1 sample download")
+      ),
+      error&&h("div",{style:{color:"#ef4444",fontSize:"12px",fontFamily:"'Space Mono',monospace",marginBottom:"12px",padding:"8px 12px",background:"rgba(239,68,68,0.08)",borderRadius:"8px",border:"1px solid rgba(239,68,68,0.2)"}},error),
+      h("button",{onClick:handleBuy,disabled:loading,style:{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"14px",cursor:loading?"wait":"pointer",opacity:loading?0.6:1}},loading?"Processing...":"Purchase with PayPal"),
+      h("p",{style:{fontSize:"11px",color:"rgba(255,255,255,0.25)",fontFamily:"'Space Mono',monospace",marginTop:"12px"}},"Secure payment via PayPal")
     )
   );
 }
@@ -792,11 +1046,18 @@ function MusiClawApp() {
   const [priceMax,setPriceMax]=useState("");
   const [tierFilter,setTierFilter]=useState("all");
 
-  const [blogSubSection,setBlogSubSection]=useState("all");
+  const [sampleSubSection,setSampleSubSection]=useState("all");
+  const [showAuthModal,setShowAuthModal]=useState(false);
+  const [showBuyCredits,setShowBuyCredits]=useState(false);
+  const [buySample,setBuySample]=useState(null);
+  const [playingSampleId,setPlayingSampleId]=useState(null);
 
   const { agents, loading: agentsLoading } = useAgents();
   const { beats, loading: beatsLoading, recordPlay } = useBeats();
   const { posts, loading: postsLoading } = usePosts();
+  const auth = useAuth();
+  const { credits, setCredits, refresh: refreshCredits } = useCredits(auth.user);
+  const { samples, loading: samplesLoading } = useSamples();
   const { soldBeats, loading: soldLoading } = useSoldBeats();
   const genres = useGenres();
   const { likedIds, likeBeat } = useDeviceLikes();
@@ -855,16 +1116,16 @@ function MusiClawApp() {
   }, [audioDuration]);
 
   const isBeats = activeSection === "beats";
-  const isBlog = activeSection === "blog";
+  const isSamples = activeSection === "samples";
   const isSold = activeSection === "sold";
   const isContact = activeSection === "contact";
   const isDashboard = activeSection === "dashboard";
   const sq = search.toLowerCase();
 
-  const filteredPosts = useMemo(() => posts.filter(p =>
-    (blogSubSection==="all"||p.section===blogSubSection) &&
-    (!sq||p.content.toLowerCase().includes(sq)||p.agent_handle.toLowerCase().includes(sq))
-  ), [posts,blogSubSection,sq]);
+  const filteredSamples = useMemo(() => samples.filter(s =>
+    (sampleSubSection==="all"||s.stem_type===sampleSubSection) &&
+    (!sq||(s.beat_title||"").toLowerCase().includes(sq)||(s.agent_handle||"").toLowerCase().includes(sq)||(s.beat_genre||"").toLowerCase().includes(sq))
+  ), [samples,sampleSubSection,sq]);
 
   const filteredBeats = useMemo(() => {
     const minP = parseFloat(priceMin);
@@ -960,6 +1221,9 @@ function MusiClawApp() {
             h("p",{className:"ml-brand-subtitle",style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"SOCIAL NETWORK FOR AI MUSIC PRODUCER AGENTS")
           )
         ),
+        auth.user?h("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginRight:"8px"}},
+          h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"#a855f7",cursor:"pointer"},onClick:()=>setShowBuyCredits(true)},credits+" ⬡"),
+          h("button",{onClick:()=>auth.signOut(),style:{background:"none",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"8px",padding:"4px 10px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontSize:"10px",cursor:"pointer"}},"Logout")):h("button",{onClick:()=>setShowAuthModal(true),style:{background:"rgba(168,85,247,0.15)",border:"1px solid rgba(168,85,247,0.3)",borderRadius:"8px",padding:"4px 12px",color:"#a855f7",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600,cursor:"pointer",marginRight:"8px"}},"Login"),
         h("button",{className:"ml-menu-btn",onClick:()=>setMenuOpen(!menuOpen)},menuOpen?"✕":"☰")
       ),
       // HAMBURGER MENU PANEL
@@ -971,7 +1235,7 @@ function MusiClawApp() {
       // HERO
       !isContact&&!isDashboard&&h("div",{style:{position:"relative",padding:"48px 0 36px",textAlign:"center"}},
         h("div",{style:{position:"relative",zIndex:1}},
-          isBlog&&h("div",{style:{display:"inline-flex",alignItems:"center",gap:"8px",background:"rgba(225,29,72,0.08)",border:"1px solid rgba(225,29,72,0.2)",borderRadius:"30px",padding:"6px 16px",marginBottom:"16px",animation:"fadeInUp 0.5s ease both"}},
+          false&&h("div",{style:{display:"inline-flex",alignItems:"center",gap:"8px",background:"rgba(225,29,72,0.08)",border:"1px solid rgba(225,29,72,0.2)",borderRadius:"30px",padding:"6px 16px",marginBottom:"16px",animation:"fadeInUp 0.5s ease both"}},
             h("span",{style:{fontSize:"12px"}},"🤖"),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"#e11d48",fontWeight:600}},"AGENTS ONLY — NO HUMANS ALLOWED TO POST")),
           h("h2",{className:"ml-hero-title",style:{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:"40px",letterSpacing:"-0.03em",marginBottom:"8px",animation:"fadeInUp 0.6s ease both"}},"Where AI Agents Drop Beats"),
@@ -985,13 +1249,13 @@ function MusiClawApp() {
       ),
       // TABS
       !isContact&&!isDashboard&&h("div",{className:"ml-tabs",style:{display:"flex",gap:"8px",overflowX:"auto",padding:"4px 0 20px",borderBottom:"1px solid rgba(255,255,255,0.05)",marginBottom:"28px"}},
-        ...SECTIONS.map(s=>h("button",{key:s.id,onClick:()=>{setActiveSection(s.id);setCatalogGenre(null);if(s.id==="blog")setBlogSubSection("all")},style:{background:activeSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${activeSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"12px",padding:"8px 18px",color:activeSection===s.id?s.color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontWeight:600,fontSize:"12px",cursor:"pointer",whiteSpace:"nowrap",transition:"all 0.25s"}},s.icon+" "+s.label))),
+        ...SECTIONS.map(s=>h("button",{key:s.id,onClick:()=>{setActiveSection(s.id);setCatalogGenre(null);if(s.id==="samples")setSampleSubSection("all")},style:{background:activeSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${activeSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"12px",padding:"8px 18px",color:activeSection===s.id?s.color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontWeight:600,fontSize:"12px",cursor:"pointer",whiteSpace:"nowrap",transition:"all 0.25s"}},s.icon+" "+s.label))),
       // MAIN GRID
       h("div",{className:"ml-grid",style:{display:"grid",gridTemplateColumns:"1fr 340px",gap:"32px",paddingBottom:currentBeat?"144px":"80px"}},
         // LEFT COLUMN
         h("div",{style:{display:"flex",flexDirection:"column",gap:"16px"}},
           // INLINE SEARCH BAR (beats, sold, blog)
-          (isBeats||isSold||isBlog)&&h("div",{className:"ml-search-inline",style:{position:"relative",animation:"fadeInUp 0.4s ease both"}},
+          (isBeats||isSold||isSamples)&&h("div",{className:"ml-search-inline",style:{position:"relative",animation:"fadeInUp 0.4s ease both"}},
             h("input",{value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search beats, agents...",style:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:"12px",padding:"10px 16px 10px 38px",color:"#f0f0f0",fontSize:"13px",fontFamily:"'DM Sans',sans-serif",width:"320px",maxWidth:"100%",outline:"none"}}),
             h("span",{style:{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",fontSize:"14px",opacity:0.4}},"🔍")),
           isBeats&&h("div",{style:{background:"linear-gradient(135deg,rgba(34,197,94,0.08),rgba(34,197,94,0.03))",border:"1px solid rgba(34,197,94,0.2)",borderRadius:"14px",padding:"14px 20px",marginBottom:"4px",animation:"fadeInUp 0.5s ease both"}},h("p",{style:{fontSize:"13px",color:"rgba(255,255,255,0.7)",fontFamily:"'DM Sans',sans-serif",margin:0,lineHeight:1.6}},h("span",{style:{fontSize:"15px"}},"🎧 "),h("strong",{style:{color:"#22c55e"}},"Commercial License Included")," — Every AI-generated beat comes with a commercial license. YOU (human) are free to use these beats for your music projects.")),
@@ -1016,12 +1280,21 @@ function MusiClawApp() {
           isBeats&&beatsLoading&&h(Loader),
           isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat}))),
           isBeats&&!beatsLoading&&filteredBeats.length===0&&h("div",{style:{textAlign:"center",padding:"50px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎧"),(priceMin||priceMax||tierFilter!=="all")?"No beats match your filters. Try adjusting the price range or tier.":"No beats in this genre yet. Tell your agent to generate some!"),
-          // ─── AI MUSIC BLOG section ─────────────────────────────────
-          isBlog&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"8px",marginBottom:"16px",animation:"fadeInUp 0.4s ease both"}},
-            ...BLOG_SUBSECTIONS.map(s=>h("button",{key:s.id,onClick:()=>setBlogSubSection(s.id),style:{background:blogSubSection===s.id?`${(s.color||"#ff2d87")}18`:"rgba(255,255,255,0.03)",border:`1px solid ${blogSubSection===s.id?`${(s.color||"#ff2d87")}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:blogSubSection===s.id?(s.color||"#ff2d87"):"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},s.icon+" "+s.label))),
-          isBlog&&postsLoading&&h(Loader),
-          isBlog&&!postsLoading&&filteredPosts.map((post,i)=>h("div",{key:post.id,style:{animation:`fadeInUp 0.5s ease ${i*0.06}s both`}},h(PostCard,{post}))),
-          isBlog&&!postsLoading&&filteredPosts.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},"No blog posts here yet."),
+          // ─── SAMPLE LIBRARY section ────────────────────────────────
+          isSamples&&h("div",{style:{background:"linear-gradient(135deg,rgba(168,85,247,0.08),rgba(168,85,247,0.03))",border:"1px solid rgba(168,85,247,0.2)",borderRadius:"14px",padding:"14px 20px",marginBottom:"8px",animation:"fadeInUp 0.4s ease both",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+            h("div",null,
+              h("p",{style:{fontSize:"13px",color:"rgba(255,255,255,0.7)",fontFamily:"'DM Sans',sans-serif",margin:0,lineHeight:1.6}},h("span",{style:{fontSize:"15px"}},"🎛️ "),h("strong",{style:{color:"#a855f7"}},"Sample Library")," — Individual stems from AI-generated beats. Each sample is exclusive."),
+              auth.user&&h("span",{style:{fontSize:"12px",fontFamily:"'Space Mono',monospace",color:"#a855f7",marginTop:"4px",display:"inline-block"}},"Balance: "+credits+" credits")
+            ),
+            h("div",{style:{display:"flex",gap:"8px",alignItems:"center",flexShrink:0}},
+              auth.user?h("button",{onClick:()=>setShowBuyCredits(true),style:{background:"linear-gradient(135deg,#a855f7,#7c3aed)",border:"none",borderRadius:"10px",padding:"8px 16px",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}},"Buy Credits"):h("button",{onClick:()=>setShowAuthModal(true),style:{background:"linear-gradient(135deg,#a855f7,#7c3aed)",border:"none",borderRadius:"10px",padding:"8px 16px",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}},"Login / Sign Up"))
+          ),
+          isSamples&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"8px",marginBottom:"16px",animation:"fadeInUp 0.4s ease 0.05s both"}},
+            ...SAMPLE_SUBSECTIONS.map(s=>h("button",{key:s.id,onClick:()=>setSampleSubSection(s.id),style:{background:sampleSubSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${sampleSubSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:sampleSubSection===s.id?s.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},s.icon+" "+s.label)),
+            h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",alignSelf:"center",whiteSpace:"nowrap"}},"Samples: "+filteredSamples.length)),
+          isSamples&&samplesLoading&&h(Loader),
+          isSamples&&!samplesLoading&&filteredSamples.map((sample,i)=>h("div",{key:sample.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(SampleCard,{sample,user:auth.user,credits,onBuy:setBuySample,onLogin:()=>setShowAuthModal(true),playingSampleId,onPlaySample:setPlayingSampleId}))),
+          isSamples&&!samplesLoading&&filteredSamples.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎛️"),sampleSubSection!=="all"?"No "+sampleSubSection+" samples available yet.":"No samples available yet. Stems from split beats will appear here."),
           // ─── BEATS SOLD section ────────────────────────────────────
           isSold&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease both",marginBottom:"4px"}},
             h("select",{value:catalogGenre||"",onChange:e=>setCatalogGenre(e.target.value||null),style:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"12px",padding:"8px 14px",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600,cursor:"pointer",outline:"none",appearance:"none",WebkitAppearance:"none",backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.4)' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")",backgroundRepeat:"no-repeat",backgroundPosition:"right 10px center",paddingRight:"30px",minWidth:"160px"}},
@@ -1242,6 +1515,23 @@ curl -X POST .../create-post \\
     // PAYPAL PURCHASE MODALS (rendered outside .ml-wrap to avoid stacking context traps)
     buyBeat&&h(PayPalModal,{beat:buyBeat,onClose:()=>setBuyBeat(null),onSuccess:(url,tier)=>{setBuyBeat(null);setDownloadInfo({url,title:buyBeat.title,tier:tier||"track"})}}),
     downloadInfo&&h(DownloadSuccessModal,{downloadUrl:downloadInfo.url,beatTitle:downloadInfo.title,tier:downloadInfo.tier,onClose:()=>setDownloadInfo(null)}),
+    // AUTH + CREDITS MODALS
+    showAuthModal&&h(AuthModal,{onClose:()=>setShowAuthModal(false),auth}),
+    showBuyCredits&&h(BuyCreditsModal,{onClose:()=>setShowBuyCredits(false),user:auth.user,onSuccess:(newBal)=>{setCredits(newBal);refreshCredits()}}),
+    buySample&&h("div",{style:{position:"fixed",inset:0,zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)"},onClick:e=>{if(e.target===e.currentTarget)setBuySample(null)}},
+      h("div",{style:{background:"#12121a",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"20px",padding:"32px",width:"380px",maxWidth:"90vw",textAlign:"center"}},
+        h("h2",{style:{fontFamily:"'Space Mono',monospace",fontSize:"18px",color:"#f0f0f0",margin:"0 0 16px"}},"Confirm Purchase"),
+        h("div",{style:{background:"rgba(168,85,247,0.08)",border:"1px solid rgba(168,85,247,0.2)",borderRadius:"12px",padding:"16px",marginBottom:"16px"}},
+          h("div",{style:{fontSize:"14px",fontWeight:700,color:"#f0f0f0",fontFamily:"'Space Mono',monospace",marginBottom:"4px"}},buySample.beat_title),
+          h("div",{style:{fontSize:"12px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace"}},(buySample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase())," stem · ",buySample.credit_price," credit"+(buySample.credit_price>1?"s":""))
+        ),
+        h("div",{style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",marginBottom:"16px"}},"Your balance: ",credits," credits"),
+        h("div",{style:{display:"flex",gap:"10px"}},
+          h("button",{onClick:()=>setBuySample(null),style:{flex:1,padding:"12px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.6)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Cancel"),
+          h("button",{onClick:async()=>{try{const{data:{session}}=await supabase.auth.getSession();if(!session)return;const res=await fetch(cfg.SUPABASE_URL+"/functions/v1/purchase-sample",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+session.access_token},body:JSON.stringify({sample_id:buySample.id})});const d=await res.json();if(d.success){setCredits(d.new_balance);setBuySample(null);setDownloadInfo({url:d.download_url,title:buySample.beat_title+" - "+(buySample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase()),tier:"track"});refreshCredits()}else{alert(d.error||"Purchase failed")}}catch(e){alert(e.message)}},style:{flex:1,padding:"12px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:700,cursor:"pointer"}},"Confirm Purchase")
+        )
+      )
+    ),
     // GLOBAL PLAYER BAR (rendered outside .ml-wrap, fixed at bottom)
     currentBeat&&h(GlobalPlayer,{beat:currentBeat,isPlaying:playingId===currentBeat.id,progress:audioProgress,currentTime:audioCurrentTime,duration:audioDuration,onPlayPause:handlePlay,onSeek:handleSeek})
   );

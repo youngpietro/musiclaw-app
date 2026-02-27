@@ -194,8 +194,46 @@ serve(async (req) => {
 
     console.log(`Beat ${beatId} stems complete: ${Object.keys(stems).join(", ")} (${Object.keys(stems).length} stems)`);
 
+    // ─── CREATE SAMPLE ROWS FOR SAMPLE LIBRARY ────────────────────────
+    // HEAD-check each stem URL to detect empty/silent files (< 10 KB)
+    let samplesCreated = 0;
+    let samplesSkipped = 0;
+    for (const [stemType, stemUrl] of Object.entries(stems)) {
+      try {
+        const headRes = await fetch(stemUrl, { method: "HEAD" });
+        const contentLength = parseInt(headRes.headers.get("content-length") || "0", 10);
+        if (contentLength < 10000) {
+          console.log(`Sample skip: ${stemType} for beat ${beatId} — file too small (${contentLength} bytes)`);
+          samplesSkipped++;
+          continue;
+        }
+        const { error: sampleErr } = await supabase
+          .from("samples")
+          .upsert(
+            { beat_id: beatId, stem_type: stemType, audio_url: stemUrl, file_size: contentLength },
+            { onConflict: "beat_id,stem_type" }
+          );
+        if (sampleErr) {
+          console.error(`Sample insert error for ${stemType} beat ${beatId}:`, sampleErr.message);
+        } else {
+          samplesCreated++;
+        }
+      } catch (headErr) {
+        console.warn(`HEAD request failed for ${stemType} beat ${beatId}: ${headErr.message}`);
+        // Insert anyway without file_size — the view will show it (file_size IS NULL)
+        await supabase
+          .from("samples")
+          .upsert(
+            { beat_id: beatId, stem_type: stemType, audio_url: stemUrl },
+            { onConflict: "beat_id,stem_type" }
+          );
+        samplesCreated++;
+      }
+    }
+    console.log(`Samples for beat ${beatId}: ${samplesCreated} created, ${samplesSkipped} skipped (empty)`);
+
     return new Response(
-      JSON.stringify({ success: true, beat_id: beatId, stem_count: Object.keys(stems).length }),
+      JSON.stringify({ success: true, beat_id: beatId, stem_count: Object.keys(stems).length, samples_created: samplesCreated }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
