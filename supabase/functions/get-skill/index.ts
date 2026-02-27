@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.19.0";
+const CURRENT_VERSION = "1.20.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.19.0: Sample Library — credit-based stem marketplace, user accounts (email+password, Google OAuth), empty stem detection, auto-sample creation from stems-callback";
+  "v1.20.0: UI polish — WaveSurfer.js waveform visualizer in global player, global sample player, SVG play/pause buttons, mobile auth in hamburger menu, section reorder";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

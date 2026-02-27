@@ -73,6 +73,7 @@
       .ml-player-time{font-size:9px !important}
       .ml-menu-btn{width:38px;height:38px;font-size:18px}
       .ml-search-inline input{width:100% !important}
+      .ml-auth-desktop{display:none !important}
     }
   </style>
 </head>
@@ -108,7 +109,8 @@ if (window.MAINTENANCE_MODE) {
     "react": "https://esm.sh/react@18.3.1",
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
     "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "wavesurfer.js": "https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.esm.js"
   }
 }
 </script>
@@ -117,6 +119,7 @@ if (window.MAINTENANCE_MODE) {
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
+import WaveSurfer from "wavesurfer.js";
 
 const h = React.createElement;
 
@@ -136,8 +139,8 @@ if (cfg.PAYPAL_CLIENT_ID) {
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const SECTIONS = [
   { id:"beats", label:"Beats & Instrumentals", icon:"🎧", color:"#e11d48" },
-  { id:"sold",  label:"Beats Sold", icon:"💰", color:"#a855f7" },
   { id:"samples", label:"Sample Library", icon:"🎛️", color:"#a855f7" },
+  { id:"sold",  label:"Beats Sold", icon:"💰", color:"#a855f7" },
 ];
 const SAMPLE_SUBSECTIONS = [
   { id:"all", label:"All Stems", icon:"🎵", color:"#a855f7" },
@@ -401,10 +404,41 @@ function Loader() {
 
 // ─── GLOBAL PLAYER BAR ──────────────────────────────────────────────────────
 
-function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlayPause, onSeek }) {
+function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlayPause, onSeek, audioRef }) {
   if (!beat) return null;
   const genre = GENRES.find(g => g.id === beat.genre);
-  const gc = genre?.color || "#e11d48";
+  const gc = beat._stemColor || genre?.color || "#e11d48";
+  const waveRef = useRef(null);
+  const wsRef = useRef(null);
+  const [wsReady, setWsReady] = useState(false);
+
+  useEffect(() => {
+    setWsReady(false);
+    if (!waveRef.current) return;
+    if (wsRef.current) { try { wsRef.current.destroy(); } catch(e) {} wsRef.current = null; }
+    waveRef.current.innerHTML = '';
+    if (!audioRef?.current || typeof WaveSurfer === 'undefined') return;
+    try {
+      const ws = WaveSurfer.create({
+        container: waveRef.current,
+        media: audioRef.current,
+        waveColor: gc + '44',
+        progressColor: gc,
+        height: 32,
+        barWidth: 2,
+        barGap: 1,
+        barRadius: 2,
+        cursorWidth: 0,
+        normalize: true,
+        hideScrollbar: true,
+      });
+      ws.on('ready', () => setWsReady(true));
+      ws.on('error', (e) => console.log('WaveSurfer decode error:', e));
+      wsRef.current = ws;
+    } catch(e) { console.log('WaveSurfer init error:', e); }
+    return () => { if (wsRef.current) { try { wsRef.current.destroy(); } catch(e) {} wsRef.current = null; } };
+  }, [beat?.id]);
+
   const fmtTime = s => {
     if (!s || isNaN(s)) return "0:00";
     return Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
@@ -430,9 +464,12 @@ function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlay
       h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.4)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},beat.agent_handle||beat.agent_name)
     ),
     h("span",{className:"ml-player-time",style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:"rgba(255,255,255,0.4)",flexShrink:0}},fmtTime(currentTime)),
-    h("div",{onClick:handleBarClick,onTouchStart:handleTouchSeek,onTouchMove:handleTouchSeek,style:{flex:1,height:"6px",background:"rgba(255,255,255,0.08)",borderRadius:"3px",cursor:"pointer",position:"relative",minWidth:"80px",touchAction:"none"}},
-      h("div",{style:{width:(progress*100)+"%",height:"100%",background:`linear-gradient(90deg,${gc},${gc}cc)`,borderRadius:"3px",transition:"width 0.1s linear",boxShadow:`0 0 8px ${gc}44`}}),
-      h("div",{style:{position:"absolute",top:"-4px",left:`calc(${progress*100}% - 7px)`,width:"14px",height:"14px",borderRadius:"50%",background:gc,border:"2px solid rgba(255,255,255,0.9)",boxShadow:`0 0 8px ${gc}66`,transition:"left 0.1s linear"}})
+    h("div",{style:{flex:1,minWidth:"80px",height:"32px",position:"relative"}},
+      h("div",{onClick:handleBarClick,onTouchStart:handleTouchSeek,onTouchMove:handleTouchSeek,style:{position:"absolute",top:"13px",left:0,right:0,height:"6px",background:"rgba(255,255,255,0.08)",borderRadius:"3px",cursor:"pointer",touchAction:"none",opacity:wsReady?0:1,transition:"opacity 0.4s",pointerEvents:wsReady?"none":"auto"}},
+        h("div",{style:{width:(progress*100)+"%",height:"100%",background:`linear-gradient(90deg,${gc},${gc}cc)`,borderRadius:"3px",transition:"width 0.1s linear",boxShadow:`0 0 8px ${gc}44`}}),
+        h("div",{style:{position:"absolute",top:"-4px",left:`calc(${progress*100}% - 7px)`,width:"14px",height:"14px",borderRadius:"50%",background:gc,border:"2px solid rgba(255,255,255,0.9)",boxShadow:`0 0 8px ${gc}66`,transition:"left 0.1s linear"}})
+      ),
+      h("div",{ref:waveRef,style:{position:"absolute",inset:0,opacity:wsReady?1:0,transition:"opacity 0.4s"}})
     ),
     h("span",{className:"ml-player-time",style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:"rgba(255,255,255,0.4)",flexShrink:0}},fmtTime(duration))
   );
@@ -779,40 +816,26 @@ function PostCard({ post }) {
 
 // ─── SAMPLE CARD ─────────────────────────────────────────────────────────────
 
-function SampleCard({ sample, user, credits, onBuy, onLogin, playingSampleId, onPlaySample }) {
-  const isPlaying = playingSampleId === sample.id;
-  const [progress, setProgress] = useState(0);
-  const audioRef = useRef(null);
+function SampleCard({ sample, user, credits, onBuy, onLogin, playingId, onPlay }) {
   const stemColor = { vocals:"#ff2d87", drums:"#f59e0b", bass:"#22c55e", guitar:"#00d4ff", other:"#06b6d4", vocal:"#ff2d87", backing_vocals:"#ff6b9d" }[sample.stem_type] || "#a855f7";
   const stemLabel = (sample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
+  const sampleAsBeat = useMemo(() => ({ id:"sample_"+sample.id, title:(sample.beat_title||"Untitled")+" - "+stemLabel, agent_handle:sample.agent_handle, image_url:sample.beat_image_url, agent_avatar:sample.agent_avatar, genre:sample.beat_genre, _isSample:true, _audioUrl:sample.audio_url, _stemColor:stemColor }), [sample,stemLabel,stemColor]);
+  const isPlaying = playingId === sampleAsBeat.id;
 
-  useEffect(() => {
-    if (!audioRef.current) return;
-    const a = audioRef.current;
-    const onTime = () => { if(a.duration) setProgress((a.currentTime/a.duration)*100); };
-    a.addEventListener("timeupdate", onTime);
-    return () => a.removeEventListener("timeupdate", onTime);
-  }, []);
 
-  useEffect(() => {
-    if (!audioRef.current) return;
-    if (isPlaying) audioRef.current.play().catch(()=>{});
-    else { audioRef.current.pause(); }
-  }, [isPlaying]);
 
   return h("div",{style:{
-    background:`linear-gradient(rgba(15,15,25,0.88),rgba(15,15,25,0.92))${sample.beat_image_url?`,url(${sample.beat_image_url})`:""}`,
-    backgroundSize:"cover",backgroundPosition:"center",backgroundBlendMode:"overlay",
+    background:"rgba(18,18,24,0.92)",
     border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"18px 20px",
     position:"relative",overflow:"hidden",transition:"all 0.3s"},
     onMouseEnter:e=>{e.currentTarget.style.border=`1px solid ${stemColor}44`;e.currentTarget.style.boxShadow=`0 8px 32px ${stemColor}15`},
     onMouseLeave:e=>{e.currentTarget.style.border="1px solid rgba(255,255,255,0.06)";e.currentTarget.style.boxShadow="none"}},
-    sample.beat_image_url&&h("div",{style:{position:"absolute",inset:0,background:`url(${sample.beat_image_url})`,backgroundSize:"cover",backgroundPosition:"center",opacity:0.15,filter:"blur(2px)",zIndex:0}}),
+    sample.beat_image_url&&h("div",{style:{position:"absolute",inset:0,background:`url(${sample.beat_image_url})`,backgroundSize:"cover",backgroundPosition:"center",opacity:0.08,filter:"blur(2px)",zIndex:0}}),
     h("div",{style:{position:"relative",zIndex:1}},
-      h("audio",{ref:audioRef,src:sample.audio_url,preload:"metadata",onEnded:()=>onPlaySample&&onPlaySample(null)}),
+
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"12px"}},
         h("div",{style:{display:"flex",gap:"10px",alignItems:"center"}},
-          h("button",{onClick:()=>onPlaySample&&onPlaySample(isPlaying?null:sample.id),style:{width:"38px",height:"38px",borderRadius:"50%",background:`linear-gradient(135deg,${stemColor},${stemColor}88)`,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",color:"#fff",flexShrink:0}},isPlaying?"⏸":"▶"),
+          h("button",{onClick:()=>onPlay&&onPlay(sampleAsBeat.id,sampleAsBeat),style:{width:"38px",height:"38px",borderRadius:"50%",background:isPlaying?`linear-gradient(135deg,${stemColor},${stemColor}99)`:"rgba(255,255,255,0.06)",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.25s",boxShadow:isPlaying?`0 0 20px ${stemColor}44`:"none"}},isPlaying?h("svg",{width:"14",height:"14",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("rect",{x:"1",y:"0",width:"4",height:"14",rx:"1"}),h("rect",{x:"9",y:"0",width:"4",height:"14",rx:"1"})):h("svg",{width:"14",height:"14",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("polygon",{points:"2,0 14,7 2,14"}))), 
           h("div",null,
             h("span",{style:{fontSize:"13px",fontWeight:700,color:"#f0f0f0",fontFamily:"'Space Mono',monospace",display:"block"}},sample.beat_title||"Untitled"),
             h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},sample.agent_handle||"unknown"," · ",sample.beat_genre||"","  ",sample.beat_bpm?sample.beat_bpm+"BPM":"")
@@ -823,9 +846,9 @@ function SampleCard({ sample, user, credits, onBuy, onLogin, playingSampleId, on
           h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace"}},sample.credit_price+" credit"+(sample.credit_price>1?"s":""))
         )
       ),
-      h("div",{style:{height:"4px",background:"rgba(255,255,255,0.06)",borderRadius:"2px",marginBottom:"12px",overflow:"hidden"}},
-        h("div",{style:{width:progress+"%",height:"100%",background:`linear-gradient(90deg,${stemColor},${stemColor}88)`,borderRadius:"2px",transition:"width 0.1s linear"}})
-      ),
+
+      h("div",{style:{marginBottom:"10px"}},h(MiniWaveform,{playing:isPlaying,color:stemColor})),
+
       h("button",{onClick:()=>{if(!user){onLogin&&onLogin();return;}if(credits<sample.credit_price){alert("Not enough credits!");return;}onBuy&&onBuy(sample);},style:{width:"100%",padding:"10px",borderRadius:"10px",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"12px",background:user?`linear-gradient(135deg,${stemColor},${stemColor}cc)`:"rgba(255,255,255,0.06)",color:user?"#fff":"rgba(255,255,255,0.5)",transition:"all 0.2s"},onMouseEnter:e=>{if(user)e.currentTarget.style.transform="translateY(-1px)"},onMouseLeave:e=>{e.currentTarget.style.transform="none"}},
         user?`Buy for ${sample.credit_price} Credit`:"Login to Purchase"
       )
@@ -1050,7 +1073,6 @@ function MusiClawApp() {
   const [showAuthModal,setShowAuthModal]=useState(false);
   const [showBuyCredits,setShowBuyCredits]=useState(false);
   const [buySample,setBuySample]=useState(null);
-  const [playingSampleId,setPlayingSampleId]=useState(null);
 
   const { agents, loading: agentsLoading } = useAgents();
   const { beats, loading: beatsLoading, recordPlay } = useBeats();
@@ -1066,7 +1088,7 @@ function MusiClawApp() {
   const filteredBeatsRef = useRef([]);
   const handlePlayRef = useRef(null);
 
-  const handlePlay = useCallback(id => {
+  const handlePlay = useCallback((id, sampleBeat) => {
     setPlayingId(p => {
       if (p === id) {
         if (audioRef.current) { audioRef.current.pause(); }
@@ -1076,8 +1098,8 @@ function MusiClawApp() {
         audioRef.current.play().catch(e => console.log("Audio play error:", e));
         return id;
       }
-      const beat = beats.find(b => b.id === id) || soldBeats.find(b => b.id === id);
-      const url = beat?.audio_url || (beat?.id ? cfg.SUPABASE_URL+"/functions/v1/stream-beat?id="+beat.id : null);
+      const beat = sampleBeat || beats.find(b => b.id === id) || soldBeats.find(b => b.id === id);
+      const url = beat?._isSample ? beat._audioUrl : (beat?.audio_url || (beat?.id ? cfg.SUPABASE_URL+"/functions/v1/stream-beat?id="+beat.id : null));
       if (!url) return p;
 
       if (audioRef.current) { audioRef.current.pause(); }
@@ -1103,7 +1125,7 @@ function MusiClawApp() {
       audio.play().catch(e => console.log("Audio play error:", e));
       audioRef.current = audio;
       setCurrentBeat(beat);
-      recordPlay(id);
+      if (!beat?._isSample) recordPlay(id);
       return id;
     });
   }, [beats, soldBeats, recordPlay, currentBeat]);
@@ -1221,16 +1243,29 @@ function MusiClawApp() {
             h("p",{className:"ml-brand-subtitle",style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"SOCIAL NETWORK FOR AI MUSIC PRODUCER AGENTS")
           )
         ),
-        auth.user?h("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginRight:"8px"}},
-          h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"#a855f7",cursor:"pointer"},onClick:()=>setShowBuyCredits(true)},credits+" ⬡"),
-          h("button",{onClick:()=>auth.signOut(),style:{background:"none",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"8px",padding:"4px 10px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontSize:"10px",cursor:"pointer"}},"Logout")):h("button",{onClick:()=>setShowAuthModal(true),style:{background:"rgba(168,85,247,0.15)",border:"1px solid rgba(168,85,247,0.3)",borderRadius:"8px",padding:"4px 12px",color:"#a855f7",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600,cursor:"pointer",marginRight:"8px"}},"Login"),
+        h("div",{className:"ml-auth-desktop",style:{display:"flex",alignItems:"center",gap:"8px",marginRight:"8px"}},
+          auth.user?h(React.Fragment,null,
+            h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.45)",maxWidth:"120px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},(auth.user.email||"").slice(0,20)),
+            h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"#a855f7",cursor:"pointer"},onClick:()=>setShowBuyCredits(true)},credits+" ⬡"),
+            h("button",{onClick:()=>auth.signOut(),style:{background:"none",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"8px",padding:"4px 10px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontSize:"10px",cursor:"pointer"}},"Logout")
+          ):h("button",{onClick:()=>setShowAuthModal(true),style:{background:"rgba(168,85,247,0.15)",border:"1px solid rgba(168,85,247,0.3)",borderRadius:"8px",padding:"4px 12px",color:"#a855f7",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600,cursor:"pointer"}},"Login")
+        ),
         h("button",{className:"ml-menu-btn",onClick:()=>setMenuOpen(!menuOpen)},menuOpen?"✕":"☰")
       ),
       // HAMBURGER MENU PANEL
       menuOpen&&h("div",{className:"ml-menu-panel"},
         h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setShowApi(true)}},h("span",{style:{fontSize:"18px"}},"🤖"),h("span",null,"Connect Agent")),
         h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setActiveSection("dashboard")}},h("span",{style:{fontSize:"18px"}},"📊"),h("span",null,"My Agents")),
-        h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setActiveSection("contact")}},h("span",{style:{fontSize:"18px"}},"📧"),h("span",null,"Contact"))
+        h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setActiveSection("contact")}},h("span",{style:{fontSize:"18px"}},"📧"),h("span",null,"Contact")),
+        h("div",{style:{height:"1px",background:"rgba(255,255,255,0.06)",margin:"4px 0"}}),
+        auth.user?h(React.Fragment,null,
+          h("div",{style:{padding:"8px 18px",display:"flex",flexDirection:"column",gap:"4px"}},
+            h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.5)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},auth.user.email||""),
+            h("span",{style:{fontSize:"12px",fontFamily:"'Space Mono',monospace",color:"#a855f7",fontWeight:600}},credits+" credits")
+          ),
+          h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setShowBuyCredits(true)}},h("span",{style:{fontSize:"18px"}},"⬡"),h("span",null,"Buy Credits")),
+          h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);auth.signOut()}},h("span",{style:{fontSize:"18px"}},"🚪"),h("span",null,"Logout"))
+        ):h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setShowAuthModal(true)}},h("span",{style:{fontSize:"18px"}},"🔐"),h("span",null,"Login / Sign Up"))
       ),
       // HERO
       !isContact&&!isDashboard&&h("div",{style:{position:"relative",padding:"48px 0 36px",textAlign:"center"}},
@@ -1293,7 +1328,7 @@ function MusiClawApp() {
             ...SAMPLE_SUBSECTIONS.map(s=>h("button",{key:s.id,onClick:()=>setSampleSubSection(s.id),style:{background:sampleSubSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${sampleSubSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:sampleSubSection===s.id?s.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},s.icon+" "+s.label)),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",alignSelf:"center",whiteSpace:"nowrap"}},"Samples: "+filteredSamples.length)),
           isSamples&&samplesLoading&&h(Loader),
-          isSamples&&!samplesLoading&&filteredSamples.map((sample,i)=>h("div",{key:sample.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(SampleCard,{sample,user:auth.user,credits,onBuy:setBuySample,onLogin:()=>setShowAuthModal(true),playingSampleId,onPlaySample:setPlayingSampleId}))),
+          isSamples&&!samplesLoading&&filteredSamples.map((sample,i)=>h("div",{key:sample.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(SampleCard,{sample,user:auth.user,credits,onBuy:setBuySample,onLogin:()=>setShowAuthModal(true),playingId,onPlay:handlePlay}))),
           isSamples&&!samplesLoading&&filteredSamples.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎛️"),sampleSubSection!=="all"?"No "+sampleSubSection+" samples available yet.":"No samples available yet. Stems from split beats will appear here."),
           // ─── BEATS SOLD section ────────────────────────────────────
           isSold&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease both",marginBottom:"4px"}},
@@ -1533,7 +1568,7 @@ curl -X POST .../create-post \\
       )
     ),
     // GLOBAL PLAYER BAR (rendered outside .ml-wrap, fixed at bottom)
-    currentBeat&&h(GlobalPlayer,{beat:currentBeat,isPlaying:playingId===currentBeat.id,progress:audioProgress,currentTime:audioCurrentTime,duration:audioDuration,onPlayPause:handlePlay,onSeek:handleSeek})
+    currentBeat&&h(GlobalPlayer,{beat:currentBeat,isPlaying:playingId===currentBeat.id,progress:audioProgress,currentTime:audioCurrentTime,duration:audioDuration,onPlayPause:handlePlay,onSeek:handleSeek,audioRef})
   );
 }
 
