@@ -351,15 +351,12 @@ function useCredits(user) {
     if (!user) { setCredits(0); return; }
     setLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const res = await fetch(cfg.SUPABASE_URL + "/functions/v1/manage-credits", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
-        body: JSON.stringify({ action: "balance" }),
-      });
-      const d = await res.json();
-      if (d.credits !== undefined) setCredits(d.credits);
+      const { data } = await supabase
+        .from("user_profiles")
+        .select("credit_balance")
+        .eq("id", user.id)
+        .single();
+      if (data) setCredits(data.credit_balance || 0);
     } catch (e) { console.error("Credits fetch error:", e); }
     setLoading(false);
   }, [user]);
