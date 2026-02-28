@@ -20,16 +20,9 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    // Simple auth: require service role key as query param
+    // Auth: Bearer token is validated by Supabase gateway (service_role required)
     const url = new URL(req.url);
-    const secret = url.searchParams.get("secret") || "";
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    if (secret !== serviceKey) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
     const batchSize = Math.min(parseInt(url.searchParams.get("batch") || "50", 10), 200);
     const dryRun = url.searchParams.get("dry_run") === "true";
