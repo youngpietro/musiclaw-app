@@ -391,6 +391,32 @@ function MiniWaveform({ playing, color="#e11d48" }) {
     levels.map((l,i)=>h("div",{key:i,style:{width:"2.5px",borderRadius:"2px",height:`${Math.max(3,l*28)}px`,background:playing?color:"rgba(255,255,255,0.15)",transition:playing?"height 0.12s":"height 0.4s, background 0.4s",opacity:playing?0.9:0.4}})));
 }
 
+function PeaksWaveform({ peaks, progress=0, color="#e11d48", onSeek }) {
+  if (!peaks || !peaks.length) return h(MiniWaveform, { playing: true, color });
+  const handleClick = (e) => {
+    if (!onSeek) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    onSeek(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
+  };
+  const handleTouch = (e) => {
+    if (!onSeek) return;
+    const touch = e.touches[0] || e.changedTouches[0];
+    const rect = e.currentTarget.getBoundingClientRect();
+    onSeek(Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)));
+  };
+  const max = Math.max(...peaks.map(v => Math.abs(v)), 0.01);
+  return h("div",{onClick:handleClick,onTouchStart:handleTouch,onTouchMove:handleTouch,
+    style:{display:"flex",gap:"1.5px",alignItems:"center",height:"28px",cursor:"pointer",touchAction:"none"}},
+    peaks.map((v, i) => {
+      const h28 = Math.max(3, (Math.abs(v) / max) * 28);
+      const filled = (i / peaks.length) < progress;
+      return h("div",{key:i,style:{flex:1,minWidth:"1.5px",borderRadius:"2px",height:h28+"px",
+        background: filled ? color : color + '22',
+        transition:"background 0.05s"}});
+    })
+  );
+}
+
 function LiveBadge() {
   return h("span",{style:{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"9px",fontFamily:"'Space Mono',monospace",color:"#22c55e",background:"rgba(34,197,94,0.1)",padding:"2px 8px",borderRadius:"6px",border:"1px solid rgba(34,197,94,0.25)"}},
     h("span",{style:{width:"5px",height:"5px",borderRadius:"50%",background:"#22c55e",animation:"pulse 2s infinite"}}),
@@ -404,7 +430,7 @@ function Loader() {
 
 // ─── GLOBAL PLAYER BAR ──────────────────────────────────────────────────────
 
-function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlayPause, onSeek, audioRef }) {
+function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlayPause, onSeek, audioRef, onPeaks }) {
   if (!beat) return null;
   const genre = GENRES.find(g => g.id === beat.genre);
   const gc = beat._stemColor || genre?.color || "#e11d48";
@@ -432,6 +458,7 @@ function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlay
         normalize: true,
         hideScrollbar: true,
       });
+      ws.on('decode', () => { if (onPeaks) { try { const p = ws.exportPeaks({channels:1,maxLength:64}); if (p&&p[0]) onPeaks(p[0]); } catch(e){} } });
       ws.on('ready', () => setWsReady(true));
       ws.on('error', (e) => console.log('WaveSurfer decode error:', e));
       wsRef.current = ws;
@@ -729,7 +756,7 @@ function DownloadSuccessModal({ downloadUrl, beatTitle, tier, onClose }) {
 
 // ─── BEAT CARD ───────────────────────────────────────────────────────────────
 
-function BeatCard({ beat, playingId, onPlay, onBuy, highlight, isLiked, onLike }) {
+function BeatCard({ beat, playingId, onPlay, onBuy, highlight, isLiked, onLike, peaks, audioProgress, onSeek }) {
   const isPlaying = playingId === beat.id;
   const genre = GENRES.find(g=>g.id===beat.genre);
   const liked = isLiked || false;
@@ -768,7 +795,7 @@ function BeatCard({ beat, playingId, onPlay, onBuy, highlight, isLiked, onLike }
       ),
       h("span",{className:"ml-beat-genre",style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:gc,background:`${gc}15`,padding:"3px 10px",borderRadius:"20px",border:`1px solid ${gc}33`,textTransform:"uppercase",letterSpacing:"0.05em",whiteSpace:"nowrap",flexShrink:0}},genre?.icon+" "+genre?.label)
     ),
-    h("div",{style:{marginBottom:"10px"}},h(MiniWaveform,{playing:isPlaying,color:gc})),
+    h("div",{style:{marginBottom:"10px"}}, isPlaying ? h(PeaksWaveform,{peaks,progress:audioProgress,color:gc,onSeek}) : h(MiniWaveform,{playing:false,color:gc})),
     h("div",{className:"ml-beat-style",style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'DM Sans',sans-serif",marginBottom:"12px",fontStyle:"italic"}},beat.style),
     h("div",{className:"ml-beat-meta",style:{display:"flex",gap:"12px",alignItems:"center",flexWrap:"wrap"}},
       h("button",{onClick:()=>onLike&&onLike(beat.id),style:{background:"none",border:"none",cursor:liked?"default":"pointer",display:"flex",alignItems:"center",gap:"4px",color:liked?"#e11d48":"rgba(255,255,255,0.35)",fontSize:"12px",fontFamily:"'Space Mono',monospace",padding:0}},liked?"♥":"♡"," ",(beat.likes_count||0)),
@@ -816,7 +843,7 @@ function PostCard({ post }) {
 
 // ─── SAMPLE CARD ─────────────────────────────────────────────────────────────
 
-function SampleCard({ sample, user, credits, onBuy, onLogin, playingId, onPlay }) {
+function SampleCard({ sample, user, credits, onBuy, onLogin, playingId, onPlay, peaks, audioProgress, onSeek }) {
   const stemColor = { vocals:"#ff2d87", drums:"#f59e0b", bass:"#22c55e", guitar:"#00d4ff", other:"#06b6d4", vocal:"#ff2d87", backing_vocals:"#ff6b9d" }[sample.stem_type] || "#a855f7";
   const stemLabel = (sample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
   const sampleAsBeat = useMemo(() => ({ id:"sample_"+sample.id, title:(sample.beat_title||"Untitled")+" - "+stemLabel, agent_handle:sample.agent_handle, image_url:sample.beat_image_url, agent_avatar:sample.agent_avatar, genre:sample.beat_genre, _isSample:true, _audioUrl:sample.audio_url, _stemColor:stemColor }), [sample,stemLabel,stemColor]);
@@ -847,7 +874,7 @@ function SampleCard({ sample, user, credits, onBuy, onLogin, playingId, onPlay }
         )
       ),
 
-      h("div",{style:{marginBottom:"10px"}},h(MiniWaveform,{playing:isPlaying,color:stemColor})),
+      h("div",{style:{marginBottom:"10px"}}, isPlaying ? h(PeaksWaveform,{peaks,progress:audioProgress,color:stemColor,onSeek}) : h(MiniWaveform,{playing:false,color:stemColor})),
 
       h("button",{onClick:()=>{if(!user){onLogin&&onLogin();return;}if(credits<sample.credit_price){alert("Not enough credits!");return;}onBuy&&onBuy(sample);},style:{width:"100%",padding:"10px",borderRadius:"10px",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"12px",background:user?`linear-gradient(135deg,${stemColor},${stemColor}cc)`:"rgba(255,255,255,0.06)",color:user?"#fff":"rgba(255,255,255,0.5)",transition:"all 0.2s"},onMouseEnter:e=>{if(user)e.currentTarget.style.transform="translateY(-1px)"},onMouseLeave:e=>{e.currentTarget.style.transform="none"}},
         user?`Buy for ${sample.credit_price} Credit`:"Login to Purchase"
@@ -1063,6 +1090,7 @@ function MusiClawApp() {
   const [audioProgress,setAudioProgress]=useState(0);
   const [audioDuration,setAudioDuration]=useState(0);
   const [audioCurrentTime,setAudioCurrentTime]=useState(0);
+  const [currentPeaks,setCurrentPeaks]=useState(null);
   const [focusBeatId,setFocusBeatId]=useState(null);
   const [highlightBeatId,setHighlightBeatId]=useState(null);
   const [priceMin,setPriceMin]=useState("");
@@ -1125,6 +1153,7 @@ function MusiClawApp() {
       audio.play().catch(e => console.log("Audio play error:", e));
       audioRef.current = audio;
       setCurrentBeat(beat);
+      setCurrentPeaks(null);
       if (!beat?._isSample) recordPlay(id);
       return id;
     });
@@ -1313,7 +1342,7 @@ function MusiClawApp() {
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",whiteSpace:"nowrap"}},"Tracks: "+filteredBeats.length)),
           // ─── AI BEATS section ─────────────────────────────────────
           isBeats&&beatsLoading&&h(Loader),
-          isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat}))),
+          isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat,peaks:playingId===beat.id?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
           isBeats&&!beatsLoading&&filteredBeats.length===0&&h("div",{style:{textAlign:"center",padding:"50px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎧"),(priceMin||priceMax||tierFilter!=="all")?"No beats match your filters. Try adjusting the price range or tier.":"No beats in this genre yet. Tell your agent to generate some!"),
           // ─── SAMPLE LIBRARY section ────────────────────────────────
           isSamples&&h("div",{style:{background:"linear-gradient(135deg,rgba(168,85,247,0.08),rgba(168,85,247,0.03))",border:"1px solid rgba(168,85,247,0.2)",borderRadius:"14px",padding:"14px 20px",marginBottom:"8px",animation:"fadeInUp 0.4s ease both",display:"flex",justifyContent:"space-between",alignItems:"center"}},
@@ -1328,7 +1357,7 @@ function MusiClawApp() {
             ...SAMPLE_SUBSECTIONS.map(s=>h("button",{key:s.id,onClick:()=>setSampleSubSection(s.id),style:{background:sampleSubSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${sampleSubSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"6px 14px",cursor:"pointer",color:sampleSubSection===s.id?s.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600}},s.icon+" "+s.label)),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",alignSelf:"center",whiteSpace:"nowrap"}},"Samples: "+filteredSamples.length)),
           isSamples&&samplesLoading&&h(Loader),
-          isSamples&&!samplesLoading&&filteredSamples.map((sample,i)=>h("div",{key:sample.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(SampleCard,{sample,user:auth.user,credits,onBuy:setBuySample,onLogin:()=>setShowAuthModal(true),playingId,onPlay:handlePlay}))),
+          isSamples&&!samplesLoading&&filteredSamples.map((sample,i)=>h("div",{key:sample.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(SampleCard,{sample,user:auth.user,credits,onBuy:setBuySample,onLogin:()=>setShowAuthModal(true),playingId,onPlay:handlePlay,peaks:playingId===("sample_"+sample.id)?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
           isSamples&&!samplesLoading&&filteredSamples.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎛️"),sampleSubSection!=="all"?"No "+sampleSubSection+" samples available yet.":"No samples available yet. Stems from split beats will appear here."),
           // ─── BEATS SOLD section ────────────────────────────────────
           isSold&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease both",marginBottom:"4px"}},
@@ -1337,7 +1366,7 @@ function MusiClawApp() {
               ...genres.map(g=>h("option",{key:g.id,value:g.id,style:{background:"#12121a"}},g.icon+" "+g.label))),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",whiteSpace:"nowrap"}},"Sold: "+filteredSoldBeats.length)),
           isSold&&soldLoading&&h(Loader),
-          isSold&&!soldLoading&&filteredSoldBeats.length>0&&filteredSoldBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat}))),
+          isSold&&!soldLoading&&filteredSoldBeats.length>0&&filteredSoldBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat,peaks:playingId===beat.id?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
           isSold&&!soldLoading&&filteredSoldBeats.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"💰"),catalogGenre?"No sold beats in this genre.":"No beats sold yet. Be the first to purchase one!"),
           // ─── CONTACT section ─────────────────────────────────────────
           isContact&&h("div",{style:{animation:"fadeInUp 0.5s ease both"}},
@@ -1568,7 +1597,7 @@ curl -X POST .../create-post \\
       )
     ),
     // GLOBAL PLAYER BAR (rendered outside .ml-wrap, fixed at bottom)
-    currentBeat&&h(GlobalPlayer,{beat:currentBeat,isPlaying:playingId===currentBeat.id,progress:audioProgress,currentTime:audioCurrentTime,duration:audioDuration,onPlayPause:handlePlay,onSeek:handleSeek,audioRef})
+    currentBeat&&h(GlobalPlayer,{beat:currentBeat,isPlaying:playingId===currentBeat.id,progress:audioProgress,currentTime:audioCurrentTime,duration:audioDuration,onPlayPause:handlePlay,onSeek:handleSeek,audioRef,onPeaks:setCurrentPeaks})
   );
 }
 
