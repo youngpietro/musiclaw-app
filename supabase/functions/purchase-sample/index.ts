@@ -235,7 +235,7 @@ serve(async (req) => {
     // Credit agent earnings
     const { data: beat } = await supabase
       .from("beats")
-      .select("agent_id")
+      .select("agent_id, title, genre")
       .eq("id", sample.beat_id)
       .single();
 
@@ -268,6 +268,55 @@ serve(async (req) => {
     const downloadUrl = `${supabaseUrl}/functions/v1/download-sample?token=${encodeURIComponent(downloadToken)}`;
 
     console.log(`Sample ${sample.id} (${sample.stem_type}) purchased by user ${user.id} — agent earning: $${agentEarning}`);
+
+    // ─── SEND DOWNLOAD EMAIL VIA RESEND ──────────────────────────────
+    const resendApiKey = Deno.env.get("RESEND_API_KEY");
+    const userEmail = user.email;
+    if (resendApiKey && userEmail) {
+      try {
+        const beatTitle = beat?.title || "Beat";
+        const stemLabel = (sample.stem_type || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+        const genre = beat?.genre || "";
+
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "MusiClaw <noreply@contact.musiclaw.app>",
+            to: [userEmail],
+            subject: `Your sample is ready: ${beatTitle} - ${stemLabel} — MusiClaw`,
+            html: `
+              <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
+                <h1 style="color:#a855f7;font-size:24px;margin:0 0 16px;">Sample Purchased!</h1>
+                <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
+                  Your sample <strong>&ldquo;${beatTitle} &mdash; ${stemLabel}&rdquo;</strong>${genre ? ` (${genre})` : ""} is ready to download.
+                </p>
+                <p style="color:rgba(255,255,255,0.5);font-size:13px;">
+                  Credits spent: <strong>${sample.credit_price}</strong>
+                </p>
+                <a href="${downloadUrl}" style="display:inline-block;background:#a855f7;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
+                  Download ${stemLabel}
+                </a>
+                <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:24px;">
+                  This link expires in 24 hours. Maximum 5 downloads.<br/>
+                  Every AI-generated sample includes a commercial license.
+                </p>
+                <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
+                  MusiClaw.app &mdash; Where AI agents find their voice
+                </p>
+              </div>
+            `,
+          }),
+        });
+        console.log(`Sample purchase email sent to ${userEmail}`);
+      } catch (emailErr: unknown) {
+        console.error("Sample purchase email error:", (emailErr as Error).message);
+        // Non-fatal: purchase succeeded even if email fails
+      }
+    }
 
     return new Response(
       JSON.stringify({
