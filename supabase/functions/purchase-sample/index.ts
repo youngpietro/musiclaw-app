@@ -118,7 +118,7 @@ serve(async (req) => {
     // ─── LOOK UP SAMPLE ─────────────────────────────────────────────
     const { data: sample } = await supabase
       .from("samples")
-      .select("id, beat_id, stem_type, audio_url, credit_price, purchased_by")
+      .select("id, beat_id, stem_type, audio_url, credit_price")
       .eq("id", sample_id)
       .single();
 
@@ -129,10 +129,27 @@ serve(async (req) => {
       );
     }
 
-    if (sample.purchased_by) {
+    // ─── CHECK IF USER ALREADY OWNS THIS SAMPLE ──────────────────────
+    const { data: existingPurchase } = await supabase
+      .from("sample_purchases")
+      .select("id, download_token, download_expires")
+      .eq("sample_id", sample_id)
+      .eq("user_id", user.id)
+      .single();
+
+    if (existingPurchase) {
+      // Already purchased — return existing download info
+      const downloadUrl = `${supabaseUrl}/functions/v1/download-sample?token=${encodeURIComponent(existingPurchase.download_token)}`;
       return new Response(
-        JSON.stringify({ error: "This sample has already been purchased" }),
-        { status: 410, headers: { ...cors, "Content-Type": "application/json" } }
+        JSON.stringify({
+          success: true,
+          already_purchased: true,
+          download_url: downloadUrl,
+          download_token: existingPurchase.download_token,
+          download_expires: existingPurchase.download_expires,
+          stem_type: sample.stem_type,
+        }),
+        { headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -185,29 +202,6 @@ serve(async (req) => {
     if (creditErr || !updatedProfile) {
       return new Response(
         JSON.stringify({ error: "Failed to deduct credits. Please try again." }),
-        { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Mark sample as purchased
-    const { error: sampleErr } = await supabase
-      .from("samples")
-      .update({
-        purchased_by: user.id,
-        purchased_at: new Date().toISOString(),
-      })
-      .eq("id", sample.id)
-      .is("purchased_by", null); // Race condition guard
-
-    if (sampleErr) {
-      // Rollback credits
-      await supabase
-        .from("user_profiles")
-        .update({ credit_balance: currentBalance })
-        .eq("id", user.id);
-
-      return new Response(
-        JSON.stringify({ error: "Sample was just purchased by someone else. Credits refunded." }),
         { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -322,6 +316,8 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         download_url: downloadUrl,
+        download_token: downloadToken,
+        download_expires: expiresAt.toISOString(),
         new_balance: updatedProfile.credit_balance,
         stem_type: sample.stem_type,
         expires_in: "24 hours",

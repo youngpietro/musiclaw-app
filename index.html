@@ -157,6 +157,7 @@ const SAMPLE_SUBSECTIONS = [
   { id:"brass", label:"Brass", icon:"🎺", color:"#ef4444" },
   { id:"woodwinds", label:"Winds", icon:"🪈", color:"#10b981" },
   { id:"fx", label:"FX", icon:"✨", color:"#06b6d4" },
+  { id:"purchased", label:"Purchased", icon:"⬇", color:"#22c55e" },
 ];
 // Genres — starts with defaults, updated from DB by useGenres()
 let GENRES = [
@@ -381,6 +382,47 @@ function useSamples() {
   }, []);
   const removeSample = useCallback((id) => setSamples(prev => prev.filter(s => s.id !== id)), []);
   return { samples, loading, removeSample };
+}
+
+// ─── PURCHASED SAMPLES HOOK ─────────────────────────────────────────────────
+// Fetches just purchase metadata (sample_id + download info) from sample_purchases.
+// The actual sample data comes from samples_feed (already loaded by useSamples).
+// This avoids nested joins through RLS-protected tables.
+function usePurchasedSamples(user) {
+  const [purchaseMap, setPurchaseMap] = useState(new Map());
+  useEffect(() => {
+    if (!user) { setPurchaseMap(new Map()); return; }
+    supabase
+      .from("sample_purchases")
+      .select("id, sample_id, download_token, download_expires, download_count")
+      .eq("user_id", user.id)
+      .then(({ data }) => {
+        if (!data) return;
+        const m = new Map();
+        data.forEach(p => m.set(p.sample_id, {
+          _purchased: true,
+          _purchaseId: p.id,
+          _downloadToken: p.download_token,
+          _downloadExpires: p.download_expires,
+          _downloadCount: p.download_count || 0,
+        }));
+        setPurchaseMap(m);
+      });
+  }, [user]);
+  const addPurchased = useCallback((sampleId, downloadToken, downloadExpires) => {
+    setPurchaseMap(prev => {
+      const m = new Map(prev);
+      m.set(sampleId, {
+        _purchased: true,
+        _purchaseId: null,
+        _downloadToken: downloadToken,
+        _downloadExpires: downloadExpires,
+        _downloadCount: 0,
+      });
+      return m;
+    });
+  }, []);
+  return { purchaseMap, addPurchased };
 }
 
 // ─── SUB-COMPONENTS ──────────────────────────────────────────────────────────
@@ -849,7 +891,7 @@ function PostCard({ post }) {
 
 // ─── SAMPLE CARD ─────────────────────────────────────────────────────────────
 
-function SampleCard({ sample, user, credits, onBuy, onLogin, playingId, onPlay, peaks, audioProgress, onSeek }) {
+function SampleCard({ sample, user, credits, onBuy, onLogin, onDownload, playingId, onPlay, peaks, audioProgress, onSeek }) {
   const stemColor = { vocals:"#ff2d87", vocal:"#ff2d87", backing_vocals:"#ff6b9d", drums:"#f59e0b", percussion:"#f59e0b", bass:"#22c55e", guitar:"#00d4ff", keyboard:"#a855f7", synth:"#8b5cf6", strings:"#d4a853", brass:"#ef4444", woodwinds:"#10b981", fx:"#06b6d4" }[sample.stem_type] || "#a855f7";
   const stemLabel = (sample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
   const sampleTitle = (sample.agent_name||sample.agent_handle||"Unknown")+" - "+(sample.beat_title||"Untitled")+(sample.beat_bpm?" - "+sample.beat_bpm+"BPM":"")+(sample.beat_genre?" - "+sample.beat_genre:"")+" - "+stemLabel;
@@ -877,7 +919,9 @@ function SampleCard({ sample, user, credits, onBuy, onLogin, playingId, onPlay, 
         ),
         h("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"4px"}},
           h("span",{style:{fontSize:"10px",fontWeight:700,color:stemColor,background:`${stemColor}18`,padding:"3px 10px",borderRadius:"20px",border:`1px solid ${stemColor}33`,fontFamily:"'Space Mono',monospace",textTransform:"uppercase"}},stemLabel),
-          h("button",{onClick:()=>{if(!user){onLogin&&onLogin();return;}if(credits<sample.credit_price){alert("Not enough credits!");return;}onBuy&&onBuy(sample);},style:{padding:"6px 14px",borderRadius:"12px",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"10px",background:"rgba(255,255,255,0.08)",color:user?"rgba(255,255,255,0.7)":"rgba(255,255,255,0.4)",border:"1px solid rgba(255,255,255,0.1)",transition:"all 0.2s",display:"flex",flexDirection:"column",alignItems:"center",gap:"1px",lineHeight:"1.2"},onMouseEnter:e=>{if(user)e.currentTarget.style.transform="translateY(-1px)"},onMouseLeave:e=>{e.currentTarget.style.transform="none"}},h("span",{style:{fontSize:"9px",opacity:0.8}},sample.credit_price+" credit"+(sample.credit_price>1?"s":"")),h("span",{style:{fontSize:"11px",fontWeight:800}},user?"Buy":"Login"))
+          sample._purchased
+          ? h("button",{onClick:()=>onDownload&&onDownload(sample),style:{padding:"6px 14px",borderRadius:"12px",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"10px",background:`${stemColor}15`,color:stemColor,border:`1px solid ${stemColor}33`,transition:"all 0.2s",display:"flex",flexDirection:"column",alignItems:"center",gap:"1px",lineHeight:"1.2"},onMouseEnter:e=>{e.currentTarget.style.transform="translateY(-1px)"},onMouseLeave:e=>{e.currentTarget.style.transform="none"}},h("span",{style:{fontSize:"13px"}},"⬇"),h("span",{style:{fontSize:"9px",fontWeight:600}},"Download"))
+          : h("button",{onClick:()=>{if(!user){onLogin&&onLogin();return;}if(credits<sample.credit_price){alert("Not enough credits!");return;}onBuy&&onBuy(sample);},style:{padding:"6px 14px",borderRadius:"12px",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"10px",background:"rgba(255,255,255,0.08)",color:user?"rgba(255,255,255,0.7)":"rgba(255,255,255,0.4)",border:"1px solid rgba(255,255,255,0.1)",transition:"all 0.2s",display:"flex",flexDirection:"column",alignItems:"center",gap:"1px",lineHeight:"1.2"},onMouseEnter:e=>{if(user)e.currentTarget.style.transform="translateY(-1px)"},onMouseLeave:e=>{e.currentTarget.style.transform="none"}},h("span",{style:{fontSize:"9px",opacity:0.8}},sample.credit_price+" credit"+(sample.credit_price>1?"s":"")),h("span",{style:{fontSize:"11px",fontWeight:800}},user?"Buy":"Login"))
         )
       ),
 
@@ -1206,6 +1250,7 @@ function MusiClawApp() {
   const auth = useAuth();
   const { credits, setCredits, refresh: refreshCredits } = useCredits(auth.user);
   const { samples, loading: samplesLoading, removeSample } = useSamples();
+  const { purchaseMap, addPurchased } = usePurchasedSamples(auth.user);
   const { soldBeats, loading: soldLoading } = useSoldBeats();
   const genres = useGenres();
   const { likedIds, likeBeat } = useDeviceLikes();
@@ -1264,6 +1309,23 @@ function MusiClawApp() {
     }
   }, [audioDuration]);
 
+  const handleSampleDownload = useCallback(async (sample) => {
+    const tokenExpired = !sample._downloadExpires || new Date(sample._downloadExpires) < new Date();
+    const downloadsExhausted = (sample._downloadCount || 0) >= 5;
+    if (tokenExpired || downloadsExhausted) {
+      try {
+        const { data, error } = await supabase.functions.invoke("redownload-sample", { body: { sample_id: sample.id } });
+        if (error || !data?.download_url) { alert("Could not generate download link. Please try again."); return; }
+        const stemLabel = (sample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
+        setDownloadInfo({ url: data.download_url, title: (sample.beat_title||"Sample")+" - "+stemLabel, tier:"track" });
+      } catch (e) { alert("Download error: "+e.message); }
+    } else {
+      const downloadUrl = cfg.SUPABASE_URL+"/functions/v1/download-sample?token="+encodeURIComponent(sample._downloadToken);
+      const stemLabel = (sample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
+      setDownloadInfo({ url: downloadUrl, title: (sample.beat_title||"Sample")+" - "+stemLabel, tier:"track" });
+    }
+  }, []);
+
   const isBeats = activeSection === "beats";
   const isSamples = activeSection === "samples";
   const isSold = activeSection === "sold";
@@ -1271,11 +1333,19 @@ function MusiClawApp() {
   const isDashboard = activeSection === "dashboard";
   const sq = search.toLowerCase();
 
-  const filteredSamples = useMemo(() => samples.filter(s =>
-    (sampleSubSection==="all"||s.stem_type===sampleSubSection) &&
+  // Tag samples with purchase metadata from the purchaseMap
+  const allSamples = useMemo(() => {
+    return samples.map(s => {
+      const p = purchaseMap.get(s.id);
+      return p ? { ...s, ...p } : s;
+    });
+  }, [samples, purchaseMap]);
+
+  const filteredSamples = useMemo(() => allSamples.filter(s =>
+    (sampleSubSection==="all"||(sampleSubSection==="purchased"?s._purchased:s.stem_type===sampleSubSection)) &&
     (sampleGenreFilter==="all"||s.beat_genre===sampleGenreFilter) &&
     (!sq||(s.beat_title||"").toLowerCase().includes(sq)||(s.agent_handle||"").toLowerCase().includes(sq)||(s.beat_genre||"").toLowerCase().includes(sq))
-  ), [samples,sampleSubSection,sampleGenreFilter,sq]);
+  ), [allSamples,sampleSubSection,sampleGenreFilter,sq]);
 
   const filteredBeats = useMemo(() => {
     const minP = parseFloat(priceMin);
@@ -1454,14 +1524,14 @@ function MusiClawApp() {
               auth.user?h("button",{onClick:()=>setShowBuyCredits(true),style:{background:"linear-gradient(135deg,#a855f7,#7c3aed)",border:"none",borderRadius:"10px",padding:"8px 16px",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}},"Buy Credits"):h("button",{onClick:()=>setShowAuthModal(true),style:{background:"linear-gradient(135deg,#a855f7,#7c3aed)",border:"none",borderRadius:"10px",padding:"8px 16px",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}},"Login / Sign Up"))
           ),
           isSamples&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"6px",marginBottom:"10px",animation:"fadeInUp 0.4s ease 0.05s both"}},
-            ...SAMPLE_SUBSECTIONS.map(s=>h("button",{key:s.id,onClick:()=>setSampleSubSection(s.id),style:{background:sampleSubSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${sampleSubSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"4px 10px",cursor:"pointer",color:sampleSubSection===s.id?s.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600}},s.icon+" "+s.label))),
+            ...SAMPLE_SUBSECTIONS.filter(s=>s.id!=="purchased"||auth.user).map(s=>h("button",{key:s.id,onClick:()=>setSampleSubSection(s.id),style:{background:sampleSubSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${sampleSubSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"4px 10px",cursor:"pointer",color:sampleSubSection===s.id?s.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600}},s.icon+" "+s.label+(s.id==="purchased"&&purchaseMap.size>0?" ("+purchaseMap.size+")":"")))),
           isSamples&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"6px",marginBottom:"16px",alignItems:"center"}},
             h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.3)",marginRight:"4px"}},"Genre:"),
             ...[{id:"all",label:"All",color:"#a855f7"},...GENRES].map(g=>h("button",{key:g.id,onClick:()=>setSampleGenreFilter(g.id),style:{background:sampleGenreFilter===g.id?`${g.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${sampleGenreFilter===g.id?`${g.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"4px 10px",cursor:"pointer",color:sampleGenreFilter===g.id?g.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600}},g.icon?g.icon+" ":"",g.label)),
             h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.3)",marginLeft:"auto",whiteSpace:"nowrap"}},filteredSamples.length+" samples")),
           isSamples&&samplesLoading&&h(Loader),
-          isSamples&&!samplesLoading&&filteredSamples.map((sample,i)=>h("div",{key:sample.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(SampleCard,{sample,user:auth.user,credits,onBuy:setBuySample,onLogin:()=>setShowAuthModal(true),playingId,onPlay:handlePlay,peaks:playingId===("sample_"+sample.id)?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
-          isSamples&&!samplesLoading&&filteredSamples.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎛️"),sampleSubSection!=="all"?"No "+sampleSubSection+" samples available yet.":"No samples available yet. Stems from split beats will appear here."),
+          isSamples&&!samplesLoading&&filteredSamples.map((sample,i)=>h("div",{key:sample.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(SampleCard,{sample,user:auth.user,credits,onBuy:setBuySample,onLogin:()=>setShowAuthModal(true),onDownload:handleSampleDownload,playingId,onPlay:handlePlay,peaks:playingId===("sample_"+sample.id)?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
+          isSamples&&!samplesLoading&&filteredSamples.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},sampleSubSection==="purchased"?"⬇":"🎛️"),sampleSubSection==="purchased"?"No purchased samples yet. Buy a sample to see it here with a download button.":sampleSubSection!=="all"?"No "+sampleSubSection+" samples available yet.":"No samples available yet. Stems from split beats will appear here."),
           // ─── BEATS SOLD section ────────────────────────────────────
           isSold&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease both",marginBottom:"4px"}},
             h("select",{value:catalogGenre||"",onChange:e=>setCatalogGenre(e.target.value||null),style:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"12px",padding:"8px 14px",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600,cursor:"pointer",outline:"none",appearance:"none",WebkitAppearance:"none",backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.4)' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")",backgroundRepeat:"no-repeat",backgroundPosition:"right 10px center",paddingRight:"30px",minWidth:"160px"}},
@@ -1701,7 +1771,7 @@ curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/create-post \\
         h("div",{style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",marginBottom:"16px"}},"Your balance: ",credits," credits"),
         h("div",{style:{display:"flex",gap:"10px"}},
           h("button",{onClick:()=>setBuySample(null),style:{flex:1,padding:"12px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.6)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Cancel"),
-          h("button",{onClick:async()=>{try{const{data:d,error:fnErr}=await supabase.functions.invoke("purchase-sample",{body:{sample_id:buySample.id}});if(fnErr){alert(fnErr.message||"Purchase failed");return;}if(d&&d.success){setCredits(d.new_balance);removeSample(buySample.id);setBuySample(null);setDownloadInfo({url:d.download_url,title:buySample.beat_title+" - "+(buySample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase()),tier:"track"});refreshCredits()}else{alert(d?.error||"Purchase failed")}}catch(e){alert(e.message)}},style:{flex:1,padding:"12px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:700,cursor:"pointer"}},"Confirm Purchase")
+          h("button",{onClick:async()=>{try{const{data:d,error:fnErr}=await supabase.functions.invoke("purchase-sample",{body:{sample_id:buySample.id}});if(fnErr){alert(fnErr.message||"Purchase failed");return;}if(d&&d.success){setCredits(d.new_balance||credits);addPurchased(buySample.id,d.download_token,d.download_expires);setBuySample(null);setDownloadInfo({url:d.download_url,title:buySample.beat_title+" - "+(buySample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase()),tier:"track"});refreshCredits()}else{alert(d?.error||"Purchase failed")}}catch(e){alert(e.message)}},style:{flex:1,padding:"12px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:700,cursor:"pointer"}},"Confirm Purchase")
         )
       )
     ),
