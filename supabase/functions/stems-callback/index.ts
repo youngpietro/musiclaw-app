@@ -195,10 +195,11 @@ serve(async (req) => {
     console.log(`Beat ${beatId} stems complete: ${Object.keys(stems).join(", ")} (${Object.keys(stems).length} stems)`);
 
     // ─── CREATE SAMPLE ROWS FOR SAMPLE LIBRARY ────────────────────────
-    // Silence detection: download 16KB from middle of each MP3, count zero bytes.
-    // Silent MP3s have ~70-90% zero bytes (Huffman zero-padding for silent frames).
-    // Real audio has ~5-10% zero bytes. Threshold: > 30% zeros = silent.
-    const SILENCE_THRESHOLD = 0.30;
+    // Silence detection: Shannon entropy on 32KB from middle of MP3.
+    // Silent stems have entropy ~6.7-7.3 (repetitive frame data).
+    // Real audio has entropy ~7.7-8.0 (diverse byte values).
+    // Threshold: entropy < 7.5 = silent.
+    const SILENCE_ENTROPY = 7.5;
     let samplesCreated = 0;
     let samplesSkipped = 0;
 
@@ -214,29 +215,33 @@ serve(async (req) => {
           continue;
         }
 
-        // Step 2: Download 16KB from middle for zero-byte analysis
+        // Step 2: Download 32KB from middle for entropy analysis
         let isSilent = false;
         try {
           const midpoint = Math.floor(fileSize / 2);
-          const rangeStart = Math.max(0, midpoint - 8192);
-          const rangeEnd = Math.min(fileSize - 1, midpoint + 8191);
+          const rangeStart = Math.max(0, midpoint - 16384);
+          const rangeEnd = Math.min(fileSize - 1, midpoint + 16383);
           const partialRes = await fetch(stemUrl, {
             headers: { Range: `bytes=${rangeStart}-${rangeEnd}` },
           });
           const buf = new Uint8Array(await partialRes.arrayBuffer());
-          let zeroCount = 0;
-          for (let i = 0; i < buf.length; i++) {
-            if (buf[i] === 0) zeroCount++;
+          // Shannon entropy
+          const freq = new Array(256).fill(0);
+          for (let i = 0; i < buf.length; i++) freq[buf[i]]++;
+          let entropy = 0;
+          for (let i = 0; i < 256; i++) {
+            if (freq[i] === 0) continue;
+            const p = freq[i] / buf.length;
+            entropy -= p * Math.log2(p);
           }
-          const zeroRatio = buf.length > 0 ? zeroCount / buf.length : 0;
-          isSilent = zeroRatio > SILENCE_THRESHOLD;
-          console.log(`Stem ${stemType} for beat ${beatId}: ${fileSize} bytes, zero_ratio=${zeroRatio.toFixed(4)}, silent=${isSilent}`);
+          isSilent = entropy < SILENCE_ENTROPY;
+          console.log(`Stem ${stemType} for beat ${beatId}: ${fileSize} bytes, entropy=${entropy.toFixed(3)}, silent=${isSilent}`);
         } catch (rangeErr) {
           console.warn(`Range request failed for ${stemType} beat ${beatId}: ${(rangeErr as Error).message}`);
         }
 
         if (isSilent) {
-          console.log(`Sample skip: ${stemType} for beat ${beatId} — silent by zero-byte analysis`);
+          console.log(`Sample skip: ${stemType} for beat ${beatId} — silent (low entropy)`);
           samplesSkipped++;
           continue;
         }

@@ -1,8 +1,8 @@
 // supabase/functions/backfill-amplitude/index.ts
-// ONE-TIME: Scans all samples missing audio_amplitude using zero-byte analysis.
-// Downloads 16KB from middle of each MP3, counts zero bytes.
-// Silent MP3s have ~70-90% zero bytes (Huffman zero-padding), real audio has ~5-10%.
-// Threshold: > 30% zeros = silent → audio_amplitude = 0.
+// ONE-TIME: Scans all samples missing audio_amplitude using Shannon entropy.
+// Downloads 32KB from middle of each MP3, computes byte entropy.
+// Silent MP3s have entropy ~6.7-7.3, real audio has ~7.7-8.0.
+// Threshold: entropy < 7.5 = silent → audio_amplitude = 0.
 // Call repeatedly until "done": true, then delete this function.
 //
 // GET /functions/v1/backfill-amplitude
@@ -12,6 +12,18 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+function shannonEntropy(buf: Uint8Array): number {
+  const freq = new Array(256).fill(0);
+  for (let i = 0; i < buf.length; i++) freq[buf[i]]++;
+  let entropy = 0;
+  for (let i = 0; i < 256; i++) {
+    if (freq[i] === 0) continue;
+    const p = freq[i] / buf.length;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
 
 serve(async (req) => {
   const corsHeaders = {
@@ -26,7 +38,7 @@ serve(async (req) => {
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const batchSize = Math.min(parseInt(url.searchParams.get("batch") || "50", 10), 200);
     const dryRun = url.searchParams.get("dry_run") === "true";
-    const SILENCE_THRESHOLD = 0.30; // 30% zero bytes = silent
+    const SILENCE_ENTROPY = 7.5; // Silent < 7.5, real audio > 7.5
 
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
 
@@ -46,7 +58,7 @@ serve(async (req) => {
       );
     }
 
-    const results: { id: string; stem_type: string; beat_id: string; file_size: number; zero_ratio: number; silent: boolean }[] = [];
+    const results: { id: string; stem_type: string; beat_id: string; file_size: number; entropy: number; silent: boolean }[] = [];
     let totalScanned = 0;
     let totalSilent = 0;
     let totalErrors = 0;
@@ -61,35 +73,29 @@ serve(async (req) => {
         }
 
         if (fileSize < 1000) {
-          // Tiny file — definitely silent
           if (!dryRun) {
             await supabase.from("samples").update({ audio_amplitude: 0, file_size: fileSize }).eq("id", sample.id);
           }
-          results.push({ id: sample.id, stem_type: sample.stem_type, beat_id: sample.beat_id, file_size: fileSize, zero_ratio: 1, silent: true });
+          results.push({ id: sample.id, stem_type: sample.stem_type, beat_id: sample.beat_id, file_size: fileSize, entropy: 0, silent: true });
           totalSilent++;
           totalScanned++;
           continue;
         }
 
-        // Step 2: Download 16KB from middle of file
+        // Step 2: Download 32KB from middle of file
         const midpoint = Math.floor(fileSize / 2);
-        const rangeStart = Math.max(0, midpoint - 8192);
-        const rangeEnd = Math.min(fileSize - 1, midpoint + 8191);
+        const rangeStart = Math.max(0, midpoint - 16384);
+        const rangeEnd = Math.min(fileSize - 1, midpoint + 16383);
 
         const partialRes = await fetch(sample.audio_url, {
           headers: { Range: `bytes=${rangeStart}-${rangeEnd}` },
         });
         const buf = new Uint8Array(await partialRes.arrayBuffer());
 
-        // Step 3: Count zero bytes
-        let zeroCount = 0;
-        for (let i = 0; i < buf.length; i++) {
-          if (buf[i] === 0) zeroCount++;
-        }
-        const zeroRatio = buf.length > 0 ? zeroCount / buf.length : 0;
-
-        const isSilent = zeroRatio > SILENCE_THRESHOLD;
-        // Store 0 for silent, file_size for real audio (any non-zero value > 25 passes view filter)
+        // Step 3: Compute Shannon entropy
+        const entropy = shannonEntropy(buf);
+        const isSilent = entropy < SILENCE_ENTROPY;
+        // Store 0 for silent, file_size for real audio (> 25 passes view filter)
         const amplitude = isSilent ? 0 : fileSize;
 
         if (!dryRun) {
@@ -101,7 +107,7 @@ serve(async (req) => {
           stem_type: sample.stem_type,
           beat_id: sample.beat_id,
           file_size: fileSize,
-          zero_ratio: parseFloat(zeroRatio.toFixed(4)),
+          entropy: parseFloat(entropy.toFixed(3)),
           silent: isSilent,
         });
         if (isSilent) totalSilent++;
