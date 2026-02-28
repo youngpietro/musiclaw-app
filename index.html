@@ -949,16 +949,11 @@ function BuyCreditsModal({ onClose, user, onSuccess }) {
   const handleBuy = async () => {
     setLoading(true); setError("");
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { setError("Please log in first"); setLoading(false); return; }
       // Create order
-      const res = await fetch(cfg.SUPABASE_URL + "/functions/v1/manage-credits", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
-        body: JSON.stringify({ action: "buy" }),
+      const { data: d, error: buyErr } = await supabase.functions.invoke("manage-credits", {
+        body: { action: "buy" },
       });
-      const d = await res.json();
-      if (d.error) { setError(d.error); setLoading(false); return; }
+      if (buyErr || !d || d.error) { setError(d?.error || buyErr?.message || "Failed to create order"); setLoading(false); return; }
       // Open PayPal popup
       const approveUrl = `https://www.paypal.com/checkoutnow?token=${d.order_id}`;
       const popup = window.open(approveUrl, "paypal", "width=500,height=600");
@@ -967,13 +962,11 @@ function BuyCreditsModal({ onClose, user, onSuccess }) {
         if (popup && popup.closed) {
           clearInterval(poll);
           try {
-            const capRes = await fetch(cfg.SUPABASE_URL + "/functions/v1/manage-credits", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
-              body: JSON.stringify({ action: "capture", order_id: d.order_id }),
+            const { data: capData, error: capErr } = await supabase.functions.invoke("manage-credits", {
+              body: { action: "capture", order_id: d.order_id },
             });
-            const capData = await capRes.json();
-            if (capData.success) {
+            if (capErr) { setError("Could not verify payment. Please check your credit balance."); setLoading(false); return; }
+            if (capData && capData.success) {
               onSuccess && onSuccess(capData.new_balance);
               onClose();
             } else if (capData.already_captured) {
@@ -1708,7 +1701,7 @@ curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/create-post \\
         h("div",{style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",marginBottom:"16px"}},"Your balance: ",credits," credits"),
         h("div",{style:{display:"flex",gap:"10px"}},
           h("button",{onClick:()=>setBuySample(null),style:{flex:1,padding:"12px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.6)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Cancel"),
-          h("button",{onClick:async()=>{try{const{data:{session}}=await supabase.auth.getSession();if(!session)return;const res=await fetch(cfg.SUPABASE_URL+"/functions/v1/purchase-sample",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+session.access_token},body:JSON.stringify({sample_id:buySample.id})});const d=await res.json();if(d.success){setCredits(d.new_balance);removeSample(buySample.id);setBuySample(null);setDownloadInfo({url:d.download_url,title:buySample.beat_title+" - "+(buySample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase()),tier:"track"});refreshCredits()}else{alert(d.error||"Purchase failed")}}catch(e){alert(e.message)}},style:{flex:1,padding:"12px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:700,cursor:"pointer"}},"Confirm Purchase")
+          h("button",{onClick:async()=>{try{const{data:d,error:fnErr}=await supabase.functions.invoke("purchase-sample",{body:{sample_id:buySample.id}});if(fnErr){alert(fnErr.message||"Purchase failed");return;}if(d&&d.success){setCredits(d.new_balance);removeSample(buySample.id);setBuySample(null);setDownloadInfo({url:d.download_url,title:buySample.beat_title+" - "+(buySample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase()),tier:"track"});refreshCredits()}else{alert(d?.error||"Purchase failed")}}catch(e){alert(e.message)}},style:{flex:1,padding:"12px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:700,cursor:"pointer"}},"Confirm Purchase")
         )
       )
     ),
