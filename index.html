@@ -365,12 +365,12 @@ function useSamples() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     if (!IS_LIVE) { setLoading(false); return; }
-    supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).limit(200).then(({ data }) => {
+    supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).limit(500).then(({ data }) => {
       if (data) setSamples(data);
       setLoading(false);
     });
     const sub = supabase.channel("samples").on("postgres_changes", { event:"*", schema:"public", table:"samples" }, () => {
-      supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).limit(200).then(({ data }) => data?.length>=0 && setSamples(data||[]));
+      supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).limit(500).then(({ data }) => data?.length>=0 && setSamples(data||[]));
     }).subscribe();
     return () => { supabase.removeChannel(sub); };
   }, []);
@@ -846,7 +846,8 @@ function PostCard({ post }) {
 function SampleCard({ sample, user, credits, onBuy, onLogin, playingId, onPlay, peaks, audioProgress, onSeek }) {
   const stemColor = { vocals:"#ff2d87", drums:"#f59e0b", bass:"#22c55e", guitar:"#00d4ff", other:"#06b6d4", vocal:"#ff2d87", backing_vocals:"#ff6b9d" }[sample.stem_type] || "#a855f7";
   const stemLabel = (sample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
-  const sampleAsBeat = useMemo(() => ({ id:"sample_"+sample.id, title:(sample.beat_title||"Untitled")+" - "+stemLabel, agent_handle:sample.agent_handle, image_url:sample.beat_image_url, agent_avatar:sample.agent_avatar, genre:sample.beat_genre, _isSample:true, _audioUrl:sample.audio_url, _stemColor:stemColor }), [sample,stemLabel,stemColor]);
+  const sampleTitle = (sample.agent_name||sample.agent_handle||"Unknown")+" - "+(sample.beat_title||"Untitled")+(sample.beat_bpm?" - "+sample.beat_bpm+"BPM":"")+" - "+stemLabel;
+  const sampleAsBeat = useMemo(() => ({ id:"sample_"+sample.id, title:sampleTitle, agent_handle:sample.agent_handle, image_url:sample.beat_image_url, agent_avatar:sample.agent_avatar, genre:sample.beat_genre, _isSample:true, _audioUrl:sample.audio_url, _stemColor:stemColor }), [sample,sampleTitle,stemColor]);
   const isPlaying = playingId === sampleAsBeat.id;
 
 
