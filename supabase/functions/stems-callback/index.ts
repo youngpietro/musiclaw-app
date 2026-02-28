@@ -195,53 +195,45 @@ serve(async (req) => {
     console.log(`Beat ${beatId} stems complete: ${Object.keys(stems).join(", ")} (${Object.keys(stems).length} stems)`);
 
     // ─── CREATE SAMPLE ROWS FOR SAMPLE LIBRARY ────────────────────────
-    // Silence detection: partial GET from middle of file, compute byte stddev
-    // stddev < 5 ≈ silence (constant/near-constant byte values)
+    // Silence detection: compare each stem's file size to the median of all
+    // sibling stems. Silent MP3s compress much smaller. < 50% of median = silent.
     let samplesCreated = 0;
     let samplesSkipped = 0;
+
+    // Pass 1: HEAD all stems to collect file sizes
+    const stemSizes: Record<string, number> = {};
     for (const [stemType, stemUrl] of Object.entries(stems)) {
       try {
-        // Step 1: HEAD to get file size
         const headRes = await fetch(stemUrl, { method: "HEAD" });
-        const contentLength = parseInt(headRes.headers.get("content-length") || "0", 10);
-        if (contentLength < 10000) {
-          console.log(`Sample skip: ${stemType} for beat ${beatId} — file too small (${contentLength} bytes)`);
-          samplesSkipped++;
-          continue;
-        }
+        stemSizes[stemType] = parseInt(headRes.headers.get("content-length") || "0", 10);
+      } catch {
+        stemSizes[stemType] = 0;
+      }
+    }
 
-        // Step 2: GET 8KB from middle of file for silence analysis
-        let audioAmplitude: number | null = null;
-        try {
-          const midpoint = Math.floor(contentLength / 2);
-          const rangeStart = Math.max(0, midpoint - 4096);
-          const rangeEnd = Math.min(contentLength - 1, midpoint + 4095);
-          const partialRes = await fetch(stemUrl, {
-            headers: { Range: `bytes=${rangeStart}-${rangeEnd}` },
-          });
-          const buf = new Uint8Array(await partialRes.arrayBuffer());
-          if (buf.length > 0) {
-            // Compute byte standard deviation
-            let sum = 0;
-            for (let i = 0; i < buf.length; i++) sum += buf[i];
-            const mean = sum / buf.length;
-            let variance = 0;
-            for (let i = 0; i < buf.length; i++) variance += (buf[i] - mean) ** 2;
-            audioAmplitude = Math.sqrt(variance / buf.length);
-            if (audioAmplitude < 25) {
-              console.log(`Sample skip: ${stemType} for beat ${beatId} — silent (stddev=${audioAmplitude.toFixed(2)})`);
-              samplesSkipped++;
-              continue;
-            }
-          }
-        } catch (rangeErr) {
-          console.warn(`Range request failed for ${stemType} beat ${beatId}: ${(rangeErr as Error).message} — inserting anyway`);
-        }
+    // Compute median file size across all stems
+    const sizes = Object.values(stemSizes).filter(s => s > 0).sort((a, b) => a - b);
+    const mid = Math.floor(sizes.length / 2);
+    const medianSize = sizes.length === 0 ? 0 : sizes.length % 2 !== 0 ? sizes[mid] : (sizes[mid - 1] + sizes[mid]) / 2;
+    const threshold = medianSize * 0.5;
+    console.log(`Beat ${beatId} stem sizes: ${JSON.stringify(stemSizes)}, median=${medianSize}, threshold=${threshold}`);
 
+    // Pass 2: Insert samples, skip silent ones
+    for (const [stemType, stemUrl] of Object.entries(stems)) {
+      const fileSize = stemSizes[stemType] || 0;
+      const isSilent = fileSize < threshold || fileSize < 1000;
+
+      if (isSilent) {
+        console.log(`Sample skip: ${stemType} for beat ${beatId} — silent (${fileSize} bytes, median=${medianSize})`);
+        samplesSkipped++;
+        continue;
+      }
+
+      try {
         const { error: sampleErr } = await supabase
           .from("samples")
           .upsert(
-            { beat_id: beatId, stem_type: stemType, audio_url: stemUrl, file_size: contentLength, audio_amplitude: audioAmplitude },
+            { beat_id: beatId, stem_type: stemType, audio_url: stemUrl, file_size: fileSize, audio_amplitude: fileSize },
             { onConflict: "beat_id,stem_type" }
           );
         if (sampleErr) {
@@ -249,19 +241,11 @@ serve(async (req) => {
         } else {
           samplesCreated++;
         }
-      } catch (fetchErr) {
-        console.warn(`Fetch failed for ${stemType} beat ${beatId}: ${(fetchErr as Error).message}`);
-        // Insert anyway without file_size — the view will show it (file_size IS NULL)
-        await supabase
-          .from("samples")
-          .upsert(
-            { beat_id: beatId, stem_type: stemType, audio_url: stemUrl },
-            { onConflict: "beat_id,stem_type" }
-          );
-        samplesCreated++;
+      } catch (insertErr) {
+        console.warn(`Insert failed for ${stemType} beat ${beatId}: ${(insertErr as Error).message}`);
       }
     }
-    console.log(`Samples for beat ${beatId}: ${samplesCreated} created, ${samplesSkipped} skipped (silent/empty)`);
+    console.log(`Samples for beat ${beatId}: ${samplesCreated} created, ${samplesSkipped} skipped (silent)`);
 
     return new Response(
       JSON.stringify({ success: true, beat_id: beatId, stem_count: Object.keys(stems).length, samples_created: samplesCreated }),

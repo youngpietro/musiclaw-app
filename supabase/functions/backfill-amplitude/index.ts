@@ -1,15 +1,23 @@
 // supabase/functions/backfill-amplitude/index.ts
-// ONE-TIME: Scans all samples missing audio_amplitude,
-// downloads 8KB from middle of each audio file, computes byte stddev,
-// and updates the column. Silent stems (stddev < 5) get amplitude = 0.
-// Call once, then delete this function.
+// ONE-TIME: Scans all samples missing audio_amplitude using file-size comparison.
+// For each beat, computes the median file size across all sibling stems.
+// Stems with file_size < 50% of median are marked silent (audio_amplitude = 0).
+// Call repeatedly until "done": true, then delete this function.
 //
-// GET /functions/v1/backfill-amplitude?secret=YOUR_SERVICE_ROLE_KEY
-// Optional: ?batch=50 (default 50, max 200)
+// GET /functions/v1/backfill-amplitude
+// Optional: ?batch=10 (default 10 beats per call, max 50)
 // Optional: ?dry_run=true (log results without updating DB)
+// Auth: Bearer token (service_role key) in Authorization header
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
 
 serve(async (req) => {
   const corsHeaders = {
@@ -20,96 +28,93 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    // Auth: Bearer token is validated by Supabase gateway (service_role required)
     const url = new URL(req.url);
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-    const batchSize = Math.min(parseInt(url.searchParams.get("batch") || "50", 10), 200);
+    const batchSize = Math.min(parseInt(url.searchParams.get("batch") || "10", 10), 50);
     const dryRun = url.searchParams.get("dry_run") === "true";
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      serviceKey
-    );
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
 
-    // Fetch samples that haven't been scanned yet
-    const { data: samples, error: fetchErr } = await supabase
+    // Find distinct beat_ids that still have unscanned samples
+    const { data: unscannedBeats, error: beatErr } = await supabase
       .from("samples")
-      .select("id, stem_type, audio_url, beat_id")
+      .select("beat_id")
       .is("audio_amplitude", null)
       .not("audio_url", "is", null)
-      .limit(batchSize);
+      .limit(500);
 
-    if (fetchErr) throw fetchErr;
-    if (!samples || samples.length === 0) {
+    if (beatErr) throw beatErr;
+    if (!unscannedBeats || unscannedBeats.length === 0) {
       return new Response(
-        JSON.stringify({ done: true, message: "No more samples to scan", scanned: 0 }),
+        JSON.stringify({ done: true, message: "No more samples to scan", beats_processed: 0, scanned: 0, silent: 0 }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const results: { id: string; stem_type: string; beat_id: string; amplitude: number; silent: boolean }[] = [];
-    let updated = 0;
-    let silentCount = 0;
-    let errorCount = 0;
+    // Deduplicate beat_ids
+    const beatIds = [...new Set(unscannedBeats.map((s: any) => s.beat_id))].slice(0, batchSize);
 
-    for (const sample of samples) {
+    const results: { id: string; stem_type: string; beat_id: string; file_size: number; median_size: number; silent: boolean }[] = [];
+    let totalScanned = 0;
+    let totalSilent = 0;
+    let totalErrors = 0;
+
+    for (const beatId of beatIds) {
       try {
-        // Step 1: HEAD to get file size
-        const headRes = await fetch(sample.audio_url, { method: "HEAD" });
-        const contentLength = parseInt(headRes.headers.get("content-length") || "0", 10);
+        // Get ALL samples for this beat (including already-scanned ones for median calculation)
+        const { data: beatSamples, error: samplesErr } = await supabase
+          .from("samples")
+          .select("id, stem_type, audio_url, file_size, audio_amplitude")
+          .eq("beat_id", beatId);
 
-        if (contentLength < 1000) {
-          // Tiny file — mark as silent
-          if (!dryRun) {
-            await supabase.from("samples").update({ audio_amplitude: 0, file_size: contentLength }).eq("id", sample.id);
+        if (samplesErr || !beatSamples || beatSamples.length === 0) continue;
+
+        // Step 1: Ensure all samples have file_size (HEAD request if missing)
+        for (const sample of beatSamples) {
+          if (sample.file_size == null && sample.audio_url) {
+            try {
+              const headRes = await fetch(sample.audio_url, { method: "HEAD" });
+              sample.file_size = parseInt(headRes.headers.get("content-length") || "0", 10);
+              if (!dryRun) {
+                await supabase.from("samples").update({ file_size: sample.file_size }).eq("id", sample.id);
+              }
+            } catch {
+              sample.file_size = 0;
+            }
           }
-          results.push({ id: sample.id, stem_type: sample.stem_type, beat_id: sample.beat_id, amplitude: 0, silent: true });
-          silentCount++;
-          updated++;
-          continue;
         }
 
-        // Step 2: GET 8KB from middle of file
-        const midpoint = Math.floor(contentLength / 2);
-        const rangeStart = Math.max(0, midpoint - 4096);
-        const rangeEnd = Math.min(contentLength - 1, midpoint + 4095);
+        // Step 2: Compute median file size across all stems for this beat
+        const sizes = beatSamples.map((s: any) => s.file_size || 0).filter((s: number) => s > 0);
+        const medianSize = median(sizes);
+        const threshold = medianSize * 0.5;
 
-        const partialRes = await fetch(sample.audio_url, {
-          headers: { Range: `bytes=${rangeStart}-${rangeEnd}` },
-        });
-        const buf = new Uint8Array(await partialRes.arrayBuffer());
+        // Step 3: Mark each unscanned sample as silent or not
+        for (const sample of beatSamples) {
+          if (sample.audio_amplitude != null) continue; // already scanned
 
-        // Compute byte standard deviation
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) sum += buf[i];
-        const mean = sum / buf.length;
-        let variance = 0;
-        for (let i = 0; i < buf.length; i++) variance += (buf[i] - mean) ** 2;
-        const stddev = Math.sqrt(variance / buf.length);
+          const fileSize = sample.file_size || 0;
+          const isSilent = fileSize < threshold || fileSize < 1000;
+          const amplitude = isSilent ? 0 : fileSize; // store file_size as amplitude (non-zero = real audio)
 
-        const isSilent = stddev < 25;
-        // Store 0 for silent stems so the view filter catches them
-        const amplitude = isSilent ? 0 : parseFloat(stddev.toFixed(2));
+          if (!dryRun) {
+            await supabase.from("samples").update({ audio_amplitude: amplitude }).eq("id", sample.id);
+          }
 
-        if (!dryRun) {
-          await supabase
-            .from("samples")
-            .update({ audio_amplitude: amplitude, file_size: contentLength })
-            .eq("id", sample.id);
+          results.push({
+            id: sample.id,
+            stem_type: sample.stem_type,
+            beat_id: beatId as string,
+            file_size: fileSize,
+            median_size: medianSize,
+            silent: isSilent,
+          });
+          if (isSilent) totalSilent++;
+          totalScanned++;
         }
-
-        results.push({ id: sample.id, stem_type: sample.stem_type, beat_id: sample.beat_id, amplitude, silent: isSilent });
-        if (isSilent) silentCount++;
-        updated++;
       } catch (err) {
-        console.error(`Error scanning sample ${sample.id} (${sample.stem_type}):`, (err as Error).message);
-        // Mark as scanned with amplitude -1 so we don't retry forever
-        if (!dryRun) {
-          await supabase.from("samples").update({ audio_amplitude: -1 }).eq("id", sample.id);
-        }
-        errorCount++;
-        updated++;
+        console.error(`Error processing beat ${beatId}:`, (err as Error).message);
+        totalErrors++;
       }
     }
 
@@ -122,9 +127,10 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         done: (remaining || 0) === 0,
-        scanned: updated,
-        silent: silentCount,
-        errors: errorCount,
+        beats_processed: beatIds.length,
+        scanned: totalScanned,
+        silent: totalSilent,
+        errors: totalErrors,
         remaining: remaining || 0,
         dry_run: dryRun,
         results,
