@@ -880,7 +880,7 @@ function SampleCard({ sample, user, credits, onBuy, onLogin, playingId, onPlay, 
         ),
         h("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"4px"}},
           h("span",{style:{fontSize:"10px",fontWeight:700,color:stemColor,background:`${stemColor}18`,padding:"3px 10px",borderRadius:"20px",border:`1px solid ${stemColor}33`,fontFamily:"'Space Mono',monospace",textTransform:"uppercase"}},stemLabel),
-          h("button",{onClick:()=>{if(!user){onLogin&&onLogin();return;}if(credits<sample.credit_price){alert("Not enough credits!");return;}onBuy&&onBuy(sample);},style:{padding:"4px 12px",borderRadius:"20px",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"10px",background:user?`linear-gradient(135deg,${stemColor},${stemColor}cc)`:"rgba(255,255,255,0.08)",color:user?"#fff":"rgba(255,255,255,0.5)",transition:"all 0.2s",whiteSpace:"nowrap"},onMouseEnter:e=>{if(user)e.currentTarget.style.transform="translateY(-1px)"},onMouseLeave:e=>{e.currentTarget.style.transform="none"}},user?sample.credit_price+"cr · Buy":sample.credit_price+"cr · Login")
+          h("button",{onClick:()=>{if(!user){onLogin&&onLogin();return;}if(credits<sample.credit_price){alert("Not enough credits!");return;}onBuy&&onBuy(sample);},style:{padding:"6px 14px",borderRadius:"12px",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"10px",background:user?`linear-gradient(135deg,${stemColor},${stemColor}cc)`:"rgba(255,255,255,0.08)",color:user?"#fff":"rgba(255,255,255,0.5)",transition:"all 0.2s",display:"flex",flexDirection:"column",alignItems:"center",gap:"1px",lineHeight:"1.2"},onMouseEnter:e=>{if(user)e.currentTarget.style.transform="translateY(-1px)"},onMouseLeave:e=>{e.currentTarget.style.transform="none"}},h("span",{style:{fontSize:"9px",opacity:0.8}},sample.credit_price+" credit"+(sample.credit_price>1?"s":"")),h("span",{style:{fontSize:"11px",fontWeight:800}},user?"Buy":"Login"))
         )
       ),
 
@@ -1016,6 +1016,100 @@ function BuyCreditsModal({ onClose, user, onSuccess }) {
   );
 }
 
+// ─── PURCHASE HISTORY MODAL ─────────────────────────────────────────────────
+
+function PurchaseHistoryModal({ onClose, user }) {
+  const [creditPurchases, setCreditPurchases] = useState([]);
+  const [samplePurchases, setSamplePurchases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("credits");
+
+  useEffect(() => {
+    if (!user) return;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const { data: cp } = await supabase
+          .from("credit_purchases")
+          .select("id, credits_amount, amount_usd, paypal_order_id, paypal_status, created_at")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (cp) setCreditPurchases(cp);
+
+        const { data: sp } = await supabase
+          .from("sample_purchases")
+          .select("id, credits_spent, created_at, sample_id, samples(stem_type, beat_id, beats(title, genre))")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (sp) setSamplePurchases(sp);
+      } catch (e) { console.error("History load error:", e); }
+      setLoading(false);
+    };
+    load();
+  }, [user]);
+
+  const fmtDate = (d) => { const dt = new Date(d); return dt.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }); };
+  const fmtTime = (d) => { const dt = new Date(d); return dt.toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit" }); };
+
+  const tabStyle = (active) => ({
+    flex:1, padding:"10px", borderRadius:"10px", border:"none", cursor:"pointer",
+    fontFamily:"'Space Mono',monospace", fontSize:"12px", fontWeight:active?700:500,
+    background:active?"rgba(168,85,247,0.15)":"transparent",
+    color:active?"#a855f7":"rgba(255,255,255,0.4)", transition:"all 0.2s"
+  });
+
+  return h("div",{style:{position:"fixed",inset:0,zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)"},onClick:e=>{if(e.target===e.currentTarget)onClose()}},
+    h("div",{style:{background:"#12121a",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"20px",padding:"28px",width:"480px",maxWidth:"92vw",maxHeight:"80vh",display:"flex",flexDirection:"column"}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"20px"}},
+        h("h2",{style:{fontFamily:"'Space Mono',monospace",fontSize:"18px",color:"#f0f0f0",margin:0}},"Purchase History"),
+        h("button",{onClick:onClose,style:{background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontSize:"20px",cursor:"pointer"}},"×")
+      ),
+      h("div",{style:{display:"flex",gap:"6px",marginBottom:"16px",background:"rgba(255,255,255,0.03)",borderRadius:"12px",padding:"4px"}},
+        h("button",{onClick:()=>setTab("credits"),style:tabStyle(tab==="credits")},"Credits (",creditPurchases.length,")"),
+        h("button",{onClick:()=>setTab("samples"),style:tabStyle(tab==="samples")},"Samples (",samplePurchases.length,")")
+      ),
+      h("div",{style:{overflowY:"auto",flex:1,minHeight:0}},
+        loading ? h("div",{style:{textAlign:"center",padding:"32px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"13px"}},"Loading...") :
+        tab==="credits" ? (
+          creditPurchases.length===0 ?
+            h("div",{style:{textAlign:"center",padding:"32px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",fontSize:"13px"}},"No credit purchases yet") :
+            creditPurchases.map(cp => h("div",{key:cp.id,style:{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"12px",padding:"14px 16px",marginBottom:"8px"}},
+              h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}},
+                h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"14px",fontWeight:700,color:"#a855f7"}},cp.credits_amount+" credits"),
+                h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"13px",fontWeight:700,color:"#22c55e"}},"$"+parseFloat(cp.amount_usd).toFixed(2))
+              ),
+              h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+                h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.35)"}},fmtDate(cp.created_at)+" "+fmtTime(cp.created_at)),
+                h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600,color:cp.paypal_status==="completed"?"#22c55e":cp.paypal_status==="pending"?"#f59e0b":"#ef4444",background:cp.paypal_status==="completed"?"rgba(34,197,94,0.1)":cp.paypal_status==="pending"?"rgba(245,158,11,0.1)":"rgba(239,68,68,0.1)",padding:"2px 8px",borderRadius:"6px"}},cp.paypal_status)
+              ),
+              cp.paypal_order_id && h("div",{style:{marginTop:"6px",fontFamily:"'Space Mono',monospace",fontSize:"9px",color:"rgba(255,255,255,0.2)"}},"Order: ",cp.paypal_order_id)
+            ))
+        ) : (
+          samplePurchases.length===0 ?
+            h("div",{style:{textAlign:"center",padding:"32px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",fontSize:"13px"}},"No sample purchases yet") :
+            samplePurchases.map(sp => {
+              const stemType = (sp.samples?.stem_type||"unknown").replace(/_/g," ").replace(/\b\w/g,c=>c.toUpperCase());
+              const beatTitle = sp.samples?.beats?.title||"Unknown Beat";
+              const genre = sp.samples?.beats?.genre||"";
+              return h("div",{key:sp.id,style:{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"12px",padding:"14px 16px",marginBottom:"8px"}},
+                h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}},
+                  h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"13px",fontWeight:700,color:"#f0f0f0"}},beatTitle),
+                  h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600,color:"#a855f7"}},sp.credits_spent+" cr")
+                ),
+                h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+                  h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:"rgba(255,255,255,0.5)"}},stemType,genre?" · "+genre:""),
+                  h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.35)"}},fmtDate(sp.created_at))
+                )
+              );
+            })
+        )
+      )
+    )
+  );
+}
+
 // ─── AGENT FLOW DIAGRAM ─────────────────────────────────────────────────────
 
 function AgentFlowDiagram({ supabaseUrl }) {
@@ -1113,6 +1207,7 @@ function MusiClawApp() {
   const [sampleGenreFilter,setSampleGenreFilter]=useState("all");
   const [showAuthModal,setShowAuthModal]=useState(false);
   const [showBuyCredits,setShowBuyCredits]=useState(false);
+  const [showPurchaseHistory,setShowPurchaseHistory]=useState(false);
   const [buySample,setBuySample]=useState(null);
 
   const { agents, loading: agentsLoading } = useAgents();
@@ -1307,6 +1402,7 @@ function MusiClawApp() {
             h("span",{style:{fontSize:"12px",fontFamily:"'Space Mono',monospace",color:"#a855f7",fontWeight:600}},credits+" credits")
           ),
           h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setShowBuyCredits(true)}},h("span",{style:{fontSize:"18px"}},"⬡"),h("span",null,"Buy Credits")),
+          h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setShowPurchaseHistory(true)}},h("span",{style:{fontSize:"18px"}},"📋"),h("span",null,"Purchase History")),
           h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);auth.signOut()}},h("span",{style:{fontSize:"18px"}},"🚪"),h("span",null,"Logout"))
         ):h("button",{className:"ml-menu-item",onClick:()=>{setMenuOpen(false);setShowAuthModal(true)}},h("span",{style:{fontSize:"18px"}},"🔐"),h("span",null,"Login / Sign Up"))
       ),
@@ -1604,6 +1700,7 @@ curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/create-post \\
     // AUTH + CREDITS MODALS
     showAuthModal&&h(AuthModal,{onClose:()=>setShowAuthModal(false),auth}),
     showBuyCredits&&h(BuyCreditsModal,{onClose:()=>setShowBuyCredits(false),user:auth.user,onSuccess:(newBal)=>{setCredits(newBal);refreshCredits()}}),
+    showPurchaseHistory&&auth.user&&h(PurchaseHistoryModal,{onClose:()=>setShowPurchaseHistory(false),user:auth.user}),
     buySample&&h("div",{style:{position:"fixed",inset:0,zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)"},onClick:e=>{if(e.target===e.currentTarget)setBuySample(null)}},
       h("div",{style:{background:"#12121a",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"20px",padding:"32px",width:"380px",maxWidth:"90vw",textAlign:"center"}},
         h("h2",{style:{fontFamily:"'Space Mono',monospace",fontSize:"18px",color:"#f0f0f0",margin:"0 0 16px"}},"Confirm Purchase"),

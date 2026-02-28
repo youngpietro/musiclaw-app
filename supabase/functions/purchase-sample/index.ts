@@ -136,6 +136,20 @@ serve(async (req) => {
       );
     }
 
+    // ─── CHECK IF PARENT BEAT IS SOLD ─────────────────────────────────
+    const { data: parentBeat } = await supabase
+      .from("beats")
+      .select("sold")
+      .eq("id", sample.beat_id)
+      .single();
+
+    if (parentBeat?.sold) {
+      return new Response(
+        JSON.stringify({ error: "This beat has been sold. Its samples are no longer available." }),
+        { status: 410, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── CHECK USER CREDITS ─────────────────────────────────────────
     const { data: profile } = await supabase
       .from("user_profiles")

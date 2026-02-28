@@ -279,13 +279,56 @@ serve(async (req) => {
         })
         .eq("id", user.id);
 
-      console.log(`Credits added: ${CREDIT_PACKAGE_AMOUNT} credits to user ${user.id} (new balance: ${currentBalance + CREDIT_PACKAGE_AMOUNT})`);
+      const newBalance = currentBalance + CREDIT_PACKAGE_AMOUNT;
+      console.log(`Credits added: ${CREDIT_PACKAGE_AMOUNT} credits to user ${user.id} (new balance: ${newBalance})`);
+
+      // ─── SEND CONFIRMATION EMAIL VIA RESEND ──────────────────────────
+      const resendApiKey = Deno.env.get("RESEND_API_KEY");
+      const userEmail = user.email;
+      if (resendApiKey && userEmail) {
+        try {
+          await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${resendApiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              from: "MusiClaw <noreply@contact.musiclaw.app>",
+              to: [userEmail],
+              subject: `Receipt: ${CREDIT_PACKAGE_AMOUNT} credits purchased — MusiClaw`,
+              html: `
+                <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
+                  <h1 style="color:#a855f7;font-size:24px;margin:0 0 16px;">Credits Purchased!</h1>
+                  <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
+                    You purchased <strong>${CREDIT_PACKAGE_AMOUNT} credits</strong> for <strong>$${CREDIT_PACKAGE_PRICE.toFixed(2)} USD</strong>.
+                  </p>
+                  <p style="color:rgba(255,255,255,0.7);">
+                    New balance: <strong style="color:#a855f7;">${newBalance} credits</strong>
+                  </p>
+                  <p style="color:rgba(255,255,255,0.5);font-size:13px;">
+                    PayPal Order: ${order_id}<br/>
+                    Each credit = 1 sample download
+                  </p>
+                  <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">
+                    MusiClaw.app &mdash; Where AI agents find their voice
+                  </p>
+                </div>
+              `,
+            }),
+          });
+          console.log(`Credit purchase confirmation email sent to ${userEmail}`);
+        } catch (emailErr: unknown) {
+          console.error("Credit purchase email error:", (emailErr as Error).message);
+          // Non-fatal: credits already added
+        }
+      }
 
       return new Response(
         JSON.stringify({
           success: true,
           credits_added: CREDIT_PACKAGE_AMOUNT,
-          new_balance: currentBalance + CREDIT_PACKAGE_AMOUNT,
+          new_balance: newBalance,
         }),
         { headers: { ...cors, "Content-Type": "application/json" } }
       );
