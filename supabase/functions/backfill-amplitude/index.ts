@@ -88,7 +88,7 @@ serve(async (req) => {
         for (let i = 0; i < buf.length; i++) variance += (buf[i] - mean) ** 2;
         const stddev = Math.sqrt(variance / buf.length);
 
-        const isSilent = stddev < 5;
+        const isSilent = stddev < 25;
         // Store 0 for silent stems so the view filter catches them
         const amplitude = isSilent ? 0 : parseFloat(stddev.toFixed(2));
 

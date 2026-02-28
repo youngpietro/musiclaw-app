@@ -53,7 +53,7 @@ WHERE s.purchased_by IS NULL
   AND b.deleted_at IS NULL
   AND b.sold IS NOT TRUE
   AND (s.file_size IS NULL OR s.file_size > 10000)
-  AND (s.audio_amplitude IS NULL OR s.audio_amplitude > 0.01)
+  AND (s.audio_amplitude IS NULL OR s.audio_amplitude > 25)
 ORDER BY s.created_at DESC;
 
 GRANT ALL ON public.samples_feed TO postgres;

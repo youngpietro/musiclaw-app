@@ -228,7 +228,7 @@ serve(async (req) => {
             let variance = 0;
             for (let i = 0; i < buf.length; i++) variance += (buf[i] - mean) ** 2;
             audioAmplitude = Math.sqrt(variance / buf.length);
-            if (audioAmplitude < 5) {
+            if (audioAmplitude < 25) {
               console.log(`Sample skip: ${stemType} for beat ${beatId} — silent (stddev=${audioAmplitude.toFixed(2)})`);
               samplesSkipped++;
               continue;
