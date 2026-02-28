@@ -195,41 +195,52 @@ serve(async (req) => {
     console.log(`Beat ${beatId} stems complete: ${Object.keys(stems).join(", ")} (${Object.keys(stems).length} stems)`);
 
     // ─── CREATE SAMPLE ROWS FOR SAMPLE LIBRARY ────────────────────────
-    // Silence detection: compare each stem's file size to the median of all
-    // sibling stems. Silent MP3s compress much smaller. < 50% of median = silent.
+    // Silence detection: download 16KB from middle of each MP3, count zero bytes.
+    // Silent MP3s have ~70-90% zero bytes (Huffman zero-padding for silent frames).
+    // Real audio has ~5-10% zero bytes. Threshold: > 30% zeros = silent.
+    const SILENCE_THRESHOLD = 0.30;
     let samplesCreated = 0;
     let samplesSkipped = 0;
 
-    // Pass 1: HEAD all stems to collect file sizes
-    const stemSizes: Record<string, number> = {};
     for (const [stemType, stemUrl] of Object.entries(stems)) {
       try {
+        // Step 1: HEAD to get file size
         const headRes = await fetch(stemUrl, { method: "HEAD" });
-        stemSizes[stemType] = parseInt(headRes.headers.get("content-length") || "0", 10);
-      } catch {
-        stemSizes[stemType] = 0;
-      }
-    }
+        const fileSize = parseInt(headRes.headers.get("content-length") || "0", 10);
 
-    // Compute median file size across all stems
-    const sizes = Object.values(stemSizes).filter(s => s > 0).sort((a, b) => a - b);
-    const mid = Math.floor(sizes.length / 2);
-    const medianSize = sizes.length === 0 ? 0 : sizes.length % 2 !== 0 ? sizes[mid] : (sizes[mid - 1] + sizes[mid]) / 2;
-    const threshold = medianSize * 0.5;
-    console.log(`Beat ${beatId} stem sizes: ${JSON.stringify(stemSizes)}, median=${medianSize}, threshold=${threshold}`);
+        if (fileSize < 1000) {
+          console.log(`Sample skip: ${stemType} for beat ${beatId} — file too small (${fileSize} bytes)`);
+          samplesSkipped++;
+          continue;
+        }
 
-    // Pass 2: Insert samples, skip silent ones
-    for (const [stemType, stemUrl] of Object.entries(stems)) {
-      const fileSize = stemSizes[stemType] || 0;
-      const isSilent = fileSize < threshold || fileSize < 1000;
+        // Step 2: Download 16KB from middle for zero-byte analysis
+        let isSilent = false;
+        try {
+          const midpoint = Math.floor(fileSize / 2);
+          const rangeStart = Math.max(0, midpoint - 8192);
+          const rangeEnd = Math.min(fileSize - 1, midpoint + 8191);
+          const partialRes = await fetch(stemUrl, {
+            headers: { Range: `bytes=${rangeStart}-${rangeEnd}` },
+          });
+          const buf = new Uint8Array(await partialRes.arrayBuffer());
+          let zeroCount = 0;
+          for (let i = 0; i < buf.length; i++) {
+            if (buf[i] === 0) zeroCount++;
+          }
+          const zeroRatio = buf.length > 0 ? zeroCount / buf.length : 0;
+          isSilent = zeroRatio > SILENCE_THRESHOLD;
+          console.log(`Stem ${stemType} for beat ${beatId}: ${fileSize} bytes, zero_ratio=${zeroRatio.toFixed(4)}, silent=${isSilent}`);
+        } catch (rangeErr) {
+          console.warn(`Range request failed for ${stemType} beat ${beatId}: ${(rangeErr as Error).message}`);
+        }
 
-      if (isSilent) {
-        console.log(`Sample skip: ${stemType} for beat ${beatId} — silent (${fileSize} bytes, median=${medianSize})`);
-        samplesSkipped++;
-        continue;
-      }
+        if (isSilent) {
+          console.log(`Sample skip: ${stemType} for beat ${beatId} — silent by zero-byte analysis`);
+          samplesSkipped++;
+          continue;
+        }
 
-      try {
         const { error: sampleErr } = await supabase
           .from("samples")
           .upsert(
@@ -241,8 +252,8 @@ serve(async (req) => {
         } else {
           samplesCreated++;
         }
-      } catch (insertErr) {
-        console.warn(`Insert failed for ${stemType} beat ${beatId}: ${(insertErr as Error).message}`);
+      } catch (fetchErr) {
+        console.warn(`Fetch failed for ${stemType} beat ${beatId}: ${(fetchErr as Error).message}`);
       }
     }
     console.log(`Samples for beat ${beatId}: ${samplesCreated} created, ${samplesSkipped} skipped (silent)`);
