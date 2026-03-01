@@ -2,7 +2,8 @@
 // GET /functions/v1/stream-beat?id=BEAT_UUID
 // Rate-limited proxy that redirects to the actual stream URL
 // Prevents bulk scraping of CDN URLs from the public feed
-// SECURITY: 60 streams/hour per IP, beat must be complete
+// SECURITY: 200 unique streams/hour per IP, beat must be complete
+// Replays of the same beat within 5 minutes don't count toward the limit
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -61,7 +62,8 @@ serve(async (req) => {
       );
     }
 
-    // ─── RATE LIMITING: 60 streams/hour per IP ──────────────────────
+    // ─── RATE LIMITING: 200 unique streams/hour per IP ───────────────
+    // Replaying the same beat within 5 min doesn't count (skip/relisten pattern)
     const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
       || req.headers.get("cf-connecting-ip")
       || "unknown";
@@ -73,7 +75,7 @@ serve(async (req) => {
       .eq("identifier", clientIp)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentStreams && recentStreams.length >= 60) {
+    if (recentStreams && recentStreams.length >= 200) {
       return new Response(
         JSON.stringify({ error: "Stream rate limit reached. Try again later." }),
         { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
@@ -101,11 +103,25 @@ serve(async (req) => {
       );
     }
 
-    // Record the stream (don't await — fire and forget for speed)
-    supabase.from("rate_limits").insert({
-      action: "stream_beat",
-      identifier: clientIp,
-    }).then(() => {});
+    // Record the stream — skip if same beat was streamed by this IP in last 5 min
+    // This way rapid skip/relisten doesn't burn through the rate limit
+    const { data: recentSameBeat } = await supabase
+      .from("rate_limits")
+      .select("id")
+      .eq("action", "stream_beat")
+      .eq("identifier", clientIp)
+      .eq("resource_id", beatId)
+      .gte("created_at", new Date(Date.now() - 300000).toISOString())
+      .limit(1);
+
+    if (!recentSameBeat || recentSameBeat.length === 0) {
+      // New beat or replayed after 5 min — record it
+      supabase.from("rate_limits").insert({
+        action: "stream_beat",
+        identifier: clientIp,
+        resource_id: beatId,
+      }).then(() => {});
+    }
 
     // ─── REDIRECT TO ACTUAL STREAM URL ──────────────────────────────
     return new Response(null, {
