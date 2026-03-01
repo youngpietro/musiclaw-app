@@ -24,6 +24,62 @@ const VALID_MODELS = ["V5", "V4_5PLUS", "V4_5ALL", "V4_5", "V4"];
 const MAX_BEAT_PRICE = 499.99;
 const MAX_STEMS_PRICE = 999.99;
 
+// ─── SUB-GENRE AUTO-DETECTION ─────────────────────────────────────────
+// Cached sub-genres from DB (5-min TTL to avoid querying on every generation)
+let subGenreCache: { data: any[]; ts: number } | null = null;
+const SUB_GENRE_CACHE_TTL = 5 * 60 * 1000;
+
+async function loadSubGenres(supabase: any): Promise<any[]> {
+  const now = Date.now();
+  if (subGenreCache && (now - subGenreCache.ts) < SUB_GENRE_CACHE_TTL) {
+    return subGenreCache.data;
+  }
+  const { data } = await supabase
+    .from("genres")
+    .select("id, parent_id, keywords")
+    .not("parent_id", "is", null);
+  const result = data || [];
+  subGenreCache = { data: result, ts: now };
+  return result;
+}
+
+// Score-based detection: scan style prompt for sub-genre keywords.
+// Longer keywords score higher (more specific). Word boundaries get a bonus.
+function detectSubGenre(parentGenre: string, style: string, subGenres: any[]): string | null {
+  const lower = style.toLowerCase();
+  const candidates = subGenres.filter(sg => sg.parent_id === parentGenre);
+  let bestId: string | null = null;
+  let bestScore = 0;
+
+  for (const sg of candidates) {
+    if (!sg.keywords || !Array.isArray(sg.keywords)) continue;
+    let score = 0;
+
+    for (const kw of sg.keywords) {
+      const lk = kw.toLowerCase();
+      const idx = lower.indexOf(lk);
+      if (idx === -1) continue;
+
+      // Base score: keyword length (longer = more specific)
+      let kwScore = lk.length;
+
+      // Bonus for word boundary match (not a substring of a larger word)
+      const before = idx > 0 ? lower[idx - 1] : " ";
+      const after = idx + lk.length < lower.length ? lower[idx + lk.length] : " ";
+      if (/[\s,;.\-\/]/.test(before) && /[\s,;.\-\/]/.test(after)) kwScore += 5;
+
+      score += kwScore;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = sg.id;
+    }
+  }
+
+  return bestId;
+}
+
 serve(async (req) => {
   const cors = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -227,6 +283,13 @@ serve(async (req) => {
       );
     }
 
+    // ─── AUTO-DETECT SUB-GENRE FROM STYLE PROMPT ─────────────────────
+    const allSubGenres = await loadSubGenres(supabase);
+    const detectedSubGenre = detectSubGenre(genre, cleanStyle, allSubGenres);
+    if (detectedSubGenre) {
+      console.log(`Sub-genre detected: ${detectedSubGenre} (parent: ${genre}, style: "${cleanStyle.slice(0, 80)}")`);
+    }
+
     // Validate BPM
     const safeBpm = typeof bpm === "number" ? Math.max(0, Math.min(300, Math.round(bpm))) : 0;
 
@@ -303,7 +366,7 @@ serve(async (req) => {
       const beatInsert: Record<string, unknown> = {
         agent_id: agent.id,
         title: i === 0 ? cleanTitle : (cleanTitleV2 || `${cleanTitle} (v2)`),
-        genre, style: cleanStyle, model, bpm: safeBpm,
+        genre, sub_genre: detectedSubGenre, style: cleanStyle, model, bpm: safeBpm,
         instrumental: true,
         negative_tags: cleanNegTags,
         task_id: taskId, status: "generating",
@@ -351,7 +414,7 @@ serve(async (req) => {
         success: true,
         task_id: taskId,
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
-        beats: beatRecords.map((b) => ({ id: b.id, title: b.title, genre: b.genre, status: b.status, price: b.price })),
+        beats: beatRecords.map((b) => ({ id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre, status: b.status, price: b.price })),
         message: "Generating. Suno callbacks in ~30-60s. WAV conversion is automatic. Your key was used once and NOT stored.",
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }

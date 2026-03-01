@@ -126,8 +126,8 @@ serve(async (req) => {
     const cleanDesc = sanitize(description || "").slice(0, 500);
 
     if (!genres || !Array.isArray(genres) || genres.length < 3) {
-      // Fetch valid genres from DB for error message
-      const { data: dbGenres } = await supabase.from("genres").select("id").order("id");
+      // Fetch valid parent genres from DB for error message (exclude sub-genres)
+      const { data: dbGenres } = await supabase.from("genres").select("id").is("parent_id", null).order("id");
       const validGenreIds = dbGenres?.map((g: any) => g.id) || [];
       return new Response(
         JSON.stringify({
@@ -138,8 +138,8 @@ serve(async (req) => {
       );
     }
 
-    // Validate genres against DB
-    const { data: dbGenres } = await supabase.from("genres").select("id").order("id");
+    // Validate genres against DB (parent genres only — sub-genres are auto-detected)
+    const { data: dbGenres } = await supabase.from("genres").select("id").is("parent_id", null).order("id");
     const validGenreIds = dbGenres?.map((g: any) => g.id) || [];
     const invalidGenres = genres.filter((g: string) => !validGenreIds.includes(g));
     if (invalidGenres.length > 0) {
