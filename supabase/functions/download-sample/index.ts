@@ -12,7 +12,7 @@ function isAllowedAudioUrl(urlStr: string): boolean {
     const u = new URL(urlStr);
     if (u.protocol !== "https:") return false;
     const h = u.hostname.toLowerCase();
-    if (h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h === "[::1]") return false;
+    if (h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h === "[::1]" || h === "::1") return false;
     if (h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".localhost")) return false;
     if (h.startsWith("10.") || h.startsWith("192.168.")) return false;
     if (h.startsWith("172.")) {
@@ -27,11 +27,21 @@ function isAllowedAudioUrl(urlStr: string): boolean {
   }
 }
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-};
+const ALLOWED_ORIGINS = [
+  "https://musiclaw.app",
+  "https://www.musiclaw.app",
+  "https://musiclaw-app.vercel.app",
+];
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+  };
+}
 
 async function hmacVerify(
   payload: string,
@@ -53,7 +63,8 @@ async function hmacVerify(
 }
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const cors = getCorsHeaders(req);
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
 
   try {
     const supabase = createClient(
@@ -65,7 +76,7 @@ serve(async (req) => {
     if (!signingSecret) {
       return new Response(
         JSON.stringify({ error: "Server configuration error" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -76,7 +87,7 @@ serve(async (req) => {
     if (!token) {
       return new Response(
         JSON.stringify({ error: "Download token required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -84,7 +95,7 @@ serve(async (req) => {
     if (dotIndex === -1) {
       return new Response(
         JSON.stringify({ error: "Invalid token format" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -101,7 +112,7 @@ serve(async (req) => {
     if (!valid) {
       return new Response(
         JSON.stringify({ error: "Invalid download token" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -110,7 +121,7 @@ serve(async (req) => {
     if (parts.length < 4 || parts[0] !== "sample") {
       return new Response(
         JSON.stringify({ error: "Invalid token payload" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -122,7 +133,7 @@ serve(async (req) => {
     if (new Date(expiresAt) < new Date()) {
       return new Response(
         JSON.stringify({ error: "Download link has expired" }),
-        { status: 410, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 410, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -137,14 +148,14 @@ serve(async (req) => {
     if (!purchase) {
       return new Response(
         JSON.stringify({ error: "Purchase not found" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
     if (purchase.download_count >= 5) {
       return new Response(
         JSON.stringify({ error: "Maximum downloads reached (5)" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -158,7 +169,7 @@ serve(async (req) => {
     if (!sample) {
       return new Response(
         JSON.stringify({ error: "Sample not found" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -173,15 +184,23 @@ serve(async (req) => {
       console.error(`SSRF blocked: ${sample.audio_url}`);
       return new Response(
         JSON.stringify({ error: "Audio URL security check failed" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Increment download count
-    await supabase
-      .from("sample_purchases")
-      .update({ download_count: purchase.download_count + 1 })
-      .eq("id", purchase.id);
+    // Atomic download count increment (SQL-level to prevent race conditions)
+    await supabase.rpc("increment_download_count", {
+      p_table: "sample_purchases",
+      p_id: purchase.id,
+    }).then(async ({ error }) => {
+      if (error) {
+        // Fallback: conditional update (still safe — worst case is one extra download)
+        await supabase
+          .from("sample_purchases")
+          .update({ download_count: purchase.download_count + 1 })
+          .eq("id", purchase.id);
+      }
+    });
 
     // Build filename
     const title = beat?.title || "Sample";
@@ -197,7 +216,7 @@ serve(async (req) => {
     if (!audioRes.ok) {
       return new Response(
         JSON.stringify({ error: "Audio file unavailable" }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -206,14 +225,14 @@ serve(async (req) => {
         "Content-Type": "audio/mpeg",
         "Content-Disposition": `attachment; filename="${filename}"`,
         "Cache-Control": "private, no-store",
-        ...corsHeaders,
+        ...cors,
       },
     });
   } catch (err) {
     console.error("Download sample error:", err.message);
     return new Response(
       JSON.stringify({ error: "Download failed" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...cors, "Content-Type": "application/json" } }
     );
   }
 });

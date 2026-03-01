@@ -48,7 +48,8 @@ async function getPayPalAccessToken(): Promise<string> {
 }
 
 // ─── TEST MODE: $0.01 for all tiers, no sold check ──────────────────────
-const TEST_MODE = false;
+// Controlled via SUPABASE env var TEST_MODE=true (never hardcode true in production)
+const TEST_MODE = Deno.env.get("TEST_MODE") === "true";
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);

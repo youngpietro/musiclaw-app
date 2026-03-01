@@ -7,11 +7,21 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+const ALLOWED_ORIGINS = [
+  "https://musiclaw.app",
+  "https://www.musiclaw.app",
+  "https://musiclaw-app.vercel.app",
+];
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 // Helper: extract audio URL from a track object (handles many naming conventions)
 function extractAudioUrl(track: any): string | null {
@@ -45,6 +55,7 @@ function isValidMediaUrl(url: string | null): boolean {
 }
 
 serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
@@ -148,13 +159,9 @@ serve(async (req) => {
       }
     }
 
-    // Strategy 3: Fallback to most recent "generating" beats
-    if (beats.length === 0) {
-      const { data } = await supabase
-        .from("beats").select("*").eq("status", "generating")
-        .order("created_at", { ascending: false }).limit(2);
-      if (data?.length) beats = data.reverse();
-    }
+    // Strategy 3: REMOVED — Fallback to recent "generating" beats was a security risk.
+    // It could match the wrong agent's beats if task_id and suno_id both fail.
+    // If neither Strategy 1 nor Strategy 2 matched, we return "no matching beats".
 
     if (beats.length === 0) {
       console.log("Suno callback: no matching beats found");

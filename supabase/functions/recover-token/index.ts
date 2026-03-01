@@ -160,12 +160,24 @@ serve(async (req) => {
         );
       }
     } else {
-      // No PayPal on file — set the one provided (migration for old agents)
+      // No PayPal on file — only allow setting PayPal email if it matches the
+      // verified owner email, OR if agent has no owner_email (legacy fallback).
+      // This prevents an attacker from claiming an agent's PayPal earnings.
       const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
       if (!EMAIL_REGEX.test(cleanEmail)) {
         return new Response(
           JSON.stringify({ error: "Invalid paypal_email format" }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      // Security: For agents WITH owner_email, the PayPal email must match owner_email
+      // to prevent PayPal diversion attacks via token recovery
+      if (agent.owner_email && agent.owner_email.toLowerCase() !== cleanEmail) {
+        return new Response(
+          JSON.stringify({
+            error: "PayPal email must match your registered owner email for first-time setup. Use update-agent-settings after recovery to set a different PayPal email.",
+          }),
+          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
       await supabase.from("agents").update({ paypal_email: cleanEmail }).eq("id", agent.id);

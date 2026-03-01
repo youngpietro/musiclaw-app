@@ -42,6 +42,11 @@ async function getPayPalAccessToken(): Promise<string> {
   return data.access_token;
 }
 
+// HTML-escape dynamic values before interpolating into email HTML (prevents XSS)
+function htmlEscape(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 async function hmacSign(payload: string, secret: string): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -60,7 +65,8 @@ async function hmacSign(payload: string, secret: string): Promise<string> {
 }
 
 // ─── TEST MODE: Don't mark beat as sold after purchase ──────────────────
-const TEST_MODE = false;
+// Controlled via SUPABASE env var TEST_MODE=true (never hardcode true in production)
+const TEST_MODE = Deno.env.get("TEST_MODE") === "true";
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);
@@ -323,7 +329,7 @@ serve(async (req) => {
               payout_amount: payoutAmount,
             })
             .eq("id", purchase.id);
-          console.log(`Payout sent: $${payoutAmount.toFixed(2)} to ${sellerPaypal} (batch: ${batchId})`);
+          console.log(`Payout sent: $${payoutAmount.toFixed(2)} for purchase ${purchase.id} (batch: ${batchId})`);
         } else {
           console.error("PayPal payout failed:", JSON.stringify(payoutData));
           await supabase
@@ -348,8 +354,7 @@ serve(async (req) => {
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
     if (resendApiKey && sellerPaypal) {
       try {
-        const beatTitle = beat?.title || "Beat";
-        const buyerEmailDisplay = purchase.buyer_email || "a buyer";
+        const beatTitle = htmlEscape(beat?.title || "Beat");
         const tierLabel = purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track";
         await fetch("https://api.resend.com/emails", {
           method: "POST",
@@ -360,12 +365,12 @@ serve(async (req) => {
           body: JSON.stringify({
             from: "MusiClaw <noreply@contact.musiclaw.app>",
             to: [sellerPaypal],
-            subject: `Your beat "${beatTitle}" was sold! — MusiClaw`,
+            subject: `Your beat "${beat?.title || "Beat"}" was sold! — MusiClaw`,
             html: `
               <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
                 <h1 style="color:#a855f7;font-size:24px;margin:0 0 16px;">Beat Sold!</h1>
                 <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                  Your beat <strong>&ldquo;${beatTitle}&rdquo;</strong> was purchased (${tierLabel}) by <strong>${buyerEmailDisplay}</strong>.
+                  Your beat <strong>&ldquo;${beatTitle}&rdquo;</strong> was purchased (${tierLabel}).
                 </p>
                 <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
                   Earnings: <strong style="color:#22c55e;">$${payoutAmount.toFixed(2)}</strong> sent to your PayPal.
@@ -377,7 +382,7 @@ serve(async (req) => {
             `,
           }),
         });
-        console.log(`Sale notification sent to agent: ${sellerPaypal}`);
+        console.log(`Sale notification sent for purchase ${purchase.id}`);
       } catch (notifyErr) {
         console.error("Agent sale notification error:", notifyErr.message);
         // Non-fatal: purchase succeeded even if notification fails
@@ -389,7 +394,7 @@ serve(async (req) => {
     const recipientEmail = purchase.buyer_email || paypalPayerEmail;
     if (resendApiKey && recipientEmail) {
       try {
-        const beatTitle = beat?.title || "Beat";
+        const beatTitle = htmlEscape(beat?.title || "Beat");
         const emailRes = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {

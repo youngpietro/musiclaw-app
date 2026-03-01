@@ -22,7 +22,7 @@ function isAllowedAudioUrl(urlStr: string): boolean {
     if (u.protocol !== "https:") return false;
     const h = u.hostname.toLowerCase();
     // Block internal/private hostnames
-    if (h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h === "[::1]") return false;
+    if (h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h === "[::1]" || h === "::1") return false;
     if (h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".localhost")) return false;
     // Block private IP ranges (RFC 1918 + link-local)
     if (h.startsWith("10.") || h.startsWith("192.168.")) return false;
@@ -39,11 +39,21 @@ function isAllowedAudioUrl(urlStr: string): boolean {
   }
 }
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-};
+const ALLOWED_ORIGINS = [
+  "https://musiclaw.app",
+  "https://www.musiclaw.app",
+  "https://musiclaw-app.vercel.app",
+];
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+  };
+}
 
 async function hmacVerify(
   payload: string,
@@ -68,7 +78,8 @@ async function hmacVerify(
 }
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const cors = getCorsHeaders(req);
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
 
   if (req.method !== "GET") {
     return new Response("Method not allowed", { status: 405 });
@@ -253,7 +264,7 @@ serve(async (req) => {
         return new Response(zipData, {
           status: 200,
           headers: {
-            ...corsHeaders,
+            ...cors,
             "Content-Type": "application/zip",
             "Content-Disposition": `attachment; filename="${zipFilename}"`,
             "Cache-Control": "no-store, no-cache",
@@ -293,7 +304,7 @@ serve(async (req) => {
       return new Response(fileRes.body, {
         status: 200,
         headers: {
-          ...corsHeaders,
+          ...cors,
           "Content-Type": isWav ? "audio/wav" : "audio/mpeg",
           "Content-Disposition": `attachment; filename="${fileName}"`,
           "Cache-Control": "no-store, no-cache",
@@ -301,11 +312,19 @@ serve(async (req) => {
       });
     }
 
-    // ─── INCREMENT DOWNLOAD COUNT (only for JSON/track requests) ─────
-    await supabase
-      .from("purchases")
-      .update({ download_count: purchase.download_count + 1 })
-      .eq("id", purchaseId);
+    // ─── ATOMIC DOWNLOAD COUNT INCREMENT (SQL-level to prevent race conditions) ─────
+    await supabase.rpc("increment_download_count", {
+      p_table: "purchases",
+      p_id: purchaseId,
+    }).then(async ({ error }) => {
+      if (error) {
+        // Fallback: conditional update
+        await supabase
+          .from("purchases")
+          .update({ download_count: purchase.download_count + 1 })
+          .eq("id", purchaseId);
+      }
+    });
 
     // ═══════════════════════════════════════════════════════════════════
     //  STEMS TIER: Return JSON with proxied download URLs
@@ -313,11 +332,19 @@ serve(async (req) => {
     if (tier === "stems") {
       // Check if stems are available
       if (beat.stems_status !== "complete" || !beat.stems) {
-        // Undo download count increment (not a real download yet)
-        await supabase
-          .from("purchases")
-          .update({ download_count: purchase.download_count })
-          .eq("id", purchaseId);
+        // Undo download count increment (not a real download yet) — use RPC with negative
+        await supabase.rpc("increment_download_count", {
+          p_table: "purchases",
+          p_id: purchaseId,
+          p_delta: -1,
+        }).then(async ({ error }) => {
+          if (error) {
+            await supabase
+              .from("purchases")
+              .update({ download_count: purchase.download_count })
+              .eq("id", purchaseId);
+          }
+        });
 
         const isProcessing = beat.stems_status === "processing" || beat.wav_status === "processing";
         return new Response(
@@ -328,7 +355,7 @@ serve(async (req) => {
               : "Stems are not yet available for this beat. Please contact the seller.",
             retry_after: isProcessing ? 60 : null,
           }),
-          { status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          { status: 202, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
 
@@ -364,7 +391,7 @@ serve(async (req) => {
           stems: stemsData,
           beat_title: beat.title,
         }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -388,7 +415,7 @@ serve(async (req) => {
       return new Response(wavRes.body, {
         status: 200,
         headers: {
-          ...corsHeaders,
+          ...cors,
           "Content-Type": "audio/wav",
           "Content-Disposition": `attachment; filename="${wavFilename}"`,
           "Cache-Control": "no-store, no-cache",
@@ -400,7 +427,7 @@ serve(async (req) => {
     if (beat.wav_status === "processing") {
       return new Response(
         JSON.stringify({ error: "WAV file is being prepared. Please try again in 1-2 minutes." }),
-        { status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 202, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -419,7 +446,7 @@ serve(async (req) => {
       return new Response(audioRes.body, {
         status: 200,
         headers: {
-          ...corsHeaders,
+          ...cors,
           "Content-Type": "audio/mpeg",
           "Content-Disposition": `attachment; filename="${mp3Filename}"`,
           "Cache-Control": "no-store, no-cache",
@@ -430,7 +457,7 @@ serve(async (req) => {
     // WAV failed — this shouldn't happen with auto-WAV for new beats
     return new Response(
       JSON.stringify({ error: "WAV file is not available. Please contact support." }),
-      { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
     );
   } catch (err) {
     console.error("Download error:", err.message);

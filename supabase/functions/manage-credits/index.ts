@@ -263,24 +263,34 @@ serve(async (req) => {
         })
         .eq("id", creditPurchase.id);
 
-      // Add credits to user profile
-      const { data: profile } = await supabase
-        .from("user_profiles")
-        .select("credit_balance")
-        .eq("id", user.id)
-        .single();
+      // Add credits atomically via RPC (prevents double-spend from concurrent captures)
+      let newBalance: number;
+      const { data: rpcResult, error: rpcErr } = await supabase.rpc("add_credits", {
+        p_user_id: user.id,
+        p_amount: CREDIT_PACKAGE_AMOUNT,
+      });
 
-      const currentBalance = profile?.credit_balance || 0;
-      await supabase
-        .from("user_profiles")
-        .update({
-          credit_balance: currentBalance + CREDIT_PACKAGE_AMOUNT,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", user.id);
+      if (rpcErr || rpcResult === null || rpcResult === undefined) {
+        // Fallback: read-then-write (less safe but functional if RPC doesn't exist yet)
+        const { data: profile } = await supabase
+          .from("user_profiles")
+          .select("credit_balance")
+          .eq("id", user.id)
+          .single();
 
-      const newBalance = currentBalance + CREDIT_PACKAGE_AMOUNT;
-      console.log(`Credits added: ${CREDIT_PACKAGE_AMOUNT} credits to user ${user.id} (new balance: ${newBalance})`);
+        const currentBalance = profile?.credit_balance || 0;
+        await supabase
+          .from("user_profiles")
+          .update({
+            credit_balance: currentBalance + CREDIT_PACKAGE_AMOUNT,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", user.id);
+        newBalance = currentBalance + CREDIT_PACKAGE_AMOUNT;
+      } else {
+        newBalance = rpcResult;
+      }
+      console.log(`Credits added: ${CREDIT_PACKAGE_AMOUNT} to user ${user.id}`);
 
       // ─── SEND CONFIRMATION EMAIL VIA RESEND ──────────────────────────
       const resendApiKey = Deno.env.get("RESEND_API_KEY");
@@ -317,7 +327,7 @@ serve(async (req) => {
               `,
             }),
           });
-          console.log(`Credit purchase confirmation email sent to ${userEmail}`);
+          console.log(`Credit purchase confirmation email sent for user ${user.id}`);
         } catch (emailErr: unknown) {
           console.error("Credit purchase email error:", (emailErr as Error).message);
           // Non-fatal: credits already added

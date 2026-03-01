@@ -40,6 +40,11 @@ async function hmacSign(payload: string, secret: string): Promise<string> {
   return b64;
 }
 
+// HTML-escape dynamic values before interpolating into email HTML (prevents XSS)
+function htmlEscape(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 // Credit value: 1 credit = $0.05, agent gets 80% = $0.04
 const CREDIT_VALUE_USD = 0.05;
 const AGENT_SHARE = 0.8;
@@ -138,15 +143,33 @@ serve(async (req) => {
       .single();
 
     if (existingPurchase) {
-      // Already purchased — return existing download info
-      const downloadUrl = `${supabaseUrl}/functions/v1/download-sample?token=${encodeURIComponent(existingPurchase.download_token)}`;
+      // Already purchased — check if token is still valid, regenerate if expired
+      const tokenExpired = !existingPurchase.download_expires || new Date(existingPurchase.download_expires) < new Date();
+      let dlToken = existingPurchase.download_token;
+      let dlExpires = existingPurchase.download_expires;
+
+      if (tokenExpired) {
+        // Regenerate token
+        const newExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        const newPayload = `sample:${sample.id}:${user.id}:${newExpires.toISOString()}`;
+        const newSig = await hmacSign(newPayload, signingSecret);
+        dlToken = btoa(newPayload).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") + "." + newSig;
+        dlExpires = newExpires.toISOString();
+        await supabase.from("sample_purchases").update({
+          download_token: dlToken,
+          download_expires: dlExpires,
+          download_count: 0,
+        }).eq("id", existingPurchase.id);
+      }
+
+      const downloadUrl = `${supabaseUrl}/functions/v1/download-sample?token=${encodeURIComponent(dlToken)}`;
       return new Response(
         JSON.stringify({
           success: true,
           already_purchased: true,
           download_url: downloadUrl,
-          download_token: existingPurchase.download_token,
-          download_expires: existingPurchase.download_expires,
+          download_token: dlToken,
+          download_expires: dlExpires,
           stem_type: sample.stem_type,
         }),
         { headers: { ...cors, "Content-Type": "application/json" } }
@@ -186,24 +209,42 @@ serve(async (req) => {
       );
     }
 
-    // ─── ATOMIC PURCHASE: deduct credits + mark sample + record ─────
-    // Deduct credits (use conditional update to prevent race conditions)
-    const { data: updatedProfile, error: creditErr } = await supabase
-      .from("user_profiles")
-      .update({
-        credit_balance: currentBalance - sample.credit_price,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", user.id)
-      .gte("credit_balance", sample.credit_price)
-      .select("credit_balance")
-      .single();
+    // ─── ATOMIC CREDIT DEDUCTION via RPC ─────────────────────────────
+    // Uses SQL-level subtraction to prevent race conditions from concurrent purchases
+    const { data: deductResult, error: creditErr } = await supabase.rpc("deduct_credits", {
+      p_user_id: user.id,
+      p_amount: sample.credit_price,
+    });
 
-    if (creditErr || !updatedProfile) {
-      return new Response(
-        JSON.stringify({ error: "Failed to deduct credits. Please try again." }),
-        { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
-      );
+    // Fallback: if RPC doesn't exist, use conditional update
+    let newBalance: number;
+    if (creditErr) {
+      const { data: updatedProfile, error: fallbackErr } = await supabase
+        .from("user_profiles")
+        .update({
+          credit_balance: currentBalance - sample.credit_price,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", user.id)
+        .gte("credit_balance", sample.credit_price)
+        .select("credit_balance")
+        .single();
+
+      if (fallbackErr || !updatedProfile) {
+        return new Response(
+          JSON.stringify({ error: "Failed to deduct credits. Please try again." }),
+          { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      newBalance = updatedProfile.credit_balance;
+    } else {
+      newBalance = deductResult;
+      if (newBalance === null || newBalance === undefined || newBalance < 0) {
+        return new Response(
+          JSON.stringify({ error: "Failed to deduct credits. Please try again." }),
+          { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
     }
 
     // Calculate agent earning
@@ -234,29 +275,26 @@ serve(async (req) => {
       .single();
 
     if (beat) {
-      await supabase.rpc("increment_agent_sample_earnings", {
+      const { error: rpcErr } = await supabase.rpc("increment_agent_sample_earnings", {
         p_agent_id: beat.agent_id,
         p_amount: agentEarning,
-      }).then(({ error }) => {
-        if (error) {
-          // Fallback: direct update
-          supabase
-            .from("agents")
-            .select("pending_sample_earnings")
-            .eq("id", beat.agent_id)
-            .single()
-            .then(({ data: agent }) => {
-              if (agent) {
-                supabase
-                  .from("agents")
-                  .update({
-                    pending_sample_earnings: (parseFloat(agent.pending_sample_earnings) || 0) + agentEarning,
-                  })
-                  .eq("id", beat.agent_id);
-              }
-            });
-        }
       });
+      if (rpcErr) {
+        // Fallback: direct update (fully awaited)
+        const { data: agentData } = await supabase
+          .from("agents")
+          .select("pending_sample_earnings")
+          .eq("id", beat.agent_id)
+          .single();
+        if (agentData) {
+          await supabase
+            .from("agents")
+            .update({
+              pending_sample_earnings: (parseFloat(agentData.pending_sample_earnings) || 0) + agentEarning,
+            })
+            .eq("id", beat.agent_id);
+        }
+      }
     }
 
     const downloadUrl = `${supabaseUrl}/functions/v1/download-sample?token=${encodeURIComponent(downloadToken)}`;
@@ -268,9 +306,9 @@ serve(async (req) => {
     const userEmail = user.email;
     if (resendApiKey && userEmail) {
       try {
-        const beatTitle = beat?.title || "Beat";
-        const stemLabel = (sample.stem_type || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
-        const genre = beat?.genre || "";
+        const beatTitle = htmlEscape(beat?.title || "Beat");
+        const stemLabel = htmlEscape((sample.stem_type || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()));
+        const genre = htmlEscape(beat?.genre || "");
 
         await fetch("https://api.resend.com/emails", {
           method: "POST",
@@ -305,7 +343,7 @@ serve(async (req) => {
             `,
           }),
         });
-        console.log(`Sample purchase email sent to ${userEmail}`);
+        console.log(`Sample purchase email sent for sample ${sample.id}`);
       } catch (emailErr: unknown) {
         console.error("Sample purchase email error:", (emailErr as Error).message);
         // Non-fatal: purchase succeeded even if email fails
@@ -318,7 +356,7 @@ serve(async (req) => {
         download_url: downloadUrl,
         download_token: downloadToken,
         download_expires: expiresAt.toISOString(),
-        new_balance: updatedProfile.credit_balance,
+        new_balance: newBalance,
         stem_type: sample.stem_type,
         expires_in: "24 hours",
         max_downloads: 5,

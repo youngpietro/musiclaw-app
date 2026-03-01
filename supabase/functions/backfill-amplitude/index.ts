@@ -26,16 +26,32 @@ function shannonEntropy(buf: Uint8Array): number {
 }
 
 serve(async (req) => {
+  const ALLOWED_ORIGINS = [
+    "https://musiclaw.app",
+    "https://www.musiclaw.app",
+    "https://musiclaw-app.vercel.app",
+  ];
+  const origin = req.headers.get("origin") || "";
+  const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   };
 
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
+  // ─── AUTHENTICATION: Require service_role key as Bearer token ────────
+  const authHeader = req.headers.get("authorization") || "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  if (!authHeader.startsWith("Bearer ") || authHeader.slice(7) !== serviceKey) {
+    return new Response(
+      JSON.stringify({ error: "Unauthorized" }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
   try {
     const url = new URL(req.url);
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const batchSize = Math.min(parseInt(url.searchParams.get("batch") || "50", 10), 200);
     const dryRun = url.searchParams.get("dry_run") === "true";
     const SILENCE_ENTROPY = 7.5; // Silent < 7.5, real audio > 7.5

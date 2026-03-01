@@ -161,7 +161,7 @@ serve(async (req) => {
         );
       }
 
-      console.log(`Verification code sent to ${normalizedEmail}`);
+      console.log(`Verification code sent successfully`);
       return new Response(
         JSON.stringify({ success: true, message: "Verification code sent to your email." }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
@@ -225,7 +225,7 @@ serve(async (req) => {
         .update({ verified: true })
         .eq("id", verification.id);
 
-      console.log(`Email verified: ${normalizedEmail}`);
+      console.log(`Email verified successfully`);
       return new Response(
         JSON.stringify({ success: true, verified: true }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
