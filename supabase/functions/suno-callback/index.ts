@@ -263,7 +263,7 @@ serve(async (req) => {
                   body: JSON.stringify({
                     taskId: b.task_id,
                     audioId: b.suno_id,
-                    callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${callbackSecret}&beat_id=${b.id}`,
+                    callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${encodeURIComponent(callbackSecret || "")}&beat_id=${b.id}`,
                   }),
                 });
 

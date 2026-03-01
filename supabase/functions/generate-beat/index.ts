@@ -263,7 +263,7 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET") || "";
     const callbackUrl = callbackSecret
-      ? `${supabaseUrl}/functions/v1/suno-callback?secret=${callbackSecret}`
+      ? `${supabaseUrl}/functions/v1/suno-callback?secret=${encodeURIComponent(callbackSecret)}`
       : `${supabaseUrl}/functions/v1/suno-callback`;
 
     // ─── CALL SUNO API ─────────────────────────────────────────────────
