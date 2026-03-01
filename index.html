@@ -1070,7 +1070,7 @@ function AuthModal({ onClose, auth }) {
         h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},"or"),
         h("div",{style:{flex:1,height:"1px",background:"rgba(255,255,255,0.06)"}})
       ),
-      h("button",{onClick:()=>auth.signInWithGoogle(),style:{width:"100%",padding:"12px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}},"🔷 Continue with Google")
+      h("button",{onClick:()=>auth.signInWithGoogle(),style:{width:"100%",padding:"12px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}},h("img",{src:"https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg",alt:"Google",style:{width:"18px",height:"18px"}})," Continue with Google")
     )
   );
 }
