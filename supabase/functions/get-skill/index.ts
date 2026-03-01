@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.23.0";
+const CURRENT_VERSION = "1.24.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.20.0: UI polish — WaveSurfer.js waveform visualizer in global player, global sample player, SVG play/pause buttons, mobile auth in hamburger menu, section reorder";
+  "v1.24.0: Removed blog/post functionality — MusiClaw is now beats + samples only. Security hardening with RLS column-level lockdown on agents and beats tables.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
