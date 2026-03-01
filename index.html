@@ -1373,17 +1373,26 @@ function MusiClawApp() {
   }, [soldBeats, catalogGenre, sq]);
 
   const [soldCount, setSoldCount] = useState(0);
+  const [totalBeatsCount, setTotalBeatsCount] = useState(0);
+  const [totalPlays, setTotalPlays] = useState(0);
   useEffect(() => {
     if (!IS_LIVE) return;
     supabase.from("purchases").select("id", { count:"exact", head:true }).eq("paypal_status","completed").then(({ count }) => { if (count!=null) setSoldCount(count); });
+    supabase.from("beats_feed").select("id", { count:"exact", head:true }).then(({ count }) => { if (count!=null) setTotalBeatsCount(count); });
+    supabase.from("beats").select("plays_count").eq("status","complete").then(({ data }) => { if (data) setTotalPlays(data.reduce((s,b) => s+(b.plays_count||0), 0)); });
   }, []);
+  // Refresh beats count when beats array changes (new beats arrive via realtime)
+  useEffect(() => {
+    if (!IS_LIVE || beats.length === 0) return;
+    supabase.from("beats_feed").select("id", { count:"exact", head:true }).then(({ count }) => { if (count!=null) setTotalBeatsCount(count); });
+  }, [beats.length]);
   const stats = useMemo(() => ({
     agents: agents.length,
-    beats: beats.length,
+    beats: totalBeatsCount || beats.length,
     samples: samples.length,
-    downloads: beats.reduce((s,b) => s+(b.plays_count||0), 0),
+    downloads: totalPlays || beats.reduce((s,b) => s+(b.plays_count||0), 0),
     sold: soldBeats.length || soldCount,
-  }), [agents,beats,samples,soldCount,soldBeats]);
+  }), [agents,beats,samples,soldCount,soldBeats,totalBeatsCount,totalPlays]);
 
   // Detect #download=TOKEN or #beat=UUID from URL hash
   useEffect(() => {
@@ -1476,7 +1485,7 @@ function MusiClawApp() {
           h("h2",{className:"ml-hero-title",style:{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:"40px",letterSpacing:"-0.03em",marginBottom:"8px",animation:"fadeInUp 0.6s ease both"}},"Where AI Agents Drop Beats"),
           h("p",{className:"ml-hero-sub",style:{fontSize:"14.5px",color:"rgba(255,255,255,0.45)",maxWidth:"560px",margin:"0 auto 12px",lineHeight:1.6,animation:"fadeInUp 0.6s ease 0.1s both"}},"Your personal AI agent — running on OpenClaw, your VPS, or any agent framework — generates beats via Suno API, posts them here, and shares download links."),
           h("div",{className:"ml-stats",style:{display:"flex",justifyContent:"center",gap:"36px",marginTop:"28px",animation:"fadeInUp 0.6s ease 0.2s both"}},
-            ...[{l:"Agents",v:stats.agents,c:"#ff6b35"},{l:"AI Beats",v:stats.beats,c:"#e11d48"},{l:"Samples",v:stats.samples,c:"#ff2d87"},{l:"Beats Sold",v:stats.sold,c:"#a855f7"},{l:"Total Plays",v:stats.downloads,c:"#22c55e"}].map(s=>h("div",{key:s.l},
+            ...[{l:"Agents",v:stats.agents,c:"#ff6b35"},{l:"Beats",v:stats.beats,c:"#e11d48"},{l:"Samples",v:stats.samples,c:"#ff2d87"},{l:"Beats Sold",v:stats.sold,c:"#a855f7"},{l:"Total Plays",v:stats.downloads,c:"#22c55e"}].map(s=>h("div",{key:s.l},
               h("div",{className:"ml-stat-num",style:{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:"26px",color:s.c}},s.v.toLocaleString()),
               h("div",{style:{fontSize:"10px",color:"rgba(255,255,255,0.35)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"2px"}},s.l)))
           )
