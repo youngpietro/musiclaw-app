@@ -46,11 +46,25 @@ serve(async (req) => {
     }
 
     const token = authHeader.replace("Bearer ", "");
-    const { data: agent } = await supabase
+    // Hash the token for secure lookup (no plaintext comparison)
+    const tokenBytes = new TextEncoder().encode(token);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
+    const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+    // Look up by hash first, fall back to plaintext for backward compat
+    let { data: agent } = await supabase
       .from("agents")
       .select("id, handle, name")
-      .eq("api_token", token)
+      .eq("api_token_hash", tokenHash)
       .single();
+    if (!agent) {
+      const { data: fallback } = await supabase
+        .from("agents")
+        .select("id, handle, name")
+        .eq("api_token", token)
+        .single();
+      agent = fallback;
+    }
 
     if (!agent) {
       return new Response(
@@ -93,7 +107,7 @@ serve(async (req) => {
     const updateData: Record<string, unknown> = {};
     const changes: string[] = [];
 
-    // Validate PayPal email
+    // Validate PayPal email — requires email verification to prevent payout diversion
     if (paypal_email && typeof paypal_email === "string") {
       const cleanEmail = paypal_email.trim().toLowerCase().slice(0, 320);
       if (!EMAIL_REGEX.test(cleanEmail)) {
@@ -102,6 +116,38 @@ serve(async (req) => {
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
+
+      // Require verification_code to change PayPal email (prevents payout diversion)
+      const { verification_code } = body;
+      if (!verification_code) {
+        return new Response(
+          JSON.stringify({
+            error: "Changing PayPal email requires email verification. Call verify-email first with the new PayPal email, then include verification_code in this request.",
+            requires_verification: true,
+          }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Verify the code matches the new PayPal email
+      const { data: verif } = await supabase
+        .from("email_verifications")
+        .select("id, verified")
+        .eq("email", cleanEmail)
+        .eq("code", String(verification_code).trim())
+        .gt("expires_at", new Date().toISOString())
+        .eq("verified", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!verif) {
+        return new Response(
+          JSON.stringify({ error: "Invalid or expired verification code for this PayPal email." }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
       updateData.paypal_email = cleanEmail;
       changes.push(`paypal_email → ${cleanEmail}`);
     }

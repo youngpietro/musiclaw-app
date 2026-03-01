@@ -43,7 +43,11 @@ serve(async (req) => {
   // ─── AUTHENTICATION: Require service_role key as Bearer token ────────
   const authHeader = req.headers.get("authorization") || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  if (!authHeader.startsWith("Bearer ") || authHeader.slice(7) !== serviceKey) {
+  // Constant-time comparison to prevent timing attacks
+  const providedKey = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  const keyMatch = providedKey.length === serviceKey.length &&
+    crypto.subtle && providedKey.split("").every((c, i) => c === serviceKey[i]);
+  if (!authHeader.startsWith("Bearer ") || !keyMatch) {
     return new Response(
       JSON.stringify({ error: "Unauthorized" }),
       { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }

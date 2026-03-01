@@ -96,8 +96,10 @@ serve(async (req) => {
         );
       }
 
-      // Generate 6-digit code
-      const verifyCode = Math.floor(100000 + Math.random() * 900000).toString();
+      // Generate 6-digit code using cryptographic RNG
+      const randomBytes = new Uint32Array(1);
+      crypto.getRandomValues(randomBytes);
+      const verifyCode = (100000 + (randomBytes[0] % 900000)).toString();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
 
       // Store in DB

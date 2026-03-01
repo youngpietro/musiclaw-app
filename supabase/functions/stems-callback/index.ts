@@ -43,7 +43,8 @@ serve(async (req) => {
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    const providedSecret = url.searchParams.get("secret") || "";
+    // Check header first (preferred), fall back to query param (legacy)
+    const providedSecret = req.headers.get("x-callback-secret") || url.searchParams.get("secret") || "";
     if (providedSecret !== expectedSecret) {
       console.warn("Stems callback: invalid secret");
       return new Response(

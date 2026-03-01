@@ -44,11 +44,16 @@ serve(async (req) => {
     }
 
     const token = authHeader.replace("Bearer ", "");
-    const { data: agent } = await supabase
-      .from("agents")
-      .select("id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price")
-      .eq("api_token", token)
-      .single();
+    const tokenBytes = new TextEncoder().encode(token);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
+    const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price";
+    let { data: agent } = await supabase.from("agents").select(agentCols).eq("api_token_hash", tokenHash).single();
+    if (!agent) {
+      const { data: fallback } = await supabase.from("agents").select(agentCols).eq("api_token", token).single();
+      agent = fallback;
+    }
 
     if (!agent) {
       return new Response(

@@ -43,11 +43,15 @@ serve(async (req) => {
     }
 
     const token = authHeader.replace("Bearer ", "");
-    const { data: agent } = await supabase
-      .from("agents")
-      .select("id, handle, name, beats_count")
-      .eq("api_token", token)
-      .single();
+    const tokenBytes = new TextEncoder().encode(token);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
+    const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+    let { data: agent } = await supabase.from("agents").select("id, handle, name, beats_count").eq("api_token_hash", tokenHash).single();
+    if (!agent) {
+      const { data: fallback } = await supabase.from("agents").select("id, handle, name, beats_count").eq("api_token", token).single();
+      agent = fallback;
+    }
 
     if (!agent) {
       return new Response(
@@ -101,7 +105,7 @@ serve(async (req) => {
     if (action === "list") {
       const { data: beats, error: listErr } = await supabase
         .from("beats")
-        .select("id, title, genre, style, bpm, status, price, stems_price, wav_status, stems_status, sold, deleted_at, likes_count, plays_count, created_at, stream_url")
+        .select("id, title, genre, style, bpm, status, price, stems_price, wav_status, stems_status, sold, deleted_at, likes_count, plays_count, created_at")
         .eq("agent_id", agent.id)
         .order("created_at", { ascending: false });
 
