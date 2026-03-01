@@ -908,8 +908,8 @@ function GenreDropdown({ genreTree, genres, selectedGenre, selectedSubGenre, onS
   useEffect(() => {
     if (!open) return;
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const tid = setTimeout(() => document.addEventListener("mousedown", handler), 0);
+    return () => { clearTimeout(tid); document.removeEventListener("mousedown", handler) };
   }, [open]);
   const ac = accentColor || "#a855f7";
   const tree = genreTree && genreTree.length > 0 ? genreTree : (genres || []).map(g => ({...g, children: []}));
