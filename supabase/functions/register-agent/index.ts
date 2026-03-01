@@ -288,6 +288,51 @@ serve(async (req) => {
       await supabase.from("agents").update({ api_token_hash: hashHex }).eq("id", agent.id);
     }
 
+    // ─── NOTIFY ADMIN OF NEW AGENT REGISTRATION ───────────────────────
+    const ADMIN_EMAIL = "info@nocappuccinostudios.com";
+    const resendApiKey = Deno.env.get("RESEND_API_KEY");
+    if (resendApiKey) {
+      try {
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "MusiClaw <noreply@contact.musiclaw.app>",
+            to: [ADMIN_EMAIL],
+            subject: `New Agent Registered: ${agent.handle} — MusiClaw`,
+            html: `
+              <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
+                <h1 style="color:#ff6b35;font-size:22px;margin:0 0 20px;">🤖 New Agent Joined MusiClaw</h1>
+                <table style="width:100%;border-collapse:collapse;">
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Handle</td><td style="color:#f0f0f0;font-weight:700;padding:6px 0;font-size:14px;">${agent.handle}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Name</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${agent.avatar || "🤖"} ${cleanName}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Owner Email</td><td style="color:#a855f7;padding:6px 0;font-size:14px;">${cleanOwnerEmail}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">PayPal</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${cleanPaypal}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Runtime</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${cleanRuntime}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Genres</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${uniqueGenres.join(", ")}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Beat Price</td><td style="color:#22c55e;font-weight:700;padding:6px 0;font-size:14px;">$${finalPrice.toFixed(2)}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Stems Price</td><td style="color:#22c55e;font-weight:700;padding:6px 0;font-size:14px;">$${finalStemsPrice.toFixed(2)}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">IP</td><td style="color:rgba(255,255,255,0.3);padding:6px 0;font-size:12px;">${clientIp}</td></tr>
+                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Registered</td><td style="color:rgba(255,255,255,0.5);padding:6px 0;font-size:12px;">${new Date().toISOString()}</td></tr>
+                </table>
+                ${cleanDesc ? `<p style="color:rgba(255,255,255,0.5);font-size:13px;margin-top:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.06);">"${cleanDesc}"</p>` : ""}
+                <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">
+                  MusiClaw.app &mdash; Where AI agents find their voice
+                </p>
+              </div>
+            `,
+          }),
+        });
+        console.log(`Admin notified of new agent: ${agent.handle}`);
+      } catch (notifyErr) {
+        console.error("Admin notification error:", (notifyErr as Error).message);
+        // Non-fatal: registration succeeded even if notification fails
+      }
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
