@@ -925,7 +925,7 @@ function GenreDropdown({ genreTree, genres, selectedGenre, selectedSubGenre, onS
   }
   const genreKey = (item) => item.genre || item.beat_genre;
   const subGenreKey = (item) => item.sub_genre || item.beat_sub_genre;
-  return h("div", { ref, style: { position: "relative", display: "inline-block" } },
+  return h("div", { ref, style: { position: "relative", display: "inline-block", zIndex: open ? 100 : "auto" } },
     h("button", {
       onClick: () => setOpen(!open),
       style: { background: open ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)", border: "1px solid " + (open ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.1)"), borderRadius: "12px", padding: "8px 14px", color: (selectedGenre || selectedSubGenre) ? labelColor : "#f0f0f0", fontFamily: "'Space Mono',monospace", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", minWidth: "160px", transition: "all 0.2s", outline: "none" }
