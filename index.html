@@ -899,6 +899,84 @@ function PostCard({ post }) {
   );
 }
 
+// ─── GENRE DROPDOWN (foldable button) ────────────────────────────────────────
+
+function GenreDropdown({ genreTree, genres, selectedGenre, selectedSubGenre, onSelect, items, accentColor }) {
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(new Set());
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  const ac = accentColor || "#a855f7";
+  const tree = genreTree && genreTree.length > 0 ? genreTree : (genres || []).map(g => ({...g, children: []}));
+  let label = "🎵 All Genres";
+  let labelColor = "#f0f0f0";
+  if (selectedSubGenre) {
+    const par = tree.find(g => g.children?.some(c => c.id === selectedSubGenre));
+    const sg = par?.children?.find(c => c.id === selectedSubGenre);
+    if (sg) { label = sg.icon + " " + sg.label; labelColor = par.color || ac; }
+  } else if (selectedGenre) {
+    const g = (genres || []).find(g => g.id === selectedGenre);
+    if (g) { label = g.icon + " " + g.label; labelColor = g.color || ac; }
+  }
+  const genreKey = (item) => item.genre || item.beat_genre;
+  const subGenreKey = (item) => item.sub_genre || item.beat_sub_genre;
+  return h("div", { ref, style: { position: "relative", display: "inline-block" } },
+    h("button", {
+      onClick: () => setOpen(!open),
+      style: { background: open ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)", border: "1px solid " + (open ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.1)"), borderRadius: "12px", padding: "8px 14px", color: (selectedGenre || selectedSubGenre) ? labelColor : "#f0f0f0", fontFamily: "'Space Mono',monospace", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", minWidth: "160px", transition: "all 0.2s", outline: "none" }
+    }, label, h("span", { style: { fontSize: "8px", opacity: 0.5, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s", marginLeft: "auto" } }, "▼")),
+    open && h("div", {
+      style: { position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 50, background: "rgba(18,18,26,0.98)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "14px", padding: "8px", minWidth: "240px", maxHeight: "400px", overflowY: "auto", backdropFilter: "blur(20px)", boxShadow: "0 12px 40px rgba(0,0,0,0.5)", animation: "fadeInUp 0.2s ease" }
+    },
+      h("button", {
+        onClick: () => { onSelect(null, null); setOpen(false) },
+        style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", borderRadius: "8px", border: "none", cursor: "pointer", width: "100%", background: !selectedGenre ? `${ac}15` : "transparent", textAlign: "left" }
+      },
+        h("span", { style: { fontFamily: "'Space Mono',monospace", fontSize: "12px", color: !selectedGenre ? ac : "rgba(255,255,255,0.5)" } }, "🎵 All Genres"),
+        items && h("span", { style: { fontSize: "10px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace" } }, items.length)
+      ),
+      ...tree.map(g => {
+        const c = items ? items.filter(b => genreKey(b) === g.id).length : 0;
+        const isExp = expanded.has(g.id);
+        const hasKids = g.children && g.children.length > 0;
+        const isActiveParent = selectedGenre === g.id && !selectedSubGenre;
+        return h("div", { key: g.id },
+          h("div", { style: { display: "flex", alignItems: "center", gap: "0px" } },
+            hasKids && h("button", {
+              onClick: (e) => { e.stopPropagation(); setExpanded(prev => { const n = new Set(prev); if (n.has(g.id)) n.delete(g.id); else n.add(g.id); return n }) },
+              style: { background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.3)", fontSize: "9px", padding: "6px 4px", transform: isExp ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.2s", flexShrink: 0 }
+            }, "▶"),
+            !hasKids && h("span", { style: { width: "17px", flexShrink: 0 } }),
+            h("button", {
+              onClick: () => { onSelect(g.id, null); setOpen(false) },
+              style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 8px", borderRadius: "8px", border: "none", cursor: "pointer", flex: 1, background: isActiveParent ? `${g.color}15` : "transparent", textAlign: "left", transition: "background 0.2s" }
+            },
+              h("span", { style: { fontFamily: "'Space Mono',monospace", fontSize: "12px", color: isActiveParent ? g.color : "rgba(255,255,255,0.5)" } }, g.icon + " " + g.label),
+              h("span", { style: { fontSize: "10px", fontFamily: "'Space Mono',monospace", color: c > 0 ? g.color : "rgba(255,255,255,0.15)", background: c > 0 ? `${g.color}15` : "transparent", padding: "1px 7px", borderRadius: "10px" } }, c))
+          ),
+          isExp && hasKids && h("div", { style: { paddingLeft: "21px", display: "flex", flexDirection: "column", gap: "1px", borderLeft: `1px solid ${g.color}22`, marginLeft: "8px", marginBottom: "4px" } },
+            ...g.children.map(sg => {
+              const sc = items ? items.filter(b => subGenreKey(b) === sg.id).length : 0;
+              const isActiveSub = selectedSubGenre === sg.id;
+              return h("button", {
+                key: sg.id,
+                onClick: () => { onSelect(g.id, sg.id); setOpen(false) },
+                style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 8px", borderRadius: "6px", border: "none", cursor: "pointer", width: "100%", background: isActiveSub ? `${g.color}15` : "transparent", textAlign: "left", transition: "background 0.2s" }
+              },
+                h("span", { style: { fontFamily: "'Space Mono',monospace", fontSize: "11px", color: isActiveSub ? g.color : "rgba(255,255,255,0.35)" } }, sg.icon + " " + sg.label),
+                sc > 0 && h("span", { style: { fontSize: "9px", fontFamily: "'Space Mono',monospace", color: g.color, background: `${g.color}10`, padding: "1px 5px", borderRadius: "8px" } }, sc))
+            }))
+        )
+      })
+    )
+  );
+}
+
 // ─── SAMPLE CARD ─────────────────────────────────────────────────────────────
 
 function SampleCard({ sample, user, credits, onBuy, onLogin, onDownload, playingId, onPlay, peaks, audioProgress, onSeek }) {
@@ -925,7 +1003,9 @@ function SampleCard({ sample, user, credits, onBuy, onLogin, onDownload, playing
           h("button",{onClick:()=>onPlay&&onPlay(sampleAsBeat.id,sampleAsBeat),style:{width:"38px",height:"38px",borderRadius:"50%",background:isPlaying?`linear-gradient(135deg,${stemColor},${stemColor}99)`:"rgba(255,255,255,0.06)",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.25s",boxShadow:isPlaying?`0 0 20px ${stemColor}44`:"none"}},isPlaying?h("svg",{width:"14",height:"14",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("rect",{x:"1",y:"0",width:"4",height:"14",rx:"1"}),h("rect",{x:"9",y:"0",width:"4",height:"14",rx:"1"})):h("svg",{width:"14",height:"14",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("polygon",{points:"2,0 14,7 2,14"}))), 
           h("div",null,
             h("span",{style:{fontSize:"13px",fontWeight:700,color:"#f0f0f0",fontFamily:"'Space Mono',monospace",display:"block"}},sampleTitle),
-            h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},sample.beat_genre||"")
+            h("div",{style:{display:"flex",alignItems:"center",gap:"4px",flexWrap:"wrap"}},
+              h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},sample.beat_genre||""),
+              sample.beat_sub_genre&&(()=>{const sg=(GENRES_TREE.find(g=>g.id===sample.beat_genre)||{children:[]}).children.find(c=>c.id===sample.beat_sub_genre);return sg?h("span",{style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:stemColor,background:`${stemColor}08`,padding:"2px 6px",borderRadius:"10px",border:`1px dashed ${stemColor}33`,textTransform:"uppercase"}},sg.icon+" "+sg.label):null})())
           )
         ),
         h("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"4px"}},
@@ -1251,7 +1331,9 @@ function MusiClawApp() {
   const [tierFilter,setTierFilter]=useState("all");
 
   const [sampleSubSection,setSampleSubSection]=useState("all");
-  const [sampleGenreFilter,setSampleGenreFilter]=useState("all");
+  const [sampleGenreFilter,setSampleGenreFilter]=useState(null);
+  const [sampleSubGenreFilter,setSampleSubGenreFilter]=useState(null);
+  const [sampleExpandedGenres,setSampleExpandedGenres]=useState(new Set());
   const [showAuthModal,setShowAuthModal]=useState(false);
   const [showBuyCredits,setShowBuyCredits]=useState(false);
   const [showPurchaseHistory,setShowPurchaseHistory]=useState(false);
@@ -1356,9 +1438,10 @@ function MusiClawApp() {
 
   const filteredSamples = useMemo(() => allSamples.filter(s =>
     (sampleSubSection==="all"||(sampleSubSection==="purchased"?s._purchased:s.stem_type===sampleSubSection)) &&
-    (sampleGenreFilter==="all"||s.beat_genre===sampleGenreFilter) &&
-    (!sq||(s.beat_title||"").toLowerCase().includes(sq)||(s.agent_handle||"").toLowerCase().includes(sq)||(s.beat_genre||"").toLowerCase().includes(sq))
-  ), [allSamples,sampleSubSection,sampleGenreFilter,sq]);
+    (sampleGenreFilter===null||s.beat_genre===sampleGenreFilter) &&
+    (sampleSubGenreFilter===null||s.beat_sub_genre===sampleSubGenreFilter) &&
+    (!sq||(s.beat_title||"").toLowerCase().includes(sq)||(s.agent_handle||"").toLowerCase().includes(sq)||(s.beat_genre||"").toLowerCase().includes(sq)||(s.beat_sub_genre||"").toLowerCase().includes(sq))
+  ), [allSamples,sampleSubSection,sampleGenreFilter,sampleSubGenreFilter,sq]);
 
   const filteredBeats = useMemo(() => {
     const minP = parseFloat(priceMin);
@@ -1384,7 +1467,7 @@ function MusiClawApp() {
       if (sq && !b.title.toLowerCase().includes(sq) && !(b.agent_handle||"").toLowerCase().includes(sq) && !(b.style||"").toLowerCase().includes(sq)) return false;
       return true;
     });
-  }, [soldBeats, catalogGenre, sq]);
+  }, [soldBeats, catalogGenre, catalogSubGenre, sq]);
 
   const [soldCount, setSoldCount] = useState(0);
   const [totalBeatsCount, setTotalBeatsCount] = useState(0);
@@ -1507,7 +1590,7 @@ function MusiClawApp() {
       ),
       // TABS
       !isContact&&!isDashboard&&h("div",{className:"ml-tabs",style:{display:"flex",gap:"8px",overflowX:"auto",padding:"4px 0 20px",borderBottom:"1px solid rgba(255,255,255,0.05)",marginBottom:"28px"}},
-        ...SECTIONS.map(s=>h("button",{key:s.id,onClick:()=>{setActiveSection(s.id);setCatalogGenre(null);if(s.id==="samples")setSampleSubSection("all")},style:{background:activeSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${activeSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"12px",padding:"8px 18px",color:activeSection===s.id?s.color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontWeight:600,fontSize:"12px",cursor:"pointer",whiteSpace:"nowrap",transition:"all 0.25s"}},s.icon+" "+s.label))),
+        ...SECTIONS.map(s=>h("button",{key:s.id,onClick:()=>{setActiveSection(s.id);setCatalogGenre(null);setCatalogSubGenre(null);if(s.id==="samples"){setSampleSubSection("all");setSampleGenreFilter(null);setSampleSubGenreFilter(null)}},style:{background:activeSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${activeSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"12px",padding:"8px 18px",color:activeSection===s.id?s.color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontWeight:600,fontSize:"12px",cursor:"pointer",whiteSpace:"nowrap",transition:"all 0.25s"}},s.icon+" "+s.label))),
       // MAIN GRID
       h("div",{className:"ml-grid",style:{display:"grid",gridTemplateColumns:"1fr 340px",gap:"32px",paddingBottom:currentBeat?"144px":"80px"}},
         // LEFT COLUMN
@@ -1518,9 +1601,7 @@ function MusiClawApp() {
             h("span",{style:{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",fontSize:"14px",opacity:0.4}},"🔍")),
           isBeats&&h("div",{style:{background:"linear-gradient(135deg,rgba(34,197,94,0.08),rgba(34,197,94,0.03))",border:"1px solid rgba(34,197,94,0.2)",borderRadius:"14px",padding:"14px 20px",marginBottom:"4px",animation:"fadeInUp 0.5s ease both"}},h("p",{style:{fontSize:"13px",color:"rgba(255,255,255,0.7)",fontFamily:"'DM Sans',sans-serif",margin:0,lineHeight:1.6}},h("span",{style:{fontSize:"15px"}},"🎧 "),h("strong",{style:{color:"#22c55e"}},"Commercial License Included")," — Every AI-generated beat comes with a commercial license. YOU (human) are free to use these beats for your music projects.")),
           isBeats&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease 0.05s both"}},
-            h("select",{value:catalogSubGenre||catalogGenre||"",onChange:e=>{const v=e.target.value;if(!v){setCatalogGenre(null);setCatalogSubGenre(null)}else{const p=genres.find(g=>g.id===v);if(p){setCatalogGenre(v);setCatalogSubGenre(null)}else{const par=(genreTree.length>0?genreTree:GENRES_TREE).find(g=>g.children?.some(c=>c.id===v));if(par){setCatalogGenre(par.id);setCatalogSubGenre(v)}else{setCatalogGenre(v);setCatalogSubGenre(null)}}}},style:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"12px",padding:"8px 14px",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600,cursor:"pointer",outline:"none",appearance:"none",WebkitAppearance:"none",backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.4)' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")",backgroundRepeat:"no-repeat",backgroundPosition:"right 10px center",paddingRight:"30px",minWidth:"160px"}},
-              h("option",{value:"",style:{background:"#12121a"}},"🎵 All Genres"),
-              ...(genreTree.length>0?genreTree:genres.map(g=>({...g,children:[]}))).flatMap(g=>[h("option",{key:g.id,value:g.id,style:{background:"#12121a",fontWeight:600}},g.icon+" "+g.label),...(g.children||[]).map(sg=>h("option",{key:sg.id,value:sg.id,style:{background:"#12121a",paddingLeft:"12px"}},"  "+sg.icon+" "+sg.label))]))),
+            h(GenreDropdown,{genreTree,genres,selectedGenre:catalogGenre,selectedSubGenre:catalogSubGenre,onSelect:(g,sg)=>{setCatalogGenre(g);setCatalogSubGenre(sg)},items:beats,accentColor:"#e11d48"})),
           isBeats&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"12px",alignItems:"center",animation:"fadeInUp 0.5s ease 0.08s both",padding:"8px 0"}},
             h("div",{style:{display:"flex",alignItems:"center",gap:"6px"}},
               h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.4)"}},"Price:"),
@@ -1550,17 +1631,14 @@ function MusiClawApp() {
           isSamples&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"6px",marginBottom:"10px",animation:"fadeInUp 0.4s ease 0.05s both"}},
             ...SAMPLE_SUBSECTIONS.filter(s=>s.id!=="purchased"||auth.user).map(s=>h("button",{key:s.id,onClick:()=>setSampleSubSection(s.id),style:{background:sampleSubSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${sampleSubSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"4px 10px",cursor:"pointer",color:sampleSubSection===s.id?s.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600}},s.icon+" "+s.label+(s.id==="purchased"&&purchaseMap.size>0?" ("+purchaseMap.size+")":"")))),
           isSamples&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"6px",marginBottom:"16px",alignItems:"center"}},
-            h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.3)",marginRight:"4px"}},"Genre:"),
-            ...[{id:"all",label:"All",color:"#a855f7"},...GENRES].map(g=>h("button",{key:g.id,onClick:()=>setSampleGenreFilter(g.id),style:{background:sampleGenreFilter===g.id?`${g.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${sampleGenreFilter===g.id?`${g.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"20px",padding:"4px 10px",cursor:"pointer",color:sampleGenreFilter===g.id?g.color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600}},g.icon?g.icon+" ":"",g.label)),
+            h(GenreDropdown,{genreTree,genres,selectedGenre:sampleGenreFilter,selectedSubGenre:sampleSubGenreFilter,onSelect:(g,sg)=>{setSampleGenreFilter(g);setSampleSubGenreFilter(sg)},items:allSamples,accentColor:"#a855f7"}),
             h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.3)",marginLeft:"auto",whiteSpace:"nowrap"}},filteredSamples.length+" samples")),
           isSamples&&samplesLoading&&h(Loader),
           isSamples&&!samplesLoading&&filteredSamples.map((sample,i)=>h("div",{key:sample.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(SampleCard,{sample,user:auth.user,credits,onBuy:setBuySample,onLogin:()=>setShowAuthModal(true),onDownload:handleSampleDownload,playingId,onPlay:handlePlay,peaks:playingId===("sample_"+sample.id)?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
           isSamples&&!samplesLoading&&filteredSamples.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},sampleSubSection==="purchased"?"⬇":"🎛️"),sampleSubSection==="purchased"?"No purchased samples yet. Buy a sample to see it here with a download button.":sampleSubSection!=="all"?"No "+sampleSubSection+" samples available yet.":"No samples available yet. Stems from split beats will appear here."),
           // ─── BEATS SOLD section ────────────────────────────────────
           isSold&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease both",marginBottom:"4px"}},
-            h("select",{value:catalogGenre||"",onChange:e=>setCatalogGenre(e.target.value||null),style:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"12px",padding:"8px 14px",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600,cursor:"pointer",outline:"none",appearance:"none",WebkitAppearance:"none",backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.4)' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")",backgroundRepeat:"no-repeat",backgroundPosition:"right 10px center",paddingRight:"30px",minWidth:"160px"}},
-              h("option",{value:"",style:{background:"#12121a"}},"🎵 All Genres"),
-              ...genres.map(g=>h("option",{key:g.id,value:g.id,style:{background:"#12121a"}},g.icon+" "+g.label))),
+            h(GenreDropdown,{genreTree,genres,selectedGenre:catalogGenre,selectedSubGenre:catalogSubGenre,onSelect:(g,sg)=>{setCatalogGenre(g);setCatalogSubGenre(sg)},items:soldBeats,accentColor:"#e11d48"}),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",whiteSpace:"nowrap"}},"Sold: "+filteredSoldBeats.length)),
           isSold&&soldLoading&&h(Loader),
           isSold&&!soldLoading&&filteredSoldBeats.length>0&&filteredSoldBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat,peaks:playingId===beat.id?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
@@ -1698,6 +1776,33 @@ function MusiClawApp() {
                       const sc=beats.filter(b=>b.sub_genre===sg.id).length;
                       const isActiveSub=catalogSubGenre===sg.id;
                       return h("button",{key:sg.id,onClick:()=>{setCatalogGenre(g.id);setCatalogSubGenre(sg.id)},style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 8px",borderRadius:"6px",border:"none",cursor:"pointer",width:"100%",background:isActiveSub?`${g.color}15`:"transparent",textAlign:"left",transition:"background 0.2s"}},
+                        h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:isActiveSub?g.color:"rgba(255,255,255,0.35)"}},sg.icon+" "+sg.label),
+                        sc>0&&h("span",{style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",color:g.color,background:`${g.color}10`,padding:"1px 5px",borderRadius:"8px"}},sc))}))
+                )}))),
+          // Sample Catalog (samples tab) — expandable sub-genre tree
+          isSamples&&h("div",{style:{background:"rgba(18,18,24,0.7)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"20px",backdropFilter:"blur(20px)"}},
+            h("h3",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"15px",marginBottom:"14px"}},"🎛️ Sample Catalog"),
+            h("div",{style:{display:"flex",flexDirection:"column",gap:"2px"}},
+              h("button",{onClick:()=>{setSampleGenreFilter(null);setSampleSubGenreFilter(null)},style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 10px",borderRadius:"8px",border:"none",cursor:"pointer",width:"100%",background:sampleGenreFilter===null?"rgba(168,85,247,0.1)":"transparent",textAlign:"left"}},
+                h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"12px",color:sampleGenreFilter===null?"#a855f7":"rgba(255,255,255,0.5)"}},"🎵 All Genres"),
+                h("span",{style:{fontSize:"10px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},allSamples.length)),
+              ...(genreTree.length>0?genreTree:genres.map(g=>({...g,children:[]}))).map(g=>{
+                const c=allSamples.filter(s=>s.beat_genre===g.id).length;
+                const isExp=sampleExpandedGenres.has(g.id);
+                const hasKids=g.children&&g.children.length>0;
+                const isActiveParent=sampleGenreFilter===g.id&&!sampleSubGenreFilter;
+                return h("div",{key:g.id},
+                  h("div",{style:{display:"flex",alignItems:"center",gap:"0px"}},
+                    hasKids&&h("button",{onClick:e=>{e.stopPropagation();setSampleExpandedGenres(prev=>{const n=new Set(prev);if(n.has(g.id))n.delete(g.id);else n.add(g.id);return n})},style:{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.3)",fontSize:"9px",padding:"6px 4px",transform:isExp?"rotate(90deg)":"rotate(0deg)",transition:"transform 0.2s",flexShrink:0}},"▶"),
+                    !hasKids&&h("span",{style:{width:"17px",flexShrink:0}}),
+                    h("button",{onClick:()=>{setSampleGenreFilter(g.id);setSampleSubGenreFilter(null)},style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 8px",borderRadius:"8px",border:"none",cursor:"pointer",flex:1,background:isActiveParent?`${g.color}15`:"transparent",textAlign:"left",transition:"background 0.2s"}},
+                      h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"12px",color:isActiveParent?g.color:"rgba(255,255,255,0.5)"}},g.icon+" "+g.label),
+                      h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:c>0?g.color:"rgba(255,255,255,0.15)",background:c>0?`${g.color}15`:"transparent",padding:"1px 7px",borderRadius:"10px"}},c))),
+                  isExp&&hasKids&&h("div",{style:{paddingLeft:"21px",display:"flex",flexDirection:"column",gap:"1px",borderLeft:`1px solid ${g.color}22`,marginLeft:"8px",marginBottom:"4px"}},
+                    ...g.children.map(sg=>{
+                      const sc=allSamples.filter(s=>s.beat_sub_genre===sg.id).length;
+                      const isActiveSub=sampleSubGenreFilter===sg.id;
+                      return h("button",{key:sg.id,onClick:()=>{setSampleGenreFilter(g.id);setSampleSubGenreFilter(sg.id)},style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 8px",borderRadius:"6px",border:"none",cursor:"pointer",width:"100%",background:isActiveSub?`${g.color}15`:"transparent",textAlign:"left",transition:"background 0.2s"}},
                         h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:isActiveSub?g.color:"rgba(255,255,255,0.35)"}},sg.icon+" "+sg.label),
                         sc>0&&h("span",{style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",color:g.color,background:`${g.color}10`,padding:"1px 5px",borderRadius:"8px"}},sc))}))
                 )}))),
