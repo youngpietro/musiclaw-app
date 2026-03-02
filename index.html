@@ -350,7 +350,22 @@ function useAuth() {
     await supabase.auth.signOut();
     setUser(null);
   };
-  return { user, loading, signUp, signIn, signInWithGoogle, signOut };
+  const resetPasswordForEmail = async (email) => {
+    const { data, error } = await supabase.auth.resetPasswordForEmail(email);
+    if (error) throw error;
+    return data;
+  };
+  const verifyOtp = async (email, token) => {
+    const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "recovery" });
+    if (error) throw error;
+    return data;
+  };
+  const updatePassword = async (password) => {
+    const { data, error } = await supabase.auth.updateUser({ password });
+    if (error) throw error;
+    return data;
+  };
+  return { user, loading, signUp, signIn, signInWithGoogle, signOut, resetPasswordForEmail, verifyOtp, updatePassword };
 }
 
 // ─── CREDITS HOOK ────────────────────────────────────────────────────────────
@@ -1030,6 +1045,16 @@ function AuthModal({ onClose, auth }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState("");
+  const [otp, setOtp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const inputStyle = {width:"100%",padding:"12px 16px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.08)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",marginBottom:"10px",outline:"none",boxSizing:"border-box"};
+  const btnStyle = {width:"100%",padding:"12px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"13px",cursor:loading?"wait":"pointer",opacity:loading?0.6:1};
+  const linkStyle = {background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontSize:"11px",fontFamily:"'Space Mono',monospace",cursor:"pointer",textDecoration:"underline",padding:0};
+  const backStyle = {background:"none",border:"none",color:"#a855f7",fontSize:"12px",fontFamily:"'Space Mono',monospace",cursor:"pointer",padding:0,marginBottom:"16px",display:"flex",alignItems:"center",gap:"4px"};
+
+  const switchTab = (t) => { setTab(t); setError(""); setSuccess(""); };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -1038,13 +1063,26 @@ function AuthModal({ onClose, auth }) {
       if (tab === "login") {
         await auth.signIn(email, password);
         onClose();
-      } else {
+      } else if (tab === "signup") {
         const data = await auth.signUp(email, password);
         if (data?.session) {
-          onClose(); // Auto-confirmed, logged in immediately
+          onClose();
         } else {
           setSuccess("Check your email for a confirmation link!");
         }
+      } else if (tab === "forgot") {
+        await auth.resetPasswordForEmail(email);
+        setSuccess("Verification code sent! Check your email.");
+        setTimeout(() => switchTab("verify"), 1500);
+      } else if (tab === "verify") {
+        await auth.verifyOtp(email, otp);
+        switchTab("reset");
+      } else if (tab === "reset") {
+        if (newPassword !== confirmPassword) { setError("Passwords do not match"); setLoading(false); return; }
+        if (newPassword.length < 6) { setError("Password must be at least 6 characters"); setLoading(false); return; }
+        await auth.updatePassword(newPassword);
+        setSuccess("Password updated successfully!");
+        setTimeout(() => onClose(), 1500);
       }
     } catch (err) {
       setError(err.message || "Something went wrong");
@@ -1052,29 +1090,56 @@ function AuthModal({ onClose, auth }) {
     setLoading(false);
   };
 
+  const isAuthTab = tab === "login" || tab === "signup";
+  const title = {login:"Log In",signup:"Sign Up",forgot:"Reset Password",verify:"Enter Verification Code",reset:"Set New Password"}[tab];
+
   return h("div",{style:{position:"fixed",inset:0,zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)"},onClick:e=>{if(e.target===e.currentTarget)onClose()}},
     h("div",{style:{background:"#12121a",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"20px",padding:"32px",width:"380px",maxWidth:"90vw"}},
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}},
-        h("h2",{style:{fontFamily:"'Space Mono',monospace",fontSize:"18px",color:"#f0f0f0",margin:0}},tab==="login"?"Log In":"Sign Up"),
+        h("h2",{style:{fontFamily:"'Space Mono',monospace",fontSize:"18px",color:"#f0f0f0",margin:0}},title),
         h("button",{onClick:onClose,style:{background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontSize:"20px",cursor:"pointer"}},"×")
       ),
-      h("div",{style:{display:"flex",gap:"8px",marginBottom:"20px"}},
-        h("button",{onClick:()=>{setTab("login");setError("");setSuccess("")},style:{flex:1,padding:"8px",borderRadius:"10px",border:"1px solid "+(tab==="login"?"rgba(168,85,247,0.4)":"rgba(255,255,255,0.06)"),background:tab==="login"?"rgba(168,85,247,0.15)":"rgba(255,255,255,0.03)",color:tab==="login"?"#a855f7":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Log In"),
-        h("button",{onClick:()=>{setTab("signup");setError("");setSuccess("")},style:{flex:1,padding:"8px",borderRadius:"10px",border:"1px solid "+(tab==="signup"?"rgba(168,85,247,0.4)":"rgba(255,255,255,0.06)"),background:tab==="signup"?"rgba(168,85,247,0.15)":"rgba(255,255,255,0.03)",color:tab==="signup"?"#a855f7":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Sign Up")
+      // Tab selector — only for login/signup
+      isAuthTab && h("div",{style:{display:"flex",gap:"8px",marginBottom:"20px"}},
+        h("button",{onClick:()=>switchTab("login"),style:{flex:1,padding:"8px",borderRadius:"10px",border:"1px solid "+(tab==="login"?"rgba(168,85,247,0.4)":"rgba(255,255,255,0.06)"),background:tab==="login"?"rgba(168,85,247,0.15)":"rgba(255,255,255,0.03)",color:tab==="login"?"#a855f7":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Log In"),
+        h("button",{onClick:()=>switchTab("signup"),style:{flex:1,padding:"8px",borderRadius:"10px",border:"1px solid "+(tab==="signup"?"rgba(168,85,247,0.4)":"rgba(255,255,255,0.06)"),background:tab==="signup"?"rgba(168,85,247,0.15)":"rgba(255,255,255,0.03)",color:tab==="signup"?"#a855f7":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:600,cursor:"pointer"}},"Sign Up")
       ),
+      // Back link — for forgot/verify/reset
+      !isAuthTab && h("button",{onClick:()=>switchTab("login"),style:backStyle},"← Back to Log In"),
+      // Subtitle for verify step
+      tab==="verify" && h("p",{style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'DM Sans',sans-serif",margin:"0 0 16px 0"}},"We sent an 8-digit code to ",h("strong",{style:{color:"#a855f7"}},email)),
+      // Form
       h("form",{onSubmit:handleSubmit},
-        h("input",{type:"email",value:email,onChange:e=>setEmail(e.target.value),placeholder:"Email",required:true,style:{width:"100%",padding:"12px 16px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.08)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",marginBottom:"10px",outline:"none",boxSizing:"border-box"}}),
-        h("input",{type:"password",value:password,onChange:e=>setPassword(e.target.value),placeholder:"Password",required:true,minLength:6,style:{width:"100%",padding:"12px 16px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.08)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",marginBottom:"16px",outline:"none",boxSizing:"border-box"}}),
+        // Email — shown for login, signup, forgot
+        (tab==="login"||tab==="signup"||tab==="forgot") && h("input",{type:"email",value:email,onChange:e=>setEmail(e.target.value),placeholder:"Email",required:true,style:inputStyle}),
+        // Password — shown for login, signup
+        (tab==="login"||tab==="signup") && h("input",{type:"password",value:password,onChange:e=>setPassword(e.target.value),placeholder:"Password",required:true,minLength:6,style:{...inputStyle,marginBottom:"16px"}}),
+        // OTP code — shown for verify
+        tab==="verify" && h("input",{type:"text",value:otp,onChange:e=>setOtp(e.target.value.replace(/\D/g,"").slice(0,8)),placeholder:"Enter 8-digit code",required:true,maxLength:8,style:{...inputStyle,letterSpacing:"4px",textAlign:"center",fontSize:"18px",fontFamily:"'Space Mono',monospace",marginBottom:"16px"}}),
+        // New password fields — shown for reset
+        tab==="reset" && h("input",{type:"password",value:newPassword,onChange:e=>setNewPassword(e.target.value),placeholder:"New Password",required:true,minLength:6,style:inputStyle}),
+        tab==="reset" && h("input",{type:"password",value:confirmPassword,onChange:e=>setConfirmPassword(e.target.value),placeholder:"Confirm Password",required:true,minLength:6,style:{...inputStyle,marginBottom:"16px"}}),
+        // Error / Success messages
         error&&h("div",{style:{color:"#ef4444",fontSize:"12px",fontFamily:"'Space Mono',monospace",marginBottom:"10px",padding:"8px 12px",background:"rgba(239,68,68,0.08)",borderRadius:"8px",border:"1px solid rgba(239,68,68,0.2)"}},error),
         success&&h("div",{style:{color:"#22c55e",fontSize:"12px",fontFamily:"'Space Mono',monospace",marginBottom:"10px",padding:"8px 12px",background:"rgba(34,197,94,0.08)",borderRadius:"8px",border:"1px solid rgba(34,197,94,0.2)"}},success),
-        h("button",{type:"submit",disabled:loading,style:{width:"100%",padding:"12px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#a855f7,#7c3aed)",color:"#fff",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"13px",cursor:loading?"wait":"pointer",opacity:loading?0.6:1}},loading?"...":(tab==="login"?"Log In":"Create Account"))
+        // Submit button
+        h("button",{type:"submit",disabled:loading,style:btnStyle},loading?"...":({login:"Log In",signup:"Create Account",forgot:"Send Verification Code",verify:"Verify Code",reset:"Update Password"}[tab]))
       ),
-      h("div",{style:{margin:"16px 0",display:"flex",alignItems:"center",gap:"12px"}},
+      // Forgot password link — only on login tab
+      tab==="login" && h("div",{style:{textAlign:"center",marginTop:"10px"}},
+        h("button",{onClick:()=>switchTab("forgot"),style:linkStyle},"Forgot Password?")
+      ),
+      // Resend code link — only on verify tab
+      tab==="verify" && h("div",{style:{textAlign:"center",marginTop:"10px"}},
+        h("button",{onClick:async()=>{setError("");setSuccess("");try{await auth.resetPasswordForEmail(email);setSuccess("New code sent!")}catch(err){setError(err.message)}},style:linkStyle},"Resend code")
+      ),
+      // Divider + Google — only for login/signup
+      isAuthTab && h("div",{style:{margin:"16px 0",display:"flex",alignItems:"center",gap:"12px"}},
         h("div",{style:{flex:1,height:"1px",background:"rgba(255,255,255,0.06)"}}),
         h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},"or"),
         h("div",{style:{flex:1,height:"1px",background:"rgba(255,255,255,0.06)"}})
       ),
-      h("button",{onClick:()=>auth.signInWithGoogle(),style:{width:"100%",padding:"12px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}},h("img",{src:"https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg",alt:"Google",style:{width:"18px",height:"18px"}})," Continue with Google")
+      isAuthTab && h("button",{onClick:()=>auth.signInWithGoogle(),style:{width:"100%",padding:"12px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#f0f0f0",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}},h("img",{src:"https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg",alt:"Google",style:{width:"18px",height:"18px"}})," Continue with Google")
     )
   );
 }
