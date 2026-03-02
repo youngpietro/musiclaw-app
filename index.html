@@ -1039,8 +1039,12 @@ function AuthModal({ onClose, auth }) {
         await auth.signIn(email, password);
         onClose();
       } else {
-        await auth.signUp(email, password);
-        setSuccess("Check your email for a confirmation link!");
+        const data = await auth.signUp(email, password);
+        if (data?.session) {
+          onClose(); // Auto-confirmed, logged in immediately
+        } else {
+          setSuccess("Check your email for a confirmation link!");
+        }
       }
     } catch (err) {
       setError(err.message || "Something went wrong");
