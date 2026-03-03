@@ -129,13 +129,7 @@ serve(async (req) => {
     const userId = parts[2];
     const expiresAt = parts.slice(3).join(":"); // ISO string may contain colons
 
-    // Check expiry
-    if (new Date(expiresAt) < new Date()) {
-      return new Response(
-        JSON.stringify({ error: "Download link has expired" }),
-        { status: 410, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    // Expiry + download limit removed — purchases are permanent, unlimited downloads
 
     // ─── LOOK UP PURCHASE ────────────────────────────────────────────
     const { data: purchase } = await supabase
@@ -152,17 +146,10 @@ serve(async (req) => {
       );
     }
 
-    if (purchase.download_count >= 5) {
-      return new Response(
-        JSON.stringify({ error: "Maximum downloads reached (5)" }),
-        { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
     // ─── LOOK UP SAMPLE + BEAT INFO ─────────────────────────────────
     const { data: sample } = await supabase
       .from("samples")
-      .select("id, beat_id, stem_type, audio_url")
+      .select("id, beat_id, stem_type, audio_url, storage_migrated")
       .eq("id", sampleId)
       .single();
 
@@ -179,9 +166,35 @@ serve(async (req) => {
       .eq("id", sample.beat_id)
       .single();
 
-    // ─── VALIDATE AND FETCH AUDIO ────────────────────────────────────
-    if (!isAllowedAudioUrl(sample.audio_url)) {
-      console.error(`SSRF blocked: ${sample.audio_url}`);
+    // ─── RESOLVE AUDIO URL (storage preferred, legacy fallback) ─────
+    let audioUrl: string | null = null;
+
+    if (sample.storage_migrated && sample.beat_id && sample.stem_type) {
+      const storagePath = `beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`;
+      const { data: signedUrlData, error: signErr } = await supabase
+        .storage
+        .from("audio")
+        .createSignedUrl(storagePath, 3600);
+      if (!signErr && signedUrlData?.signedUrl) {
+        audioUrl = signedUrlData.signedUrl;
+      } else {
+        console.error(`Signed URL error for sample ${sampleId}:`, signErr?.message);
+        audioUrl = sample.audio_url; // fallback
+      }
+    } else {
+      audioUrl = sample.audio_url;
+    }
+
+    if (!audioUrl) {
+      return new Response(
+        JSON.stringify({ error: "Audio file not available" }),
+        { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // SSRF check (storage URLs are safe; only check legacy URLs)
+    if (!audioUrl.includes("supabase") && !isAllowedAudioUrl(audioUrl)) {
+      console.error(`SSRF blocked: ${audioUrl}`);
       return new Response(
         JSON.stringify({ error: "Audio URL security check failed" }),
         { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
@@ -212,7 +225,7 @@ serve(async (req) => {
       .trim();
 
     // Proxy-stream the audio
-    const audioRes = await fetch(sample.audio_url);
+    const audioRes = await fetch(audioUrl);
     if (!audioRes.ok) {
       return new Response(
         JSON.stringify({ error: "Audio file unavailable" }),

@@ -133,11 +133,8 @@ serve(async (req) => {
     const beatId = parts[1];
     const expiresAt = parts.slice(2).join(":"); // ISO date may contain colons
 
-    // ─── CHECK EXPIRY ─────────────────────────────────────────────────
-    const expiryDate = new Date(expiresAt);
-    if (isNaN(expiryDate.getTime()) || expiryDate < new Date()) {
-      return new Response("Download link has expired", { status: 410 });
-    }
+    // ─── EXPIRY CHECK (legacy tokens only — new tokens never expire) ──
+    // Skip expiry check: purchases are permanent, download links never expire
 
     // ─── VERIFY PURCHASE IN DB ────────────────────────────────────────
     const supabase = createClient(
@@ -163,14 +160,7 @@ serve(async (req) => {
       return new Response("Token mismatch", { status: 403 });
     }
 
-    // ─── CHECK DOWNLOAD LIMIT ─────────────────────────────────────────
-    const MAX_DOWNLOADS = 5;
-    if (purchase.download_count >= MAX_DOWNLOADS) {
-      return new Response(
-        "Download limit reached (max 5 downloads per purchase)",
-        { status: 429 }
-      );
-    }
+    // Download limit removed — purchases are permanent, unlimited downloads
 
     const tier = purchase.purchase_tier || "track";
     const fileParam = url.searchParams.get("file"); // e.g., "track", "drums", "bass", "vocal"
@@ -178,12 +168,28 @@ serve(async (req) => {
     // ─── GET BEAT DATA ────────────────────────────────────────────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("audio_url, wav_url, wav_status, stems, stems_status, suno_id, title, genre, bpm, agent_id")
+      .select("audio_url, wav_url, wav_status, stems, stems_status, suno_id, title, genre, bpm, agent_id, storage_migrated")
       .eq("id", beatId)
       .single();
 
     if (!beat) {
       return new Response("Beat not found", { status: 404 });
+    }
+
+    // ─── STORAGE URL RESOLVER ─────────────────────────────────────────
+    // For migrated beats, resolve URLs from private Supabase Storage
+    async function resolveStorageUrl(storagePath: string, fallbackUrl?: string | null): Promise<string | null> {
+      if (beat!.storage_migrated) {
+        const { data: signedUrlData, error: signErr } = await supabase
+          .storage
+          .from("audio")
+          .createSignedUrl(storagePath, 3600); // 1 hour
+        if (!signErr && signedUrlData?.signedUrl) {
+          return signedUrlData.signedUrl;
+        }
+        console.error(`Signed URL error for ${storagePath}:`, signErr?.message);
+      }
+      return fallbackUrl || null;
     }
 
     // ─── GET AGENT HANDLE FOR FILENAME ────────────────────────────────
@@ -210,24 +216,29 @@ serve(async (req) => {
       if (fileParam === "zip") {
         const filesToZip: Array<{ url: string; filename: string }> = [];
 
-        // Add master track
-        const trackUrl = beat.wav_url || beat.audio_url;
+        // Add master track (prefer storage, then wav_url, then audio_url)
+        const trackUrl = await resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.wav_url || beat.audio_url);
         if (trackUrl) {
+          // If serving from storage it's always MP3 now (WAV conversion is client-side)
+          const isFromStorage = beat.storage_migrated && trackUrl.includes("supabase");
           filesToZip.push({
             url: trackUrl,
-            filename: nameParts.join(" - ") + (beat.wav_url ? ".wav" : ".mp3"),
+            filename: nameParts.join(" - ") + ((!isFromStorage && beat.wav_url) ? ".wav" : ".mp3"),
           });
         }
 
-        // Add all stems
+        // Add all stems (prefer storage URLs)
         if (beat.stems && typeof beat.stems === "object") {
           for (const [stemType, stemUrl] of Object.entries(beat.stems)) {
             if (stemUrl && typeof stemUrl === "string") {
               const label = stemType.charAt(0).toUpperCase() + stemType.slice(1);
-              filesToZip.push({
-                url: stemUrl as string,
-                filename: nameParts.join(" - ") + " - " + label + ".mp3",
-              });
+              const resolvedUrl = await resolveStorageUrl(`beats/${beatId}/stems/${stemType}.mp3`, stemUrl as string);
+              if (resolvedUrl) {
+                filesToZip.push({
+                  url: resolvedUrl,
+                  filename: nameParts.join(" - ") + " - " + label + ".mp3",
+                });
+              }
             }
           }
         }
@@ -277,10 +288,11 @@ serve(async (req) => {
       let fileName = "";
 
       if (fileParam === "track") {
-        fileUrl = beat.wav_url || beat.audio_url;
-        fileName = nameParts.join(" - ") + (beat.wav_url ? ".wav" : ".mp3");
+        fileUrl = await resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.wav_url || beat.audio_url);
+        const isFromStorage = beat.storage_migrated && fileUrl?.includes("supabase");
+        fileName = nameParts.join(" - ") + ((!isFromStorage && beat.wav_url) ? ".wav" : ".mp3");
       } else if (beat.stems && typeof beat.stems === "object" && (beat.stems as Record<string, string>)[fileParam]) {
-        fileUrl = (beat.stems as Record<string, string>)[fileParam];
+        fileUrl = await resolveStorageUrl(`beats/${beatId}/stems/${fileParam}.mp3`, (beat.stems as Record<string, string>)[fileParam]);
         const label = fileParam.charAt(0).toUpperCase() + fileParam.slice(1);
         fileName = nameParts.join(" - ") + " - " + label + ".mp3";
       }
@@ -385,8 +397,8 @@ serve(async (req) => {
           zipUrl: `${baseUrl}&file=zip`,
           track: {
             url: `${baseUrl}&file=track`,
-            filename: nameParts.join(" - ") + (beat.wav_url ? ".wav" : ".mp3"),
-            format: beat.wav_url ? "wav" : "mp3",
+            filename: nameParts.join(" - ") + ".mp3",
+            format: "mp3",
           },
           stems: stemsData,
           beat_title: beat.title,
@@ -396,69 +408,39 @@ serve(async (req) => {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  TRACK TIER: Redirect to WAV file (or fallback to MP3 proxy)
+    //  TRACK TIER: Serve MP3 from storage (WAV conversion is client-side)
     // ═══════════════════════════════════════════════════════════════════
 
-    // Prefer WAV, fallback to MP3
-    if (beat.wav_url && beat.wav_status === "complete") {
-      // SSRF prevention: validate WAV URL before fetching
-      if (!isAllowedAudioUrl(beat.wav_url)) {
-        console.error(`SSRF blocked: disallowed WAV URL for beat ${beatId}: ${beat.wav_url}`);
-        return new Response("Blocked: invalid audio source URL", { status: 403 });
-      }
-      // Proxy-stream WAV through our endpoint for correct filename
-      const wavFilename = nameParts.join(" - ") + ".wav";
-      const wavRes = await fetch(beat.wav_url);
-      if (!wavRes.ok || !wavRes.body) {
-        return new Response("Failed to fetch WAV file", { status: 502 });
-      }
-      return new Response(wavRes.body, {
-        status: 200,
-        headers: {
-          ...cors,
-          "Content-Type": "audio/wav",
-          "Content-Disposition": `attachment; filename="${wavFilename}"`,
-          "Cache-Control": "no-store, no-cache",
-        },
-      });
-    }
+    // Prefer Supabase Storage, fallback to legacy URLs
+    const trackUrl = await resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.audio_url);
 
-    // WAV not ready — check why and handle appropriately
-    if (beat.wav_status === "processing") {
+    if (!trackUrl) {
       return new Response(
-        JSON.stringify({ error: "WAV file is being prepared. Please try again in 1-2 minutes." }),
-        { status: 202, headers: { ...cors, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Audio file is not available. Please contact support." }),
+        { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Legacy beats (generated before auto-WAV) — serve MP3 as fallback
-    // These beats have wav_status=NULL because WAV was never triggered
-    if (!beat.wav_status && beat.audio_url) {
-      if (!isAllowedAudioUrl(beat.audio_url)) {
-        console.error(`SSRF blocked: disallowed audio URL for beat ${beatId}: ${beat.audio_url}`);
-        return new Response("Blocked: invalid audio source URL", { status: 403 });
-      }
-      const mp3Filename = nameParts.join(" - ") + ".mp3";
-      const audioRes = await fetch(beat.audio_url);
-      if (!audioRes.ok || !audioRes.body) {
-        return new Response("Failed to fetch audio file", { status: 502 });
-      }
-      return new Response(audioRes.body, {
-        status: 200,
-        headers: {
-          ...cors,
-          "Content-Type": "audio/mpeg",
-          "Content-Disposition": `attachment; filename="${mp3Filename}"`,
-          "Cache-Control": "no-store, no-cache",
-        },
-      });
+    // SSRF prevention: validate URL before fetching (storage URLs are always safe, but check legacy)
+    if (!trackUrl.includes("supabase") && !isAllowedAudioUrl(trackUrl)) {
+      console.error(`SSRF blocked: disallowed audio URL for beat ${beatId}: ${trackUrl}`);
+      return new Response("Blocked: invalid audio source URL", { status: 403 });
     }
 
-    // WAV failed — this shouldn't happen with auto-WAV for new beats
-    return new Response(
-      JSON.stringify({ error: "WAV file is not available. Please contact support." }),
-      { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
-    );
+    const mp3Filename = nameParts.join(" - ") + ".mp3";
+    const audioRes = await fetch(trackUrl);
+    if (!audioRes.ok || !audioRes.body) {
+      return new Response("Failed to fetch audio file", { status: 502 });
+    }
+    return new Response(audioRes.body, {
+      status: 200,
+      headers: {
+        ...cors,
+        "Content-Type": "audio/mpeg",
+        "Content-Disposition": `attachment; filename="${mp3Filename}"`,
+        "Cache-Control": "no-store, no-cache",
+      },
+    });
   } catch (err) {
     console.error("Download error:", err.message);
     return new Response("Download failed", { status: 500 });

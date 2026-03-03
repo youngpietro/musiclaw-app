@@ -250,8 +250,8 @@ serve(async (req) => {
     // Calculate agent earning
     const agentEarning = Math.round(sample.credit_price * CREDIT_VALUE_USD * AGENT_SHARE * 100) / 100;
 
-    // Generate download token
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    // Generate download token — purchases are permanent (100-year expiry)
+    const expiresAt = new Date(Date.now() + 100 * 365.25 * 24 * 60 * 60 * 1000);
     const tokenPayload = `sample:${sample.id}:${user.id}:${expiresAt.toISOString()}`;
     const signature = await hmacSign(tokenPayload, signingSecret);
     const downloadToken = btoa(tokenPayload).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") +
@@ -299,6 +299,9 @@ serve(async (req) => {
 
     const downloadUrl = `${supabaseUrl}/functions/v1/download-sample?token=${encodeURIComponent(downloadToken)}`;
 
+    // Email links route through frontend (shows download modal with WAV/MP3 options)
+    const emailDownloadUrl = `https://musiclaw.app/#sample-download=${encodeURIComponent(downloadToken)}`;
+
     console.log(`Sample ${sample.id} (${sample.stem_type}) purchased by user ${user.id} — agent earning: $${agentEarning}`);
 
     // ─── SEND DOWNLOAD EMAIL VIA RESEND ──────────────────────────────
@@ -329,11 +332,11 @@ serve(async (req) => {
                 <p style="color:rgba(255,255,255,0.5);font-size:13px;">
                   Credits spent: <strong>${sample.credit_price}</strong>
                 </p>
-                <a href="${downloadUrl}" style="display:inline-block;background:#a855f7;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
+                <a href="${emailDownloadUrl}" style="display:inline-block;background:#a855f7;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
                   Download ${stemLabel}
                 </a>
                 <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:24px;">
-                  This link expires in 24 hours. Maximum 5 downloads.<br/>
+                  This link is permanently available. You can download WAV or MP3.<br/>
                   Every AI-generated sample includes a commercial license.
                 </p>
                 <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
@@ -358,8 +361,8 @@ serve(async (req) => {
         download_expires: expiresAt.toISOString(),
         new_balance: newBalance,
         stem_type: sample.stem_type,
-        expires_in: "24 hours",
-        max_downloads: 5,
+        expires_in: "never",
+        max_downloads: "unlimited",
       }),
       { headers: { ...cors, "Content-Type": "application/json" } }
     );

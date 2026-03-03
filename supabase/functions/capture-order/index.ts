@@ -138,21 +138,15 @@ serve(async (req) => {
     }
 
     if (purchase.paypal_status === "completed") {
-      // Already captured — return existing download URL if still valid
-      if (purchase.download_expires && new Date(purchase.download_expires) > new Date()) {
-        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-        return new Response(
-          JSON.stringify({
-            success: true,
-            download_url: `${supabaseUrl}/functions/v1/download-beat?token=${purchase.download_token}`,
-            already_captured: true,
-          }),
-          { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
+      // Already captured — return existing download URL (links never expire)
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
       return new Response(
-        JSON.stringify({ error: "Payment already captured and download link has expired" }),
-        { status: 410, headers: { ...cors, "Content-Type": "application/json" } }
+        JSON.stringify({
+          success: true,
+          download_url: `${supabaseUrl}/functions/v1/download-beat?token=${purchase.download_token}`,
+          already_captured: true,
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
@@ -216,7 +210,8 @@ serve(async (req) => {
     }
 
     // ─── GENERATE SIGNED DOWNLOAD TOKEN ───────────────────────────────
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    // Tokens never expire — purchases are permanent. Expiry set to 100 years.
+    const expiresAt = new Date(Date.now() + 100 * 365.25 * 24 * 60 * 60 * 1000);
     const payload = `${purchase.id}:${purchase.beat_id}:${expiresAt.toISOString()}`;
     const signature = await hmacSign(payload, signingSecret);
     const downloadToken = btoa(payload).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") +
@@ -248,10 +243,11 @@ serve(async (req) => {
       .eq("id", purchase.beat_id)
       .single();
 
+    let agentOwnerEmail: string | null = null;
     if (beat) {
       const { data: agent } = await supabase
         .from("agents")
-        .select("karma")
+        .select("karma, owner_email")
         .eq("id", beat.agent_id)
         .single();
 
@@ -260,6 +256,7 @@ serve(async (req) => {
           .from("agents")
           .update({ karma: agent.karma + 10 })
           .eq("id", beat.agent_id);
+        agentOwnerEmail = agent.owner_email || null;
       }
     }
 
@@ -277,10 +274,8 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const downloadUrl = `${supabaseUrl}/functions/v1/download-beat?token=${encodeURIComponent(downloadToken)}`;
 
-    // For email: stems tier links to frontend (shows download modal), track tier links to API (302 redirect)
-    const emailDownloadUrl = purchase.purchase_tier === "stems"
-      ? `https://musiclaw.app/#download=${encodeURIComponent(downloadToken)}`
-      : downloadUrl;
+    // Email always links to frontend (shows download modal with WAV/MP3 options)
+    const emailDownloadUrl = `https://musiclaw.app/#download=${encodeURIComponent(downloadToken)}`;
 
     // ─── PAY OUT AGENT VIA PAYPAL PAYOUTS API ───────────────────────
     const sellerPaypal = purchase.seller_paypal;
@@ -352,7 +347,8 @@ serve(async (req) => {
 
     // ─── NOTIFY AGENT OF SALE VIA RESEND ──────────────────────────────
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
-    if (resendApiKey && sellerPaypal) {
+    const agentNotifyEmail = agentOwnerEmail || sellerPaypal;
+    if (resendApiKey && agentNotifyEmail) {
       try {
         const beatTitle = htmlEscape(beat?.title || "Beat");
         const tierLabel = purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track";
@@ -364,7 +360,7 @@ serve(async (req) => {
           },
           body: JSON.stringify({
             from: "MusiClaw <noreply@contact.musiclaw.app>",
-            to: [sellerPaypal],
+            to: [agentNotifyEmail],
             subject: `Your beat "${beat?.title || "Beat"}" was sold! — MusiClaw`,
             html: `
               <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
@@ -415,10 +411,10 @@ serve(async (req) => {
                   Package: <strong>${purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track"}</strong>
                 </p>
                 <a href="${emailDownloadUrl}" style="display:inline-block;background:#22c55e;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
-                  Download${purchase.purchase_tier === "stems" ? " WAV + Stems" : " WAV"}
+                  Download${purchase.purchase_tier === "stems" ? " MP3 + Stems" : " Your Beat"}
                 </a>
                 <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:24px;">
-                  This link expires in 24 hours. Maximum 5 downloads.<br/>
+                  This link is permanently available. You can download WAV or MP3.<br/>
                   Every AI-generated beat includes a commercial license.
                 </p>
                 <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
@@ -441,8 +437,8 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         download_url: downloadUrl,
-        expires_in: "24 hours",
-        max_downloads: 5,
+        expires_in: "never",
+        max_downloads: "unlimited",
       }),
       { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
     );

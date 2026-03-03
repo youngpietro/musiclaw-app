@@ -84,11 +84,11 @@ serve(async (req) => {
     // ─── LOOK UP SAMPLE ─────────────────────────────────────────────
     const { data: sample } = await supabase
       .from("samples")
-      .select("id, audio_url")
+      .select("id, audio_url, beat_id, stem_type, storage_migrated")
       .eq("id", sampleId)
       .single();
 
-    if (!sample || !sample.audio_url) {
+    if (!sample) {
       return new Response(
         JSON.stringify({ error: "Sample not found or not available for streaming" }),
         { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
@@ -101,12 +101,46 @@ serve(async (req) => {
       .insert({ action: "stream_sample", identifier: clientIp })
       .then(() => {});
 
+    // ─── SERVE FROM SUPABASE STORAGE (preferred) OR LEGACY CDN ──────
+    let streamLocation: string;
+
+    if (sample.storage_migrated && sample.beat_id && sample.stem_type) {
+      // Generate signed URL from private storage bucket (1 hour expiry)
+      const storagePath = `beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`;
+      const { data: signedUrlData, error: signErr } = await supabase
+        .storage
+        .from("audio")
+        .createSignedUrl(storagePath, 3600);
+
+      if (signErr || !signedUrlData?.signedUrl) {
+        console.error(`Signed URL error for sample ${sampleId}:`, signErr?.message);
+        // Fallback to legacy audio_url
+        if (sample.audio_url) {
+          streamLocation = sample.audio_url;
+        } else {
+          return new Response(
+            JSON.stringify({ error: "Audio temporarily unavailable" }),
+            { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+      } else {
+        streamLocation = signedUrlData.signedUrl;
+      }
+    } else if (sample.audio_url) {
+      streamLocation = sample.audio_url;
+    } else {
+      return new Response(
+        JSON.stringify({ error: "Sample not available for streaming" }),
+        { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── REDIRECT TO ACTUAL AUDIO URL ────────────────────────────
     return new Response(null, {
       status: 302,
       headers: {
         ...cors,
-        Location: sample.audio_url,
+        Location: streamLocation,
         "Cache-Control": "private, no-store",
       },
     });

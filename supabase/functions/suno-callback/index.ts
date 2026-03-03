@@ -207,19 +207,21 @@ serve(async (req) => {
           }).eq("id", beat.id);
           console.log(`Beat ${beat.id} (${beat.title}) → complete`);
         } else if (audioUrl && !isValidMediaUrl(audioUrl)) {
-          // ❌ Invalid URL format: reject
+          // ❌ Invalid URL format: reject + soft-delete (hides from public feed)
           await supabase.from("beats").update({
             status: "failed",
+            deleted_at: new Date().toISOString(),
             suno_id: trackId || beat.suno_id,
           }).eq("id", beat.id);
-          console.warn(`Beat ${beat.id} (${beat.title}) → FAILED: invalid audio_url format: ${String(audioUrl).slice(0, 100)}`);
+          console.warn(`Beat ${beat.id} (${beat.title}) → FAILED + deleted: invalid audio_url format: ${String(audioUrl).slice(0, 100)}`);
         } else {
-          // ❌ No audio URL in callback: mark as failed, NOT complete
+          // ❌ No audio URL in callback: mark as failed + soft-delete
           await supabase.from("beats").update({
             status: "failed",
+            deleted_at: new Date().toISOString(),
             suno_id: trackId || beat.suno_id,
           }).eq("id", beat.id);
-          console.warn(`Beat ${beat.id} (${beat.title}) → FAILED: no audio_url in callback`);
+          console.warn(`Beat ${beat.id} (${beat.title}) → FAILED + deleted: no audio_url in callback`);
         }
       }
 
@@ -232,69 +234,57 @@ serve(async (req) => {
           await supabase.from("agents").update({ karma: agent.karma + 5 }).eq("id", agentId);
         }
       }
-      // ─── AUTO-TRIGGER WAV CONVERSION ──────────────────────────────
-      // Read the temporarily stored Suno key and trigger WAV for each beat.
-      // Key is deleted immediately after use. WAV conversion is now mandatory.
-      if (taskId) {
-        const { data: keyRow } = await supabase
-          .from("pending_wav_keys")
-          .select("suno_api_key")
-          .eq("task_id", taskId)
-          .single();
+      // ─── AUTO-UPLOAD TO SUPABASE STORAGE (fire-and-forget) ─────────
+      // Download audio + image from Suno CDN and upload to private storage bucket.
+      // This ensures new beats are immediately backed up before CDN URLs expire.
+      // WAV conversion is now handled client-side at download time.
+      for (let j = 0; j < Math.min(tracks.length, beats.length); j++) {
+        const t = tracks[j];
+        const b = beats[j];
+        const tAudioUrl = extractAudioUrl(t);
+        const tImageUrl = extractImageUrl(t);
 
-        if (keyRow?.suno_api_key) {
-          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-          const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
-
-          // Re-read beats to get the updated suno_id from the track data
-          const { data: updatedBeats } = await supabase
-            .from("beats").select("id, suno_id, task_id, wav_status")
-            .eq("task_id", taskId);
-
-          for (const b of (updatedBeats || [])) {
-            if (b.suno_id && b.task_id && b.wav_status !== "complete") {
-              try {
-                const wavRes = await fetch("https://api.sunoapi.org/api/v1/wav/generate", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${keyRow.suno_api_key}`,
-                  },
-                  body: JSON.stringify({
-                    taskId: b.task_id,
-                    audioId: b.suno_id,
-                    callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${encodeURIComponent(callbackSecret || "")}&beat_id=${b.id}`,
-                  }),
-                });
-
-                const wavBody = await wavRes.text();
-                let wavApiError = false;
-                try {
-                  const wavJson = JSON.parse(wavBody);
-                  if (wavJson.code && wavJson.code >= 400) wavApiError = true;
-                  if (wavJson.error || wavJson.message?.toLowerCase().includes("error")) wavApiError = true;
-                } catch { /* not JSON */ }
-
-                if (wavRes.ok && !wavApiError) {
-                  await supabase.from("beats").update({ wav_status: "processing" }).eq("id", b.id);
-                  console.log(`Auto-WAV triggered for beat ${b.id}`);
-                } else {
-                  console.error(`Auto-WAV failed for beat ${b.id}: status=${wavRes.status} body=${wavBody.slice(0, 300)}`);
-                  await supabase.from("beats").update({ wav_status: "failed" }).eq("id", b.id);
-                }
-              } catch (e) {
-                console.error(`Auto-WAV error for beat ${b.id}:`, e.message);
-                await supabase.from("beats").update({ wav_status: "failed" }).eq("id", b.id);
+        // Non-blocking upload — don't delay callback response
+        (async () => {
+          try {
+            // Upload MP3 audio
+            if (tAudioUrl && isValidMediaUrl(tAudioUrl)) {
+              const audioRes = await fetch(tAudioUrl);
+              if (audioRes.ok) {
+                const audioData = new Uint8Array(await audioRes.arrayBuffer());
+                await supabase.storage.from("audio").upload(
+                  `beats/${b.id}/track.mp3`, audioData,
+                  { contentType: "audio/mpeg", upsert: true }
+                );
+                console.log(`Storage: uploaded audio for beat ${b.id}`);
               }
             }
+            // Upload cover image
+            if (tImageUrl && isValidMediaUrl(tImageUrl)) {
+              const imgRes = await fetch(tImageUrl);
+              if (imgRes.ok) {
+                const imgData = new Uint8Array(await imgRes.arrayBuffer());
+                const ct = imgRes.headers.get("content-type") || "image/jpeg";
+                await supabase.storage.from("audio").upload(
+                  `beats/${b.id}/cover.jpg`, imgData,
+                  { contentType: ct, upsert: true }
+                );
+                console.log(`Storage: uploaded cover for beat ${b.id}`);
+              }
+            }
+            // Mark as migrated
+            await supabase.from("beats").update({ storage_migrated: true }).eq("id", b.id);
+            console.log(`Storage: beat ${b.id} marked as migrated`);
+          } catch (uploadErr) {
+            console.error(`Storage upload error for beat ${b.id}:`, (uploadErr as Error).message);
+            // Non-fatal — beat is still usable via CDN URLs until they expire
           }
+        })();
+      }
 
-          // Delete the temporary key — used once, now gone
-          await supabase.from("pending_wav_keys").delete().eq("task_id", taskId);
-          console.log(`Deleted pending WAV key for task ${taskId}`);
-        } else {
-          console.log(`No pending WAV key found for task ${taskId} — agent must call process-stems manually`);
-        }
+      // Clean up pending WAV keys (legacy — no longer needed for new beats)
+      if (taskId) {
+        await supabase.from("pending_wav_keys").delete().eq("task_id", taskId);
       }
     } else if (isFirst && tracks.length > 0) {
       for (let i = 0; i < Math.min(tracks.length, beats.length); i++) {
@@ -314,7 +304,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true, stage, effectiveComplete, beats_updated: beats.length,
-        ...(effectiveComplete ? { wav_conversion: "auto-triggered", note: "WAV conversion is automatic. Call process-stems separately if you want stem splitting (50 Suno credits)." } : {}),
+        ...(effectiveComplete ? { storage_upload: "auto-triggered", note: "Audio files auto-uploaded to Supabase Storage. WAV conversion is client-side at download time. Call process-stems separately for stem splitting." } : {}),
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

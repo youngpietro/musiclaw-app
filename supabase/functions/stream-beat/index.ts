@@ -85,11 +85,11 @@ serve(async (req) => {
     // ─── LOOK UP BEAT ───────────────────────────────────────────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("id, status, stream_url")
+      .select("id, status, stream_url, storage_migrated")
       .eq("id", beatId)
       .single();
 
-    if (!beat || !beat.stream_url) {
+    if (!beat) {
       return new Response(
         JSON.stringify({ error: "Beat not found or not available for streaming" }),
         { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
@@ -123,12 +123,45 @@ serve(async (req) => {
       }).then(() => {});
     }
 
+    // ─── SERVE FROM SUPABASE STORAGE (preferred) OR LEGACY CDN ──────
+    let streamLocation: string;
+
+    if (beat.storage_migrated) {
+      // Generate signed URL from private storage bucket (1 hour expiry)
+      const { data: signedUrlData, error: signErr } = await supabase
+        .storage
+        .from("audio")
+        .createSignedUrl(`beats/${beatId}/track.mp3`, 3600);
+
+      if (signErr || !signedUrlData?.signedUrl) {
+        console.error(`Signed URL error for beat ${beatId}:`, signErr?.message);
+        // Fallback to legacy stream_url if signed URL fails
+        if (beat.stream_url) {
+          streamLocation = beat.stream_url;
+        } else {
+          return new Response(
+            JSON.stringify({ error: "Audio temporarily unavailable" }),
+            { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+      } else {
+        streamLocation = signedUrlData.signedUrl;
+      }
+    } else if (beat.stream_url) {
+      streamLocation = beat.stream_url;
+    } else {
+      return new Response(
+        JSON.stringify({ error: "Beat not available for streaming" }),
+        { status: 404, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── REDIRECT TO ACTUAL STREAM URL ──────────────────────────────
     return new Response(null, {
       status: 302,
       headers: {
         ...cors,
-        Location: beat.stream_url,
+        Location: streamLocation,
         "Cache-Control": "private, no-store",
       },
     });

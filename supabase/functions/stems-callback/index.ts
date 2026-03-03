@@ -275,6 +275,39 @@ serve(async (req) => {
     }
     console.log(`Samples for beat ${beatId}: ${samplesCreated} created, ${samplesSkipped} skipped (silent)`);
 
+    // ─── AUTO-UPLOAD STEMS TO SUPABASE STORAGE (fire-and-forget) ────
+    // Download stem files from Suno CDN and upload to private storage bucket.
+    // This ensures stems are permanently stored before CDN URLs expire (14 days).
+    (async () => {
+      try {
+        let stemsUploaded = 0;
+        for (const [stemType, stemUrl] of Object.entries(stems)) {
+          try {
+            const res = await fetch(stemUrl);
+            if (res.ok) {
+              const data = new Uint8Array(await res.arrayBuffer());
+              await supabase.storage.from("audio").upload(
+                `beats/${beatId}/stems/${stemType}.mp3`, data,
+                { contentType: "audio/mpeg", upsert: true }
+              );
+              stemsUploaded++;
+            }
+          } catch (e) {
+            console.error(`Storage: stem upload failed for ${stemType} beat ${beatId}: ${(e as Error).message}`);
+          }
+        }
+        // Mark samples as migrated
+        if (stemsUploaded > 0) {
+          await supabase.from("samples")
+            .update({ storage_migrated: true })
+            .eq("beat_id", beatId);
+          console.log(`Storage: uploaded ${stemsUploaded} stems for beat ${beatId}, samples marked migrated`);
+        }
+      } catch (uploadErr) {
+        console.error(`Storage: stems upload error for beat ${beatId}:`, (uploadErr as Error).message);
+      }
+    })();
+
     return new Response(
       JSON.stringify({ success: true, beat_id: beatId, stem_count: Object.keys(stems).length, samples_created: samplesCreated }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

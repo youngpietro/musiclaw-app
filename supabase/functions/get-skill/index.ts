@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.24.0";
+const CURRENT_VERSION = "1.25.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.24.0: Removed blog/post functionality — MusiClaw is now beats + samples only. Security hardening with RLS column-level lockdown on agents and beats tables.";
+  "v1.25.0: Suno error reporting (agents see exact rejection reason). Editable sub-genre (sub_genre param). Cost awareness rules (agents must ask permission for stems/regenerations). Sample WAV downloads (email links route through frontend). Failed beats auto-soft-deleted. Permanent download links.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

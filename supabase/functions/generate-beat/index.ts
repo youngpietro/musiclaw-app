@@ -193,9 +193,12 @@ serve(async (req) => {
 
     if (staleBeats && staleBeats.length > 0) {
       for (const sb of staleBeats) {
-        await supabase.from("beats").update({ status: "failed" }).eq("id", sb.id);
+        await supabase.from("beats").update({
+          status: "failed",
+          deleted_at: new Date().toISOString(),
+        }).eq("id", sb.id);
       }
-      console.log(`Auto-failed ${staleBeats.length} stale generating beat(s) for @${agent.handle}`);
+      console.log(`Auto-failed + soft-deleted ${staleBeats.length} stale generating beat(s) for @${agent.handle}`);
     }
 
     // ─── DUPLICATE GENERATION GUARD ─────────────────────────────────
@@ -225,6 +228,7 @@ serve(async (req) => {
       price = null,
       stems_price = null,
       title_v2 = null,
+      sub_genre = null,
     } = body;
 
     // ─── INSTRUMENTAL ONLY — no lyrics allowed on MusiClaw ──────────
@@ -283,11 +287,46 @@ serve(async (req) => {
       );
     }
 
-    // ─── AUTO-DETECT SUB-GENRE FROM STYLE PROMPT ─────────────────────
+    // ─── RESOLVE SUB-GENRE (explicit or auto-detect) ─────────────────
     const allSubGenres = await loadSubGenres(supabase);
-    const detectedSubGenre = detectSubGenre(genre, cleanStyle, allSubGenres);
-    if (detectedSubGenre) {
-      console.log(`Sub-genre detected: ${detectedSubGenre} (parent: ${genre}, style: "${cleanStyle.slice(0, 80)}")`);
+    let finalSubGenre: string | null = null;
+
+    if (sub_genre) {
+      // Agent explicitly specified a sub-genre — validate it exists under the parent genre
+      const cleanSubGenre = sanitize(String(sub_genre)).toLowerCase().replace(/\s+/g, "-").slice(0, 100);
+      const validSubGenre = allSubGenres.find((sg: any) => sg.id === cleanSubGenre && sg.parent_id === genre);
+      if (validSubGenre) {
+        finalSubGenre = cleanSubGenre;
+        console.log(`Sub-genre specified by agent: ${finalSubGenre} (parent: ${genre})`);
+      } else {
+        // Check if it exists under a different parent genre
+        const wrongParent = allSubGenres.find((sg: any) => sg.id === cleanSubGenre);
+        if (wrongParent) {
+          return new Response(
+            JSON.stringify({
+              error: `Sub-genre "${cleanSubGenre}" belongs to parent genre "${wrongParent.parent_id}", not "${genre}". Use genre: "${wrongParent.parent_id}" instead.`,
+              correct_genre: wrongParent.parent_id,
+            }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        // Sub-genre not found — list valid ones for this parent
+        const validSubs = allSubGenres.filter((sg: any) => sg.parent_id === genre).map((sg: any) => sg.id);
+        return new Response(
+          JSON.stringify({
+            error: `Sub-genre "${cleanSubGenre}" not found under genre "${genre}".`,
+            valid_sub_genres: validSubs,
+            tip: "Omit sub_genre to use automatic detection from your style tags.",
+          }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+    } else {
+      // Auto-detect from style tags (existing behavior)
+      finalSubGenre = detectSubGenre(genre, cleanStyle, allSubGenres);
+      if (finalSubGenre) {
+        console.log(`Sub-genre detected: ${finalSubGenre} (parent: ${genre}, style: "${cleanStyle.slice(0, 80)}")`);
+      }
     }
 
     // Validate BPM
@@ -352,8 +391,18 @@ serve(async (req) => {
     const sunoData = await sunoRes.json();
 
     if (!sunoRes.ok) {
+      // Extract the actual Suno error detail so the agent knows WHY generation was rejected
+      const sunoErrorMsg = sunoData?.message || sunoData?.error || sunoData?.detail
+        || sunoData?.data?.message || sunoData?.data?.error
+        || (typeof sunoData === "string" ? sunoData : "Unknown Suno error");
+      console.warn(`Suno API rejected generation for @${agent.handle}: ${sunoRes.status} — ${sunoErrorMsg}`);
       return new Response(
-        JSON.stringify({ error: "Suno API error", status: sunoRes.status }),
+        JSON.stringify({
+          error: "Suno API rejected the generation request",
+          suno_status: sunoRes.status,
+          suno_error: sunoErrorMsg,
+          tip: "Check your style tags for blocked keywords (artist names, explicit content). Adjust and retry.",
+        }),
         { status: sunoRes.status, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -366,7 +415,7 @@ serve(async (req) => {
       const beatInsert: Record<string, unknown> = {
         agent_id: agent.id,
         title: i === 0 ? cleanTitle : (cleanTitleV2 || `${cleanTitle} (v2)`),
-        genre, sub_genre: detectedSubGenre, style: cleanStyle, model, bpm: safeBpm,
+        genre, sub_genre: finalSubGenre, style: cleanStyle, model, bpm: safeBpm,
         instrumental: true,
         negative_tags: cleanNegTags,
         task_id: taskId, status: "generating",
