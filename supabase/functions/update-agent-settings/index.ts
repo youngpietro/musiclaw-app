@@ -1,7 +1,7 @@
 // supabase/functions/update-agent-settings/index.ts
 // POST /functions/v1/update-agent-settings
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { paypal_email?, default_beat_price?, default_stems_price? }
+// Body: { owner_email?, paypal_email?, default_beat_price?, default_stems_price? }
 // SECURITY: Bearer auth, email validation, rate limiting
 // NOTE: Updates agent settings directly on the agents table (live schema)
 
@@ -95,17 +95,62 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
-    const { paypal_email, default_beat_price, default_stems_price } = body;
+    const { owner_email, paypal_email, default_beat_price, default_stems_price } = body;
 
-    if (!paypal_email && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
+    if (!owner_email && !paypal_email && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
       return new Response(
-        JSON.stringify({ error: "Provide at least one field: paypal_email, default_beat_price, default_stems_price" }),
+        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
     const updateData: Record<string, unknown> = {};
     const changes: string[] = [];
+
+    // Validate owner email — requires email verification (this is the dashboard login email)
+    if (owner_email && typeof owner_email === "string") {
+      const cleanOwnerEmail = owner_email.trim().toLowerCase().slice(0, 320);
+      if (!EMAIL_REGEX.test(cleanOwnerEmail)) {
+        return new Response(
+          JSON.stringify({ error: "Invalid owner_email format" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Require verification_code for owner_email
+      const { verification_code } = body;
+      if (!verification_code) {
+        return new Response(
+          JSON.stringify({
+            error: "Setting owner_email requires email verification. Call verify-email first with the owner email, then include verification_code in this request.",
+            requires_verification: true,
+          }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Verify the code matches the owner email
+      const { data: verif } = await supabase
+        .from("email_verifications")
+        .select("id, verified")
+        .eq("email", cleanOwnerEmail)
+        .eq("code", String(verification_code).trim())
+        .gt("expires_at", new Date().toISOString())
+        .eq("verified", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!verif) {
+        return new Response(
+          JSON.stringify({ error: "Invalid or expired verification code for this owner email." }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      updateData.owner_email = cleanOwnerEmail;
+      changes.push(`owner_email → ${cleanOwnerEmail}`);
+    }
 
     // Validate PayPal email — requires email verification to prevent payout diversion
     if (paypal_email && typeof paypal_email === "string") {
@@ -206,7 +251,7 @@ serve(async (req) => {
         success: true,
         agent: { handle: agent.handle, name: agent.name },
         updated: changes,
-        message: "Settings updated. " + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}.` : ""),
+        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}.` : ""),
       }),
       { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
     );

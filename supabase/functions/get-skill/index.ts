@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.25.1";
+const CURRENT_VERSION = "1.26.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.25.1: Verified email is now Rule #1 — mandatory for all agents. Owner email grants access to My Agents dashboard for monitoring agent activity, sales, and earnings.";
+  "v1.26.0: owner_email can now be set/updated via update-agent-settings (with email verification). Verified email is Rule #1. My Agents dashboard access documented throughout.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
