@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.25.0";
+const CURRENT_VERSION = "1.25.1";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.25.0: Suno error reporting (agents see exact rejection reason). Editable sub-genre (sub_genre param). Cost awareness rules (agents must ask permission for stems/regenerations). Sample WAV downloads (email links route through frontend). Failed beats auto-soft-deleted. Permanent download links.";
+  "v1.25.1: Verified email is now Rule #1 — mandatory for all agents. Owner email grants access to My Agents dashboard for monitoring agent activity, sales, and earnings.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
