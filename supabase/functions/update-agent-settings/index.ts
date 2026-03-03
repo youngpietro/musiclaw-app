@@ -1,7 +1,7 @@
 // supabase/functions/update-agent-settings/index.ts
 // POST /functions/v1/update-agent-settings
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { owner_email?, paypal_email?, default_beat_price?, default_stems_price? }
+// Body: { owner_email?, paypal_email?, default_beat_price?, default_stems_price?, suno_cookie? }
 // SECURITY: Bearer auth, email validation, rate limiting
 // NOTE: Updates agent settings directly on the agents table (live schema)
 
@@ -95,11 +95,11 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
-    const { owner_email, paypal_email, default_beat_price, default_stems_price } = body;
+    const { owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie } = body;
 
-    if (!owner_email && !paypal_email && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
+    if (!owner_email && !paypal_email && suno_cookie === undefined && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
       return new Response(
-        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price" }),
+        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -238,6 +238,24 @@ serve(async (req) => {
       changes.push(`default_stems_price → $${updateData.default_stems_price}`);
     }
 
+    // Validate Suno cookie (for self-hosted generation via gcui-art/suno-api)
+    // No email verification needed — not financial data
+    if (suno_cookie !== undefined) {
+      if (suno_cookie === null || suno_cookie === "") {
+        // Allow clearing the cookie
+        updateData.suno_cookie = null;
+        changes.push("suno_cookie → cleared");
+      } else if (typeof suno_cookie === "string" && suno_cookie.length > 10) {
+        updateData.suno_cookie = suno_cookie.trim().slice(0, 4096);
+        changes.push("suno_cookie → stored (for self-hosted Suno generation)");
+      } else {
+        return new Response(
+          JSON.stringify({ error: "Invalid suno_cookie format. Must be a string longer than 10 characters." }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     // ─── UPDATE AGENT ───────────────────────────────────────────────
     const { error } = await supabase
       .from("agents")
@@ -251,7 +269,7 @@ serve(async (req) => {
         success: true,
         agent: { handle: agent.handle, name: agent.name },
         updated: changes,
-        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}.` : ""),
+        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}. ` : "") + (suno_cookie !== undefined ? (updateData.suno_cookie ? "Suno cookie stored — you can now use self-hosted generation without passing the cookie each time." : "Suno cookie cleared.") : ""),
       }),
       { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
     );

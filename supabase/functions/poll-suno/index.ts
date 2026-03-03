@@ -1,8 +1,9 @@
 // supabase/functions/poll-suno/index.ts
 // POST /functions/v1/poll-suno
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { task_id, suno_api_key }
+// Body: { task_id, suno_api_key?, suno_cookie? }
 // Manually polls Suno API for a task and updates beat status.
+// Supports both sunoapi.org (suno_api_key) and self-hosted (suno_cookie).
 // Use when the callback didn't fire and beats are stuck in "generating".
 // SECURITY: Bearer auth, rate limiting, agent can only poll their own beats
 
@@ -81,11 +82,11 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ─────────────────────────────────────────────
     const body = await req.json();
-    const { task_id, suno_api_key } = body;
+    const { task_id, suno_api_key, suno_cookie: inlineCookie } = body;
 
-    if (!task_id || !suno_api_key) {
+    if (!task_id) {
       return new Response(
-        JSON.stringify({ error: "task_id and suno_api_key are required" }),
+        JSON.stringify({ error: "task_id is required" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -118,55 +119,115 @@ serve(async (req) => {
       );
     }
 
-    // ─── POLL SUNO API ──────────────────────────────────────────────
-    console.log(`Polling Suno API for task ${task_id} (agent: ${agent.handle})`);
+    // ─── DETERMINE GENERATION SOURCE FROM BEAT ──────────────────────
+    const generationSource = beats[0]?.generation_source || "sunoapi";
+    const useSelfHosted = generationSource === "selfhosted";
 
-    const sunoRes = await fetch(`https://api.sunoapi.org/api/v1/generate/record?taskId=${task_id}`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${suno_api_key}`,
-      },
-    });
+    // Resolve credentials
+    let effectiveCookie = inlineCookie || null;
+    if (useSelfHosted && !effectiveCookie) {
+      const { data: agentFull } = await supabase
+        .from("agents").select("suno_cookie").eq("id", agent.id).single();
+      effectiveCookie = agentFull?.suno_cookie || null;
+    }
 
-    if (!sunoRes.ok) {
-      const errText = await sunoRes.text();
-      console.error(`Suno API poll failed: ${sunoRes.status} — ${errText}`);
+    if (useSelfHosted && !effectiveCookie) {
       return new Response(
-        JSON.stringify({ error: `Suno API returned ${sunoRes.status}. Check your API key.` }),
-        { status: sunoRes.status, headers: { ...cors, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "suno_cookie is required for self-hosted beats. Pass it in the request or store it via update-agent-settings." }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+    if (!useSelfHosted && !suno_api_key) {
+      return new Response(
+        JSON.stringify({ error: "suno_api_key is required for sunoapi.org beats." }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    const sunoData = await sunoRes.json();
-    console.log("Suno poll response:", JSON.stringify(sunoData).slice(0, 1000));
-
-    // ─── EXTRACT TRACKS FROM SUNO RESPONSE ──────────────────────────
-    // Suno record API response formats:
-    //   { data: [{ id, audio_url, stream_url, image_url, duration, status }] }
-    //   { data: { data: [tracks], status } }
-    //   { response: { data: [tracks] } }
-
+    // ─── POLL SUNO API ──────────────────────────────────────────────
+    let sunoRes: Response;
     let tracks: any[] = [];
 
-    if (sunoData.data) {
-      if (Array.isArray(sunoData.data)) {
-        tracks = sunoData.data;
-      } else if (sunoData.data.data && Array.isArray(sunoData.data.data)) {
-        tracks = sunoData.data.data;
-      } else if (sunoData.data.response && Array.isArray(sunoData.data.response)) {
-        tracks = sunoData.data.response;
+    if (useSelfHosted) {
+      // ─── SELF-HOSTED POLLING ────────────────────────────────────
+      const selfHostedUrl = Deno.env.get("SUNO_SELF_HOSTED_URL");
+      if (!selfHostedUrl) {
+        return new Response(
+          JSON.stringify({ error: "Self-hosted Suno API not configured." }),
+          { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
+        );
       }
-    }
-    if (tracks.length === 0 && sunoData.response && Array.isArray(sunoData.response)) {
-      tracks = sunoData.response;
+
+      // Self-hosted uses suno_id (clip IDs) for polling
+      const clipIds = beats.map((b: any) => b.suno_id).filter(Boolean).join(",");
+      if (!clipIds) {
+        return new Response(
+          JSON.stringify({ error: "No clip IDs found for these beats. Cannot poll self-hosted API." }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      console.log(`Polling self-hosted Suno for clips ${clipIds} (agent: ${agent.handle})`);
+
+      sunoRes = await fetch(`${selfHostedUrl}/api/get?ids=${clipIds}`, {
+        method: "GET",
+        headers: { "Cookie": effectiveCookie! },
+      });
+
+      if (!sunoRes.ok) {
+        const errText = await sunoRes.text();
+        console.error(`Self-hosted poll failed: ${sunoRes.status} — ${errText}`);
+        return new Response(
+          JSON.stringify({ error: `Self-hosted Suno API returned ${sunoRes.status}. Your cookie may have expired.` }),
+          { status: sunoRes.status >= 400 ? sunoRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      const selfData = await sunoRes.json();
+      // gcui-art/suno-api returns: [{ id, audio_url, image_url, status, duration }]
+      tracks = Array.isArray(selfData) ? selfData : (selfData.data || selfData.clips || []);
+
+    } else {
+      // ─── SUNOAPI.ORG POLLING (existing) ─────────────────────────
+      console.log(`Polling Suno API for task ${task_id} (agent: ${agent.handle})`);
+
+      sunoRes = await fetch(`https://api.sunoapi.org/api/v1/generate/record?taskId=${task_id}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${suno_api_key}` },
+      });
+
+      if (!sunoRes.ok) {
+        const errText = await sunoRes.text();
+        console.error(`Suno API poll failed: ${sunoRes.status} — ${errText}`);
+        return new Response(
+          JSON.stringify({ error: `Suno API returned ${sunoRes.status}. Check your API key.` }),
+          { status: sunoRes.status, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      const sunoData = await sunoRes.json();
+      console.log("Suno poll response:", JSON.stringify(sunoData).slice(0, 1000));
+
+      // Parse flexible response formats
+      if (sunoData.data) {
+        if (Array.isArray(sunoData.data)) {
+          tracks = sunoData.data;
+        } else if (sunoData.data.data && Array.isArray(sunoData.data.data)) {
+          tracks = sunoData.data.data;
+        } else if (sunoData.data.response && Array.isArray(sunoData.data.response)) {
+          tracks = sunoData.data.response;
+        }
+      }
+      if (tracks.length === 0 && sunoData.response && Array.isArray(sunoData.response)) {
+        tracks = sunoData.response;
+      }
     }
 
     if (tracks.length === 0) {
       return new Response(
         JSON.stringify({
           success: false,
-          message: "Suno task found but no tracks returned yet. Try again in 30 seconds.",
-          raw_status: sunoData.data?.status || sunoData.status || "unknown",
+          message: "Suno task still processing. Try again in 30 seconds.",
         }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
