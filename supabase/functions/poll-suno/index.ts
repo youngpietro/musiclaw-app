@@ -171,7 +171,7 @@ serve(async (req) => {
 
       sunoRes = await fetch(`${selfHostedUrl}/api/get?ids=${clipIds}`, {
         method: "GET",
-        headers: { "Cookie": effectiveCookie! },
+        headers: { "X-Suno-Cookie": effectiveCookie! },
       });
 
       if (!sunoRes.ok) {

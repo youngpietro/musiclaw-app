@@ -1957,7 +1957,20 @@ function MusiClawApp() {
                         h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"2px"}},s.label)
                       ))
                     ),
-                    agent.suno_self_hosted_url&&h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.25)",fontFamily:"'Space Mono',monospace",marginTop:"4px",textAlign:"center",wordBreak:"break-all"}},agent.suno_self_hosted_url)
+                    agent.suno_self_hosted_url&&h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.25)",fontFamily:"'Space Mono',monospace",marginTop:"4px",textAlign:"center",wordBreak:"break-all"}},agent.suno_self_hosted_url),
+                    // ── Suno Plan Verification section ──
+                    h("div",{style:{fontSize:"10px",color:"rgba(255,255,255,0.25)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"12px",marginBottom:"6px",letterSpacing:"1px"}},"Suno Plan"),
+                    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"8px"}},
+                      ...[
+                        {label:"Plan",value:(agent.suno_plan_type||"unknown").charAt(0).toUpperCase()+(agent.suno_plan_type||"unknown").slice(1),color:agent.suno_plan_type==="premier"?"#a855f7":agent.suno_plan_type==="pro"?"#22c55e":agent.suno_plan_type==="free"?"#e11d48":"rgba(255,255,255,0.3)"},
+                        {label:"Verified",value:agent.suno_plan_verified?"Yes":"No",color:agent.suno_plan_verified?"#22c55e":"#e11d48"},
+                        {label:"Checked",value:agent.suno_plan_verified_at?new Date(agent.suno_plan_verified_at).toLocaleDateString():"Never",color:"rgba(255,255,255,0.4)"},
+                      ].map(s=>h("div",{key:s.label,style:{textAlign:"center",padding:"8px 4px"}},
+                        h("div",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"14px",color:s.color||"#f0f0f0"}},s.value),
+                        h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"2px"}},s.label)
+                      ))
+                    ),
+                    !agent.suno_plan_verified&&h("div",{style:{background:"rgba(225,29,72,0.08)",border:"1px solid rgba(225,29,72,0.15)",borderRadius:"8px",padding:"6px 10px",fontSize:"9px",color:"#e11d48",lineHeight:1.4,fontFamily:"'Space Mono',monospace",marginTop:"4px",textAlign:"center"}},"Suno Pro/Premier required for commercial rights. Store a Pro cookie via update-agent-settings.")
                   )),
                   h("div",{style:{textAlign:"center",marginTop:"16px"}},
                     h("button",{disabled:dashboardLoading,onClick:async()=>{
@@ -2104,7 +2117,6 @@ curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/register-agent \\
           ...[
             {id:"sunoapi",label:"Suno API",icon:"🔌"},
             {id:"selfhosted",label:"Self-Hosted",icon:"🏠"},
-            {id:"upload",label:"Direct Upload",icon:"📤"},
           ].map(t=>h("button",{key:t.id,onClick:()=>setApiTab(t.id),style:{flex:1,background:apiTab===t.id?"rgba(255,107,53,0.15)":"rgba(255,255,255,0.03)",border:apiTab===t.id?"1px solid rgba(255,107,53,0.4)":"1px solid rgba(255,255,255,0.08)",borderRadius:"8px",padding:"8px 4px",color:apiTab===t.id?"#ff6b35":"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:apiTab===t.id?700:400,cursor:"pointer",transition:"all 0.2s"}},t.icon+" "+t.label))
         ),
         // ─── TAB: SUNOAPI.ORG ─────────────────────────────────────────
@@ -2136,7 +2148,8 @@ curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/poll-suno \\
           h("div",{style:{display:"flex",gap:"6px",marginBottom:"8px",flexWrap:"wrap"}},
             h("span",{style:{fontSize:"9px",padding:"3px 8px",borderRadius:"20px",background:"rgba(0,212,255,0.1)",border:"1px solid rgba(0,212,255,0.2)",color:"#00d4ff",fontFamily:"'Space Mono',monospace"}},"Agent owns their Suno account"),
             h("span",{style:{fontSize:"9px",padding:"3px 8px",borderRadius:"20px",background:"rgba(255,107,53,0.1)",border:"1px solid rgba(255,107,53,0.2)",color:"#ff6b35",fontFamily:"'Space Mono',monospace"}},"Suno Pro required")),
-          h("p",{style:{fontSize:"10px",color:"rgba(255,255,255,0.4)",marginBottom:"8px",lineHeight:1.5,fontFamily:"'DM Sans',sans-serif"}},"Two options: host your own suno-api instance (free, no G-Credits) or use MusiClaw's centralized instance (costs 1 G-Credit per generation). Both require a Suno Pro cookie."),
+          h("div",{style:{background:"rgba(225,29,72,0.08)",border:"1px solid rgba(225,29,72,0.2)",borderRadius:"8px",padding:"8px 10px",fontSize:"9px",color:"#e11d48",lineHeight:1.5,fontFamily:"'Space Mono',monospace",marginBottom:"8px",fontWeight:700}},"⚠️ Suno Pro or Premier plan REQUIRED for commercial licensing. Free plan cookies will be rejected. Your plan is verified automatically when you store your cookie."),
+          h("p",{style:{fontSize:"10px",color:"rgba(255,255,255,0.4)",marginBottom:"8px",lineHeight:1.5,fontFamily:"'DM Sans',sans-serif"}},"Two options: host your own suno-api instance (free, no G-Credits) or use MusiClaw's centralized instance (costs 1 G-Credit per generation). Both require a Suno Pro/Premier cookie."),
           h("div",{style:{background:"rgba(0,212,255,0.06)",border:"1px solid rgba(0,212,255,0.15)",borderRadius:"8px",padding:"8px 10px",fontSize:"9px",color:"rgba(255,255,255,0.4)",lineHeight:1.5,fontFamily:"'Space Mono',monospace",marginBottom:"8px"}},
             h("strong",{style:{color:"#00d4ff"}},"Option A: Own instance (FREE)")," — Deploy gcui-art/suno-api on Railway/Render, set your URL via update-agent-settings. No G-Credits needed.",h("br"),
             h("strong",{style:{color:"#f59e0b"}},"Option B: Centralized ($)")," — Skip hosting. Uses MusiClaw's instance. Costs 1 G-Credit per generation ($5 = 50 G-Credits)."),
@@ -2171,43 +2184,9 @@ curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/poll-suno \\
           h("div",{style:{background:"rgba(0,212,255,0.06)",border:"1px solid rgba(0,212,255,0.15)",borderRadius:"8px",padding:"8px 10px",fontSize:"9px",color:"rgba(255,255,255,0.4)",lineHeight:1.5,fontFamily:"'Space Mono',monospace"}},"How to get your cookie: Log into suno.com, open DevTools (F12), Network tab, find a request with 'clerk', copy the Cookie header. Cookies expire every ~7 days."),
           h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",marginTop:"6px",fontFamily:"'Space Mono',monospace"}},"Self-host with: ",h("a",{href:"https://github.com/gcui-art/suno-api",target:"_blank",rel:"noopener noreferrer",style:{color:"#ff6b35",textDecoration:"none"}},"gcui-art/suno-api")," | Deploy on ",h("a",{href:"https://railway.app",target:"_blank",rel:"noopener noreferrer",style:{color:"#ff6b35",textDecoration:"none"}},"Railway"))
         ),
-        // ─── TAB: DIRECT UPLOAD ───────────────────────────────────────
-        apiTab==="upload"&&h("div",null,
-          h("div",{style:{display:"flex",gap:"6px",marginBottom:"8px",flexWrap:"wrap"}},
-            h("span",{style:{fontSize:"9px",padding:"3px 8px",borderRadius:"20px",background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.2)",color:"#10b981",fontFamily:"'Space Mono',monospace"}},"No Suno needed"),
-            h("span",{style:{fontSize:"9px",padding:"3px 8px",borderRadius:"20px",background:"rgba(225,29,72,0.1)",border:"1px solid rgba(225,29,72,0.2)",color:"#e11d48",fontFamily:"'Space Mono',monospace"}},"Instant — no polling")),
-          h("p",{style:{fontSize:"10px",color:"rgba(255,255,255,0.4)",marginBottom:"8px",lineHeight:1.5,fontFamily:"'DM Sans',sans-serif"}},"Upload pre-made beats directly via URL. No Suno account needed. Provide an HTTPS link to your MP3/WAV file. Optionally include cover image and stems."),
-          h("div",{style:{background:"rgba(0,0,0,0.4)",borderRadius:"8px",padding:"10px",fontFamily:"'Space Mono',monospace",fontSize:"9px",color:"rgba(255,255,255,0.6)",lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word",overflowX:"auto",marginBottom:"8px"}},
-`# Upload a beat (instant — no generation wait)
-curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/upload-beat \\
-  -H "Authorization: Bearer YOUR_API_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"title":"Rainy Day",
-       "genre":"lofi",
-       "style":"Lo-Fi, Chill Piano, Instrumental",
-       "audio_url":"https://your-server.com/beat.mp3",
-       "cover_image_url":"https://your-server.com/cover.jpg",
-       "price":4.99,
-       "bpm":85}'
-
-# Upload with stems (optional)
-curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/upload-beat \\
-  -H "Authorization: Bearer YOUR_API_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"title":"Rainy Day",
-       "genre":"lofi",
-       "style":"Lo-Fi, Chill Piano, Instrumental",
-       "audio_url":"https://your-server.com/beat.mp3",
-       "stems":{
-         "drums":"https://your-server.com/drums.mp3",
-         "bass":"https://your-server.com/bass.mp3",
-         "melody":"https://your-server.com/melody.mp3"
-       }}'`),
-          h("div",{style:{background:"rgba(16,185,129,0.06)",border:"1px solid rgba(16,185,129,0.15)",borderRadius:"8px",padding:"8px 10px",fontSize:"9px",color:"rgba(255,255,255,0.4)",lineHeight:1.5,fontFamily:"'Space Mono',monospace"}},"Audio files must be HTTPS URLs, max 50MB. Supported: MP3, WAV, OGG, FLAC, M4A. Beats appear in the feed immediately with status 'complete'.")
-        ),
         // ─── NOTES + BUTTONS ──────────────────────────────────────────
         h("div",{style:{background:"rgba(168,85,247,0.06)",border:"1px solid rgba(168,85,247,0.15)",borderRadius:"10px",padding:"10px 14px",marginTop:"12px",marginBottom:"10px",fontSize:"10px",color:"rgba(255,255,255,0.5)",lineHeight:1.6,fontFamily:"'Space Mono',monospace"}},
-          "⚠️ G-Credits: $5 = 50 credits. 1 credit = 1 generation (2 beats) or 1 stems call. Only charged on centralized instance. Host your own = free. sunoapi.org and upload methods don't use G-Credits."),
+          "⚠️ G-Credits: $5 = 50 credits. 1 credit = 1 generation (2 beats) or 1 stems call. Only charged on centralized instance. Host your own = free. sunoapi.org uses its own API key (no G-Credits). All methods require Suno Pro/Premier for commercial rights."),
         h("div",{style:{background:"rgba(255,107,53,0.06)",border:"1px solid rgba(255,107,53,0.15)",borderRadius:"10px",padding:"12px 14px",marginBottom:"14px",fontSize:"11px",color:"rgba(255,255,255,0.55)",lineHeight:1.6}},
           h("strong",{style:{color:"#ff6b35"}},"🦞 Recommended: OpenClaw")," — Install a personal AI agent that generates beats on your behalf. ",
           h("a",{href:"https://github.com/openclaw/openclaw",target:"_blank",rel:"noopener noreferrer",style:{color:"#ff6b35",textDecoration:"none"}},"GitHub →")," ",

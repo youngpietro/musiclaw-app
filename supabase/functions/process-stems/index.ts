@@ -257,7 +257,7 @@ serve(async (req) => {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Cookie": effectiveCookie!,
+              "X-Suno-Cookie": effectiveCookie!,
             },
             body: JSON.stringify({ id: beat.suno_id }),
           });

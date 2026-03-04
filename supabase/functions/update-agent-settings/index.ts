@@ -240,13 +240,69 @@ serve(async (req) => {
 
     // Validate Suno cookie (for self-hosted generation via gcui-art/suno-api)
     // No email verification needed — not financial data
+    // PRO PLAN VERIFICATION: When cookie is set, verify via /api/get_limit
     if (suno_cookie !== undefined) {
       if (suno_cookie === null || suno_cookie === "") {
         // Allow clearing the cookie
         updateData.suno_cookie = null;
+        updateData.suno_plan_verified = false;
+        updateData.suno_plan_type = "unknown";
         changes.push("suno_cookie → cleared");
       } else if (typeof suno_cookie === "string" && suno_cookie.length > 10) {
-        updateData.suno_cookie = suno_cookie.trim().slice(0, 4096);
+        const trimmedCookie = suno_cookie.trim().slice(0, 4096);
+
+        // ─── PRO PLAN VERIFICATION ─────────────────────────────────
+        // Verify the agent's Suno account is Pro or Premier (required for commercial rights)
+        const { data: agentUrls } = await supabase
+          .from("agents").select("suno_self_hosted_url").eq("id", agent.id).single();
+        const centralizedUrl = Deno.env.get("SUNO_SELF_HOSTED_URL");
+        const verifyUrl = agentUrls?.suno_self_hosted_url || centralizedUrl;
+
+        if (verifyUrl) {
+          try {
+            const limitRes = await fetch(`${verifyUrl}/api/get_limit`, {
+              method: "GET",
+              headers: { "X-Suno-Cookie": trimmedCookie },
+            });
+
+            if (limitRes.ok) {
+              const limitData = await limitRes.json();
+              const monthlyLimit = limitData.monthly_limit ?? limitData.data?.monthly_limit ?? 0;
+
+              let planType = "free";
+              if (monthlyLimit >= 10000) planType = "premier";
+              else if (monthlyLimit >= 2500) planType = "pro";
+
+              if (planType === "free") {
+                return new Response(
+                  JSON.stringify({
+                    error: "Suno Free plan detected. MusiClaw requires a Suno Pro or Premier plan for commercial licensing rights. Upgrade at suno.com/account.",
+                    monthly_limit: monthlyLimit,
+                    plan_detected: "free",
+                    required: "pro or premier",
+                  }),
+                  { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+                );
+              }
+
+              updateData.suno_plan_verified = true;
+              updateData.suno_plan_type = planType;
+              updateData.suno_plan_verified_at = new Date().toISOString();
+              changes.push(`suno_plan → ${planType} (verified, monthly_limit: ${monthlyLimit})`);
+            } else {
+              console.warn(`Plan verification failed for @${agent.handle}: ${limitRes.status}`);
+              updateData.suno_plan_verified = false;
+              updateData.suno_plan_type = "unknown";
+              changes.push("suno_plan → could not verify (API error). Cookie stored, re-verify later.");
+            }
+          } catch (verifyErr: any) {
+            console.error(`Plan verify error for @${agent.handle}:`, verifyErr.message);
+            updateData.suno_plan_verified = false;
+            updateData.suno_plan_type = "unknown";
+          }
+        }
+
+        updateData.suno_cookie = trimmedCookie;
         changes.push("suno_cookie → stored (for self-hosted Suno generation)");
       } else {
         return new Response(

@@ -408,8 +408,66 @@ serve(async (req) => {
 
       if (!selfHostedUrl) {
         return new Response(
-          JSON.stringify({ error: "No self-hosted Suno API available. Set your own via update-agent-settings (suno_self_hosted_url), or use suno_api_key with sunoapi.org, or upload beats via /upload-beat." }),
+          JSON.stringify({ error: "No self-hosted Suno API available. Set your own via update-agent-settings (suno_self_hosted_url), or use suno_api_key with sunoapi.org." }),
           { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // ─── PRO PLAN CHECK (self-hosted only) ────────────────────────
+      // MusiClaw requires Suno Pro or Premier for commercial rights
+      const { data: planData } = await supabase
+        .from("agents")
+        .select("suno_plan_verified, suno_plan_type, suno_plan_verified_at")
+        .eq("id", agent.id)
+        .single();
+
+      const planAge = planData?.suno_plan_verified_at
+        ? Date.now() - new Date(planData.suno_plan_verified_at).getTime()
+        : Infinity;
+      const needsRecheck = !planData?.suno_plan_verified || planAge > 86400000; // 24h
+
+      if (needsRecheck && effectiveSunoCookie) {
+        try {
+          const limitRes = await fetch(`${selfHostedUrl}/api/get_limit`, {
+            method: "GET",
+            headers: { "X-Suno-Cookie": effectiveSunoCookie },
+          });
+          if (limitRes.ok) {
+            const ld = await limitRes.json();
+            const ml = ld.monthly_limit ?? ld.data?.monthly_limit ?? 0;
+            let pt = "free";
+            if (ml >= 10000) pt = "premier";
+            else if (ml >= 2500) pt = "pro";
+
+            await supabase.from("agents").update({
+              suno_plan_verified: pt !== "free",
+              suno_plan_type: pt,
+              suno_plan_verified_at: new Date().toISOString(),
+            }).eq("id", agent.id);
+
+            if (pt === "free") {
+              return new Response(
+                JSON.stringify({
+                  error: "Suno Free plan detected. MusiClaw requires Pro or Premier for commercial licensing rights. Upgrade at suno.com/account.",
+                  plan_detected: "free",
+                  monthly_limit: ml,
+                }),
+                { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+              );
+            }
+          }
+        } catch (e: any) {
+          console.warn(`Plan re-check failed for @${agent.handle}: ${e.message}`);
+        }
+      }
+
+      if (planData && !planData.suno_plan_verified && !needsRecheck) {
+        return new Response(
+          JSON.stringify({
+            error: "Suno Pro plan not verified. Update your suno_cookie via update-agent-settings to trigger verification.",
+            plan_type: planData.suno_plan_type,
+          }),
+          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
 
@@ -446,7 +504,7 @@ serve(async (req) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Cookie": effectiveSunoCookie!,
+          "X-Suno-Cookie": effectiveSunoCookie!,
         },
         body: JSON.stringify(selfHostedPayload),
       });
