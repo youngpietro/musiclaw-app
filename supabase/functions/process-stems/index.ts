@@ -265,9 +265,20 @@ serve(async (req) => {
           const stemsBody = await stemsRes.text();
           console.log(`Self-hosted stems response for beat ${beat.id}: status=${stemsRes.status} body=${stemsBody.slice(0, 500)}`);
 
+          // Detect expired/lost session
+          if (!stemsRes.ok) {
+            const stemsErrText = stemsBody || "";
+            if (stemsErrText.includes("Failed to get session id") || stemsErrText.includes("update the SUNO_COOKIE")) {
+              return new Response(
+                JSON.stringify({ error: "Your Suno session has expired or was lost (server restart). Please log into suno.com, copy a fresh cookie, and re-submit it via update-agent-settings.", action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie" }),
+                { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+              );
+            }
+          }
+
           if (stemsRes.status === 404) {
             // Self-hosted API doesn't support stems — inform agent
-            results.push("Stem splitting not available on self-hosted API. Upload stems directly via the upload-beat endpoint with a 'stems' object.");
+            results.push("Stem splitting not available on self-hosted API.");
           } else if (stemsRes.ok) {
             let stemsApiError = false;
             try {

@@ -252,22 +252,28 @@ serve(async (req) => {
         const trimmedCookie = suno_cookie.trim().slice(0, 4096);
 
         // ─── PRO PLAN VERIFICATION ─────────────────────────────────
-        // Verify the agent's Suno account is Pro or Premier (required for commercial rights)
-        const { data: agentUrls } = await supabase
-          .from("agents").select("suno_self_hosted_url").eq("id", agent.id).single();
-        const centralizedUrl = Deno.env.get("SUNO_SELF_HOSTED_URL");
-        const verifyUrl = agentUrls?.suno_self_hosted_url || centralizedUrl;
-
-        if (verifyUrl) {
-          try {
-            const limitRes = await fetch(`${verifyUrl}/api/get_limit`, {
+        // Call Suno's billing API directly with the __session JWT token.
+        // This bypasses the suno-api's Clerk session requirement and works
+        // as long as the cookie is fresh (submitted within ~1hr of browser login).
+        let planVerified = false;
+        try {
+          // Extract __session JWT from the cookie string
+          const sessionMatch = trimmedCookie.match(/(?:^|;\s*)__session=([^;]+)/);
+          if (sessionMatch) {
+            const sessionJwt = sessionMatch[1];
+            const billingRes = await fetch("https://studio-api.prod.suno.com/api/billing/info/", {
               method: "GET",
-              headers: { "X-Suno-Cookie": trimmedCookie },
+              headers: {
+                "Authorization": `Bearer ${sessionJwt}`,
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+              },
             });
 
-            if (limitRes.ok) {
-              const limitData = await limitRes.json();
-              const monthlyLimit = limitData.monthly_limit ?? limitData.data?.monthly_limit ?? 0;
+            if (billingRes.ok) {
+              const billingData = await billingRes.json();
+              // Suno billing API returns monthly_limit (50=free, 2500=pro, 10000=premier)
+              const monthlyLimit = billingData.monthly_limit ?? billingData.total_credits_left ?? 0;
+              const creditsLeft = billingData.credits_left ?? 0;
 
               let planType = "free";
               if (monthlyLimit >= 10000) planType = "premier";
@@ -278,6 +284,7 @@ serve(async (req) => {
                   JSON.stringify({
                     error: "Suno Free plan detected. MusiClaw requires a Suno Pro or Premier plan for commercial licensing rights. Upgrade at suno.com/account.",
                     monthly_limit: monthlyLimit,
+                    credits_left: creditsLeft,
                     plan_detected: "free",
                     required: "pro or premier",
                   }),
@@ -289,17 +296,61 @@ serve(async (req) => {
               updateData.suno_plan_type = planType;
               updateData.suno_plan_verified_at = new Date().toISOString();
               changes.push(`suno_plan → ${planType} (verified, monthly_limit: ${monthlyLimit})`);
+              planVerified = true;
             } else {
-              console.warn(`Plan verification failed for @${agent.handle}: ${limitRes.status}`);
-              updateData.suno_plan_verified = false;
-              updateData.suno_plan_type = "unknown";
-              changes.push("suno_plan → could not verify (API error). Cookie stored, re-verify later.");
+              console.warn(`Suno billing API returned ${billingRes.status} for @${agent.handle}`);
             }
-          } catch (verifyErr: any) {
-            console.error(`Plan verify error for @${agent.handle}:`, verifyErr.message);
+          }
+
+          // Fallback: try via suno-api's /api/get_limit if direct call failed
+          if (!planVerified) {
+            const { data: agentUrls } = await supabase
+              .from("agents").select("suno_self_hosted_url").eq("id", agent.id).single();
+            const centralizedUrl = Deno.env.get("SUNO_SELF_HOSTED_URL");
+            const verifyUrl = agentUrls?.suno_self_hosted_url || centralizedUrl;
+
+            if (verifyUrl) {
+              const limitRes = await fetch(`${verifyUrl}/api/get_limit`, {
+                method: "GET",
+                headers: { "X-Suno-Cookie": trimmedCookie },
+              });
+              if (limitRes.ok) {
+                const limitData = await limitRes.json();
+                const monthlyLimit = limitData.monthly_limit ?? 0;
+                let planType = "free";
+                if (monthlyLimit >= 10000) planType = "premier";
+                else if (monthlyLimit >= 2500) planType = "pro";
+
+                if (planType === "free") {
+                  return new Response(
+                    JSON.stringify({
+                      error: "Suno Free plan detected. MusiClaw requires a Suno Pro or Premier plan for commercial licensing rights. Upgrade at suno.com/account.",
+                      monthly_limit: monthlyLimit,
+                      plan_detected: "free",
+                      required: "pro or premier",
+                    }),
+                    { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+                  );
+                }
+                updateData.suno_plan_verified = true;
+                updateData.suno_plan_type = planType;
+                updateData.suno_plan_verified_at = new Date().toISOString();
+                changes.push(`suno_plan → ${planType} (verified via suno-api, monthly_limit: ${monthlyLimit})`);
+                planVerified = true;
+              }
+            }
+          }
+
+          if (!planVerified) {
             updateData.suno_plan_verified = false;
             updateData.suno_plan_type = "unknown";
+            changes.push("suno_plan → could not verify. Ensure your cookie includes a fresh __session token (log into suno.com and copy cookie immediately).");
           }
+        } catch (verifyErr: any) {
+          console.error(`Plan verify error for @${agent.handle}:`, verifyErr.message);
+          updateData.suno_plan_verified = false;
+          updateData.suno_plan_type = "unknown";
+          changes.push("suno_plan → verification error. Cookie stored, will re-verify on generation.");
         }
 
         updateData.suno_cookie = trimmedCookie;

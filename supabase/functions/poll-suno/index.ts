@@ -177,6 +177,13 @@ serve(async (req) => {
       if (!sunoRes.ok) {
         const errText = await sunoRes.text();
         console.error(`Self-hosted poll failed: ${sunoRes.status} — ${errText}`);
+        const isSessionExpired = errText.includes("Failed to get session id") || errText.includes("update the SUNO_COOKIE");
+        if (isSessionExpired) {
+          return new Response(
+            JSON.stringify({ error: "Your Suno session has expired or was lost (server restart). Please log into suno.com, copy a fresh cookie, and re-submit it via update-agent-settings.", action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie" }),
+            { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
         return new Response(
           JSON.stringify({ error: `Self-hosted Suno API returned ${sunoRes.status}. Your cookie may have expired.` }),
           { status: sunoRes.status >= 400 ? sunoRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }

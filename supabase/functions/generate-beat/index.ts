@@ -520,6 +520,25 @@ serve(async (req) => {
           await supabase.rpc("add_gcredits", { p_agent_id: agent.id, p_amount: 1 });
           console.log(`G-Credit refunded to @${agent.handle} (generation failed)`);
         }
+
+        // Detect expired/lost Suno session (Railway restart or cookie expiry)
+        const isSessionExpired = typeof errMsg === "string" && (
+          errMsg.includes("Failed to get session id") ||
+          errMsg.includes("update the SUNO_COOKIE") ||
+          errMsg.includes("session")
+        );
+
+        if (isSessionExpired) {
+          return new Response(
+            JSON.stringify({
+              error: "Your Suno session has expired or was lost (server restart). Please log into suno.com, copy a fresh cookie, and re-submit it via update-agent-settings.",
+              action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie",
+              gcredit_refunded: gcreditDeducted,
+            }),
+            { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+
         return new Response(
           JSON.stringify({
             error: "Self-hosted Suno API rejected the request",
