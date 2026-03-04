@@ -104,7 +104,7 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price";
+    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_self_hosted_url, g_credits";
     let { data: agent } = await supabase.from("agents").select(agentCols).eq("api_token_hash", tokenHash).single();
     if (!agent) {
       const { data: fallback } = await supabase.from("agents").select(agentCols).eq("api_token", token).single();
@@ -251,9 +251,13 @@ serve(async (req) => {
     let effectiveSunoCookie = inlineSunoCookie || null;
     if (!suno_api_key && !effectiveSunoCookie) {
       const { data: agentFull } = await supabase
-        .from("agents").select("suno_cookie").eq("id", agent.id).single();
+        .from("agents").select("suno_cookie, suno_self_hosted_url").eq("id", agent.id).single();
       if (agentFull?.suno_cookie) {
         effectiveSunoCookie = agentFull.suno_cookie;
+      }
+      // Update agent's self-hosted URL from DB if not already on the object
+      if (agentFull?.suno_self_hosted_url && !agent.suno_self_hosted_url) {
+        agent.suno_self_hosted_url = agentFull.suno_self_hosted_url;
       }
     }
 
@@ -398,12 +402,37 @@ serve(async (req) => {
 
     if (useSelfHosted) {
       // ─── SELF-HOSTED: gcui-art/suno-api ────────────────────────────
-      const selfHostedUrl = Deno.env.get("SUNO_SELF_HOSTED_URL");
+      // Per-agent URL: agent's own instance → FREE, centralized → costs G-Credits
+      const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
+      const useCentralized = !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
+
       if (!selfHostedUrl) {
         return new Response(
-          JSON.stringify({ error: "Self-hosted Suno API is not configured yet. Use suno_api_key with sunoapi.org, or upload beats directly via /upload-beat." }),
+          JSON.stringify({ error: "No self-hosted Suno API available. Set your own via update-agent-settings (suno_self_hosted_url), or use suno_api_key with sunoapi.org, or upload beats via /upload-beat." }),
           { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
         );
+      }
+
+      // ─── G-CREDIT DEDUCTION (centralized only) ─────────────────────
+      let gcreditDeducted = false;
+      if (useCentralized) {
+        const { data: newBal, error: gcErr } = await supabase.rpc("deduct_gcredits", {
+          p_agent_id: agent.id, p_amount: 1,
+        });
+        if (gcErr) {
+          console.warn(`G-Credit deduction failed for @${agent.handle}: ${gcErr.message}`);
+          return new Response(
+            JSON.stringify({
+              error: "Insufficient G-Credits. You need 1 G-Credit to generate on the centralized Suno API.",
+              g_credits: agent.g_credits || 0,
+              buy: "POST /functions/v1/manage-gcredits with {\"action\":\"buy\"} — $5 = 50 G-Credits",
+              alternative: "Set your own suno_self_hosted_url via update-agent-settings (free, no G-Credits needed)",
+            }),
+            { status: 402, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        gcreditDeducted = true;
+        console.log(`G-Credit deducted: 1 from @${agent.handle} (balance: ${newBal})`);
       }
 
       const selfHostedPayload = {
@@ -428,11 +457,17 @@ serve(async (req) => {
         const errMsg = selfHostedData?.detail || selfHostedData?.error || selfHostedData?.message
           || (typeof selfHostedData === "string" ? selfHostedData : "Unknown error");
         console.warn(`Self-hosted Suno error for @${agent.handle}: ${selfHostedRes.status} — ${errMsg}`);
+        // Refund G-Credit if we charged for centralized
+        if (gcreditDeducted) {
+          await supabase.rpc("add_gcredits", { p_agent_id: agent.id, p_amount: 1 });
+          console.log(`G-Credit refunded to @${agent.handle} (generation failed)`);
+        }
         return new Response(
           JSON.stringify({
             error: "Self-hosted Suno API rejected the request",
             suno_status: selfHostedRes.status,
             suno_error: errMsg,
+            gcredit_refunded: gcreditDeducted,
             tip: "Your Suno cookie may have expired. Update it via update-agent-settings.",
           }),
           { status: selfHostedRes.status >= 400 ? selfHostedRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }
@@ -444,6 +479,15 @@ serve(async (req) => {
         : selfHostedData.clips || selfHostedData.data || [];
       selfHostedClipIds = clips.map((c: any) => c.id).filter(Boolean);
       taskId = selfHostedClipIds[0] || null;
+
+      // Log G-Credit usage if centralized
+      if (gcreditDeducted) {
+        await supabase.from("gcredit_usage").insert({
+          agent_id: agent.id,
+          action: "generate",
+          credits_spent: 1,
+        });
+      }
 
     } else {
       // ─── SUNOAPI.ORG (existing path) ───────────────────────────────
@@ -548,10 +592,13 @@ serve(async (req) => {
         success: true,
         task_id: taskId,
         generation_source: useSelfHosted ? "selfhosted" : "sunoapi",
+        ...(useSelfHosted ? { used_centralized: useCentralized, g_credits_remaining: useCentralized ? (agent.g_credits || 0) - 1 : undefined } : {}),
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
         beats: beatRecords.map((b) => ({ id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre, status: b.status, price: b.price, suno_id: b.suno_id || null })),
         message: useSelfHosted
-          ? "Generating via self-hosted Suno. No callbacks — use poll-suno to check status. Your cookie was used once."
+          ? (useCentralized
+            ? "Generating via MusiClaw's centralized Suno API (1 G-Credit used). Use poll-suno to check status."
+            : "Generating via your self-hosted Suno instance (free). Use poll-suno to check status.")
           : "Generating. Suno callbacks in ~30-60s. WAV conversion is automatic. Your key was used once and NOT stored.",
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }

@@ -50,9 +50,9 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    let { data: agent } = await supabase.from("agents").select("id, handle, name").eq("api_token_hash", tokenHash).single();
+    let { data: agent } = await supabase.from("agents").select("id, handle, name, suno_self_hosted_url").eq("api_token_hash", tokenHash).single();
     if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select("id, handle, name").eq("api_token", token).single();
+      const { data: fallback } = await supabase.from("agents").select("id, handle, name, suno_self_hosted_url").eq("api_token", token).single();
       agent = fallback;
     }
 
@@ -150,10 +150,10 @@ serve(async (req) => {
 
     if (useSelfHosted) {
       // ─── SELF-HOSTED POLLING ────────────────────────────────────
-      const selfHostedUrl = Deno.env.get("SUNO_SELF_HOSTED_URL");
+      const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
       if (!selfHostedUrl) {
         return new Response(
-          JSON.stringify({ error: "Self-hosted Suno API not configured." }),
+          JSON.stringify({ error: "No self-hosted Suno API URL configured. Set yours via update-agent-settings." }),
           { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }

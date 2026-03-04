@@ -1,7 +1,7 @@
 // supabase/functions/update-agent-settings/index.ts
 // POST /functions/v1/update-agent-settings
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { owner_email?, paypal_email?, default_beat_price?, default_stems_price?, suno_cookie? }
+// Body: { owner_email?, paypal_email?, default_beat_price?, default_stems_price?, suno_cookie?, suno_self_hosted_url? }
 // SECURITY: Bearer auth, email validation, rate limiting
 // NOTE: Updates agent settings directly on the agents table (live schema)
 
@@ -95,11 +95,11 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
-    const { owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie } = body;
+    const { owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url } = body;
 
-    if (!owner_email && !paypal_email && suno_cookie === undefined && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
+    if (!owner_email && !paypal_email && suno_cookie === undefined && suno_self_hosted_url === undefined && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
       return new Response(
-        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie" }),
+        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -256,6 +256,41 @@ serve(async (req) => {
       }
     }
 
+    // Validate self-hosted Suno API URL (for decentralized generation)
+    // No email verification needed — not financial data
+    if (suno_self_hosted_url !== undefined) {
+      if (suno_self_hosted_url === null || suno_self_hosted_url === "") {
+        // Allow clearing the URL (fall back to centralized)
+        updateData.suno_self_hosted_url = null;
+        changes.push("suno_self_hosted_url → cleared (will use centralized, costs G-Credits)");
+      } else if (typeof suno_self_hosted_url === "string") {
+        const cleanUrl = suno_self_hosted_url.trim().slice(0, 256);
+        // Must be HTTPS
+        if (!cleanUrl.startsWith("https://")) {
+          return new Response(
+            JSON.stringify({ error: "suno_self_hosted_url must use HTTPS" }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        // Block private/internal URLs (SSRF prevention)
+        const urlLower = cleanUrl.toLowerCase();
+        if (urlLower.includes("localhost") || urlLower.includes("127.0.0.1") || urlLower.includes("0.0.0.0") || urlLower.includes("169.254.") || urlLower.includes("10.") || urlLower.includes("192.168.") || urlLower.includes(".internal")) {
+          return new Response(
+            JSON.stringify({ error: "suno_self_hosted_url cannot point to private/internal addresses" }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        // Remove trailing slash
+        updateData.suno_self_hosted_url = cleanUrl.replace(/\/+$/, "");
+        changes.push(`suno_self_hosted_url → ${updateData.suno_self_hosted_url} (your own instance — no G-Credits needed)`);
+      } else {
+        return new Response(
+          JSON.stringify({ error: "Invalid suno_self_hosted_url format. Must be an HTTPS URL." }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     // ─── UPDATE AGENT ───────────────────────────────────────────────
     const { error } = await supabase
       .from("agents")
@@ -269,7 +304,7 @@ serve(async (req) => {
         success: true,
         agent: { handle: agent.handle, name: agent.name },
         updated: changes,
-        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}. ` : "") + (suno_cookie !== undefined ? (updateData.suno_cookie ? "Suno cookie stored — you can now use self-hosted generation without passing the cookie each time." : "Suno cookie cleared.") : ""),
+        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}. ` : "") + (suno_cookie !== undefined ? (updateData.suno_cookie ? "Suno cookie stored. " : "Suno cookie cleared. ") : "") + (suno_self_hosted_url !== undefined ? (updateData.suno_self_hosted_url ? `Self-hosted URL set — generations will use your instance (no G-Credits needed). ` : "Self-hosted URL cleared — will use centralized instance (costs G-Credits). ") : ""),
       }),
       { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
     );

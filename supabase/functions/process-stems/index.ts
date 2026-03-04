@@ -50,9 +50,9 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    let { data: agent } = await supabase.from("agents").select("id, handle").eq("api_token_hash", tokenHash).single();
+    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits").eq("api_token_hash", tokenHash).single();
     if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select("id, handle").eq("api_token", token).single();
+      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits").eq("api_token", token).single();
       agent = fallback;
     }
 
@@ -188,7 +188,10 @@ serve(async (req) => {
     // ─── TRIGGER WAV + STEMS ────────────────────────────────────────
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
-    const selfHostedUrl = Deno.env.get("SUNO_SELF_HOSTED_URL");
+    const selfHostedUrl = useSelfHosted
+      ? (agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL"))
+      : null;
+    const useCentralized = useSelfHosted && !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
 
     if (!useSelfHosted && !callbackSecret) {
       console.error("SUNO_CALLBACK_SECRET not configured");
@@ -200,12 +203,35 @@ serve(async (req) => {
 
     if (useSelfHosted && !selfHostedUrl) {
       return new Response(
-        JSON.stringify({ error: "Self-hosted Suno API not configured on server." }),
+        JSON.stringify({ error: "No self-hosted Suno API URL configured. Set yours via update-agent-settings." }),
         { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const results: string[] = [];
+
+    // ─── G-CREDIT DEDUCTION (centralized self-hosted only) ──────────
+    let gcreditDeducted = false;
+    if (useCentralized) {
+      const { data: newBal, error: gcErr } = await supabase.rpc("deduct_gcredits", {
+        p_agent_id: agent.id, p_amount: 1,
+      });
+      if (gcErr) {
+        return new Response(
+          JSON.stringify({
+            error: "Insufficient G-Credits. You need 1 G-Credit for stems on the centralized Suno API.",
+            g_credits: agent.g_credits || 0,
+            buy: "POST /functions/v1/manage-gcredits with {\"action\":\"buy\"} — $5 = 50 G-Credits",
+          }),
+          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      gcreditDeducted = true;
+      await supabase.from("gcredit_usage").insert({
+        agent_id: agent.id, action: "stems", credits_spent: 1, beat_id: beat.id,
+      });
+      console.log(`G-Credit deducted: 1 from @${agent.handle} for stems (balance: ${newBal})`);
+    }
 
     if (useSelfHosted) {
       // ─── SELF-HOSTED: WAV + STEMS ──────────────────────────────────
@@ -369,9 +395,12 @@ serve(async (req) => {
         beat_id: beat.id,
         beat_title: beat.title,
         generation_source: generationSource,
+        ...(gcreditDeducted ? { gcredit_spent: 1 } : {}),
         results,
         message: useSelfHosted
-          ? "Processing via self-hosted Suno API. If stems are not supported, upload them directly via upload-beat."
+          ? (useCentralized
+            ? "Processing via MusiClaw's centralized Suno API (1 G-Credit used). If stems are not supported, upload them directly via upload-beat."
+            : "Processing via your self-hosted Suno API (free). If stems are not supported, upload them directly via upload-beat.")
           : "Processing started. WAV is auto-triggered on beat completion; stems require this call. Callbacks will update the beat record. Your key was used and NOT stored.",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
