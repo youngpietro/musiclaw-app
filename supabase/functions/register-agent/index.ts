@@ -125,37 +125,8 @@ serve(async (req) => {
     }
     const cleanDesc = sanitize(description || "").slice(0, 500);
 
-    if (!genres || !Array.isArray(genres) || genres.length < 3) {
-      // Fetch valid parent genres from DB for error message (exclude sub-genres)
-      const { data: dbGenres } = await supabase.from("genres").select("id").is("parent_id", null).order("id");
-      const validGenreIds = dbGenres?.map((g: any) => g.id) || [];
-      return new Response(
-        JSON.stringify({
-          error: "genres is required — pick at least 3 genres that define your music soul.",
-          valid_genres: validGenreIds,
-        }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Validate genres against DB (parent genres only — sub-genres are auto-detected)
-    const { data: dbGenres } = await supabase.from("genres").select("id").is("parent_id", null).order("id");
-    const validGenreIds = dbGenres?.map((g: any) => g.id) || [];
-    const invalidGenres = genres.filter((g: string) => !validGenreIds.includes(g));
-    if (invalidGenres.length > 0) {
-      return new Response(
-        JSON.stringify({ error: `Invalid genres: ${invalidGenres.join(", ")}`, valid_genres: validGenreIds }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    const uniqueGenres = [...new Set(genres as string[])];
-    if (uniqueGenres.length < 3) {
-      return new Response(
-        JSON.stringify({ error: "Pick at least 3 different genres." }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    // Genres are optional — agents can generate any genre
+    const uniqueGenres = genres && Array.isArray(genres) ? [...new Set(genres as string[])] : [];
 
     const cleanHandle = handle.startsWith("@") ? handle : `@${handle}`;
     if (!/^@[a-z0-9][a-z0-9_-]{1,30}$/.test(cleanHandle)) {
@@ -312,7 +283,7 @@ serve(async (req) => {
                   <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Owner Email</td><td style="color:#a855f7;padding:6px 0;font-size:14px;">${cleanOwnerEmail}</td></tr>
                   <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">PayPal</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${cleanPaypal}</td></tr>
                   <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Runtime</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${cleanRuntime}</td></tr>
-                  <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Genres</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${uniqueGenres.join(", ")}</td></tr>
+                  ${uniqueGenres.length > 0 ? `<tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Genres</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${uniqueGenres.join(", ")}</td></tr>` : ""}
                   <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Beat Price</td><td style="color:#22c55e;font-weight:700;padding:6px 0;font-size:14px;">$${finalPrice.toFixed(2)}</td></tr>
                   <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Stems Price</td><td style="color:#22c55e;font-weight:700;padding:6px 0;font-size:14px;">$${finalStemsPrice.toFixed(2)}</td></tr>
                   <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">IP</td><td style="color:rgba(255,255,255,0.3);padding:6px 0;font-size:12px;">${clientIp}</td></tr>
@@ -343,7 +314,9 @@ serve(async (req) => {
           avatar: agent.avatar,
           runtime: agent.runtime,
           genres: agent.genres,
-          music_soul: `${agent.name}'s music soul: ${uniqueGenres.join(" × ")}`,
+          music_soul: uniqueGenres.length > 0
+            ? `${agent.name}'s music soul: ${uniqueGenres.join(" × ")}`
+            : `${agent.name} — no genre restrictions, can generate any style`,
         },
         api_token: agent.api_token,
         message: "Store your api_token securely. Pass suno_api_key per-request — Musiclaw never stores it. Your human can view agent stats at https://musiclaw.app (click My Agents).",

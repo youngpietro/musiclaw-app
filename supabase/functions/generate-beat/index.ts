@@ -20,7 +20,7 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-const VALID_MODELS = ["V5", "V4_5PLUS", "V4_5ALL", "V4_5", "V4"];
+const VALID_MODELS = ["V5"];
 const MAX_BEAT_PRICE = 499.99;
 const MAX_STEMS_PRICE = 999.99;
 
@@ -224,7 +224,7 @@ serve(async (req) => {
     const {
       title, genre, style, suno_api_key,
       suno_cookie: inlineSunoCookie,
-      model = "V4",
+      model = "V5",
       negativeTags = "", bpm = 0,
       price = null,
       stems_price = null,
@@ -268,7 +268,6 @@ serve(async (req) => {
           methods: {
             sunoapi: "Pass suno_api_key (from sunoapi.org)",
             selfhosted: "Pass suno_cookie (from your Suno Pro account) or store it via update-agent-settings",
-            upload: "Or use POST /functions/v1/upload-beat to upload a pre-made beat (no key needed)",
           },
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
@@ -302,18 +301,7 @@ serve(async (req) => {
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
-
-    // Genre must match music soul
     const agentGenres = agent.genres || [];
-    if (agentGenres.length > 0 && !agentGenres.includes(genre)) {
-      return new Response(
-        JSON.stringify({
-          error: `Genre "${genre}" is not part of your music soul. Your genres: ${agentGenres.join(", ")}`,
-          your_genres: agentGenres,
-        }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
 
     if (!VALID_MODELS.includes(model)) {
       return new Response(
@@ -491,6 +479,29 @@ serve(async (req) => {
         }
         gcreditDeducted = true;
         console.log(`G-Credit deducted: 1 from @${agent.handle} (balance: ${newBal})`);
+
+        // ─── LOW-CREDIT EMAIL NOTIFICATION (fire-and-forget) ────────
+        if (newBal === 0 || newBal <= 0) {
+          const resendApiKey = Deno.env.get("RESEND_API_KEY");
+          const { data: ownerData } = await supabase.from("agents").select("owner_email").eq("id", agent.id).single();
+          if (resendApiKey && ownerData?.owner_email) {
+            try {
+              await fetch("https://api.resend.com/emails", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  from: "MusiClaw <noreply@contact.musiclaw.app>",
+                  to: [ownerData.owner_email],
+                  subject: `Your G-Credits are empty — MusiClaw`,
+                  html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#ff6b35;font-size:24px;margin:0 0 16px;">G-Credits Empty!</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your agent <strong>@${agent.handle}</strong> has used all its G-Credits. Top up to continue generating beats on MusiClaw's centralized Suno API.</p><a href="https://musiclaw.app" style="display:inline-block;background:linear-gradient(135deg,#ff6b35,#e11d48);color:#fff;padding:14px 28px;border-radius:12px;text-decoration:none;font-weight:700;margin-top:16px;">Top Up G-Credits</a><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`
+                }),
+              });
+              console.log(`Low-credits email sent to ${ownerData.owner_email} for agent @${agent.handle}`);
+            } catch (emailErr) {
+              console.error("Low-credits email error:", (emailErr as Error).message);
+            }
+          }
+        }
       }
 
       const selfHostedPayload = {

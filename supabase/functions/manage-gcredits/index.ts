@@ -1,11 +1,11 @@
 // supabase/functions/manage-gcredits/index.ts
 // POST /functions/v1/manage-gcredits
-// Headers: Authorization: Bearer <agent_api_token>
-// Body: { action: "balance" | "buy" | "capture", order_id? }
-// Manages G-Credits for agents: check balance, purchase via PayPal ($5 = 50 G-Credits),
+// Auth: Bearer <agent_api_token> OR { email, code, agent_id } (dashboard auth)
+// Body: { action: "balance" | "buy" | "capture" | "tiers", tier?, order_id? }
+// Manages G-Credits for agents: check balance, purchase via PayPal,
 // capture payment. G-Credits are used to generate beats on MusiClaw's centralized
 // self-hosted Suno API. Agents with their own suno-api instance don't need G-Credits.
-// SECURITY: Bearer auth, rate limited, CORS restricted
+// SECURITY: Dual auth (Bearer OR email+code), rate limited, CORS restricted
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -45,9 +45,16 @@ async function getPayPalAccessToken(): Promise<string> {
   return data.access_token;
 }
 
-// G-Credit package: $5 = 50 G-Credits
-const GCREDIT_PACKAGE_PRICE = 5.0;
-const GCREDIT_PACKAGE_AMOUNT = 50;
+// ─── G-CREDIT TIERS ──────────────────────────────────────────────────────────
+const GCREDIT_TIERS = [
+  { id: "starter",  credits: 50,  price: 5.00,  label: "Starter" },
+  { id: "producer", credits: 110, price: 10.00, label: "Producer" },
+  { id: "studio",   credits: 250, price: 20.00, label: "Studio" },
+  { id: "label",    credits: 700, price: 50.00, label: "Label" },
+];
+
+// Default tier (backward compat)
+const DEFAULT_TIER = GCREDIT_TIERS[0];
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);
@@ -59,50 +66,146 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // ─── AUTH VIA BEARER TOKEN (agent auth) ─────────────────────
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(
-        JSON.stringify({ error: "Missing Authorization: Bearer <api_token>" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    const token = authHeader.replace("Bearer ", "");
-    const tokenBytes = new TextEncoder().encode(token);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
-    const tokenHash = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-
-    let { data: agent } = await supabase
-      .from("agents")
-      .select("id, handle, name, g_credits, paypal_email, owner_email")
-      .eq("api_token_hash", tokenHash)
-      .single();
-
-    if (!agent) {
-      const { data: fallback } = await supabase
-        .from("agents")
-        .select("id, handle, name, g_credits, paypal_email, owner_email")
-        .eq("api_token", token)
-        .single();
-      agent = fallback;
-    }
-
-    if (!agent) {
-      return new Response(
-        JSON.stringify({ error: "Invalid API token" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
     const body = await req.json();
     const { action } = body;
 
+    // ─── ACTION: TIERS (public, no auth) ──────────────────────────
+    if (action === "tiers") {
+      return new Response(
+        JSON.stringify({
+          tiers: GCREDIT_TIERS.map(t => ({
+            id: t.id,
+            credits: t.credits,
+            price: t.price,
+            label: t.label,
+            per_credit: `$${(t.price / t.credits).toFixed(3)}`,
+          })),
+        }),
+        { headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── AUTH: Bearer token (agent) OR email+code (dashboard) ─────
+    let agent: any = null;
+    const authHeader = req.headers.get("authorization");
+
+    if (authHeader?.startsWith("Bearer ")) {
+      // ── Bearer token auth (agent API) ──
+      const token = authHeader.replace("Bearer ", "");
+      const tokenBytes = new TextEncoder().encode(token);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
+      const tokenHash = Array.from(new Uint8Array(hashBuffer))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      let { data: agentData } = await supabase
+        .from("agents")
+        .select("id, handle, name, g_credits, paypal_email, owner_email")
+        .eq("api_token_hash", tokenHash)
+        .single();
+
+      if (!agentData) {
+        const { data: fallback } = await supabase
+          .from("agents")
+          .select("id, handle, name, g_credits, paypal_email, owner_email")
+          .eq("api_token", token)
+          .single();
+        agentData = fallback;
+      }
+
+      agent = agentData;
+    } else {
+      // ── Dashboard auth: email + code + agent_id ──
+      const { email, code, agent_id } = body;
+
+      if (!email || typeof email !== "string") {
+        return new Response(
+          JSON.stringify({ error: "Authorization required. Use Bearer token or { email, code, agent_id }." }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+      if (!emailRegex.test(normalizedEmail)) {
+        return new Response(
+          JSON.stringify({ error: "Invalid email format" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (!code || typeof code !== "string" || code.length !== 6) {
+        return new Response(
+          JSON.stringify({ error: "A 6-digit verification code is required" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (!agent_id || typeof agent_id !== "string") {
+        return new Response(
+          JSON.stringify({ error: "agent_id is required for dashboard auth" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Verify email code
+      const { data: verification } = await supabase
+        .from("email_verifications")
+        .select("id, verified, expires_at")
+        .eq("email", normalizedEmail)
+        .eq("code", code)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!verification) {
+        return new Response(
+          JSON.stringify({ error: "Invalid verification code" }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (!verification.verified) {
+        return new Response(
+          JSON.stringify({ error: "Verification code not yet verified" }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (new Date(verification.expires_at) < new Date()) {
+        return new Response(
+          JSON.stringify({ error: "Verification code expired. Please request a new one." }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Verify agent belongs to this owner
+      const { data: agentData } = await supabase
+        .from("agents")
+        .select("id, handle, name, g_credits, paypal_email, owner_email")
+        .eq("id", agent_id)
+        .eq("owner_email", normalizedEmail)
+        .single();
+
+      if (!agentData) {
+        return new Response(
+          JSON.stringify({ error: "Agent not found or does not belong to this email" }),
+          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      agent = agentData;
+    }
+
+    if (!agent) {
+      return new Response(
+        JSON.stringify({ error: "Authentication failed. Invalid token or credentials." }),
+        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── ACTION: BALANCE ──────────────────────────────────────────
     if (action === "balance") {
-      // Get recent usage
       const { data: recentUsage } = await supabase
         .from("gcredit_usage")
         .select("action, credits_spent, beat_id, created_at")
@@ -124,7 +227,7 @@ serve(async (req) => {
           g_credits: agent.g_credits || 0,
           total_spent: totalSpent,
           recent_usage: recentUsage || [],
-          price: `$${GCREDIT_PACKAGE_PRICE} = ${GCREDIT_PACKAGE_AMOUNT} G-Credits`,
+          tiers: GCREDIT_TIERS.map(t => ({ id: t.id, credits: t.credits, price: t.price, label: t.label })),
         }),
         { headers: { ...cors, "Content-Type": "application/json" } }
       );
@@ -132,6 +235,22 @@ serve(async (req) => {
 
     // ─── ACTION: BUY ──────────────────────────────────────────────
     if (action === "buy") {
+      // Resolve tier
+      const { tier: tierId } = body;
+      const selectedTier = tierId
+        ? GCREDIT_TIERS.find(t => t.id === tierId)
+        : DEFAULT_TIER;
+
+      if (!selectedTier) {
+        return new Response(
+          JSON.stringify({
+            error: `Invalid tier "${tierId}". Valid tiers: ${GCREDIT_TIERS.map(t => t.id).join(", ")}`,
+            tiers: GCREDIT_TIERS.map(t => ({ id: t.id, credits: t.credits, price: t.price })),
+          }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
       // Rate limit: max 10 purchases per hour per agent
       const { data: recentPurchases } = await supabase
         .from("rate_limits")
@@ -167,10 +286,10 @@ serve(async (req) => {
           intent: "CAPTURE",
           purchase_units: [
             {
-              description: `MusiClaw G-Credits (${GCREDIT_PACKAGE_AMOUNT} generation credits)`,
+              description: `MusiClaw G-Credits — ${selectedTier.label} (${selectedTier.credits} generation credits)`,
               amount: {
                 currency_code: "USD",
-                value: GCREDIT_PACKAGE_PRICE.toFixed(2),
+                value: selectedTier.price.toFixed(2),
               },
             },
           ],
@@ -191,13 +310,12 @@ serve(async (req) => {
       // Record in DB
       await supabase.from("gcredit_purchases").insert({
         agent_id: agent.id,
-        credits_amount: GCREDIT_PACKAGE_AMOUNT,
-        amount_usd: GCREDIT_PACKAGE_PRICE,
+        credits_amount: selectedTier.credits,
+        amount_usd: selectedTier.price,
         paypal_order_id: orderData.id,
         paypal_status: "pending",
       });
 
-      // Extract approval URL for the agent
       const approvalUrl = orderData.links?.find(
         (l: any) => l.rel === "approve"
       )?.href;
@@ -205,8 +323,9 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           order_id: orderData.id,
-          amount: `$${GCREDIT_PACKAGE_PRICE.toFixed(2)}`,
-          credits: GCREDIT_PACKAGE_AMOUNT,
+          tier: selectedTier.id,
+          amount: `$${selectedTier.price.toFixed(2)}`,
+          credits: selectedTier.credits,
           approval_url: approvalUrl || null,
           message: approvalUrl
             ? `Open this URL to complete payment: ${approvalUrl}`
@@ -241,11 +360,14 @@ serve(async (req) => {
         );
       }
 
+      const purchaseCredits = purchase.credits_amount || DEFAULT_TIER.credits;
+      const purchasePrice = purchase.amount_usd || DEFAULT_TIER.price;
+
       if (purchase.paypal_status === "completed") {
         return new Response(
           JSON.stringify({
             success: true,
-            credits: GCREDIT_PACKAGE_AMOUNT,
+            credits: purchaseCredits,
             already_captured: true,
             g_credits: agent.g_credits,
           }),
@@ -301,9 +423,9 @@ serve(async (req) => {
       const capturedAmount = parseFloat(
         capturedPayment?.amount?.value || "0"
       );
-      if (Math.abs(capturedAmount - GCREDIT_PACKAGE_PRICE) > 0.01) {
+      if (Math.abs(capturedAmount - purchasePrice) > 0.01) {
         console.error(
-          `Amount mismatch: captured ${capturedAmount}, expected ${GCREDIT_PACKAGE_PRICE}`
+          `Amount mismatch: captured ${capturedAmount}, expected ${purchasePrice}`
         );
         await supabase
           .from("gcredit_purchases")
@@ -330,7 +452,7 @@ serve(async (req) => {
         "add_gcredits",
         {
           p_agent_id: agent.id,
-          p_amount: GCREDIT_PACKAGE_AMOUNT,
+          p_amount: purchaseCredits,
         }
       );
 
@@ -345,15 +467,15 @@ serve(async (req) => {
         const current = agentData?.g_credits || 0;
         await supabase
           .from("agents")
-          .update({ g_credits: current + GCREDIT_PACKAGE_AMOUNT })
+          .update({ g_credits: current + purchaseCredits })
           .eq("id", agent.id);
       }
 
       const finalBalance =
-        newBalance ?? (agent.g_credits || 0) + GCREDIT_PACKAGE_AMOUNT;
+        newBalance ?? (agent.g_credits || 0) + purchaseCredits;
 
       console.log(
-        `G-Credits added: ${GCREDIT_PACKAGE_AMOUNT} to agent ${agent.handle} (${agent.id}). New balance: ${finalBalance}`
+        `G-Credits added: ${purchaseCredits} to agent ${agent.handle} (${agent.id}). New balance: ${finalBalance}`
       );
 
       // Send confirmation email via Resend
@@ -370,12 +492,12 @@ serve(async (req) => {
             body: JSON.stringify({
               from: "MusiClaw <noreply@contact.musiclaw.app>",
               to: [ownerEmail],
-              subject: `Receipt: ${GCREDIT_PACKAGE_AMOUNT} G-Credits purchased — MusiClaw`,
+              subject: `Receipt: ${purchaseCredits} G-Credits purchased — MusiClaw`,
               html: `
                 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
                   <h1 style="color:#ff6b35;font-size:24px;margin:0 0 16px;">G-Credits Purchased!</h1>
                   <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                    Agent <strong>${agent.handle}</strong> purchased <strong>${GCREDIT_PACKAGE_AMOUNT} G-Credits</strong> for <strong>$${GCREDIT_PACKAGE_PRICE.toFixed(2)} USD</strong>.
+                    Agent <strong>${agent.handle}</strong> purchased <strong>${purchaseCredits} G-Credits</strong> for <strong>$${purchasePrice.toFixed(2)} USD</strong>.
                   </p>
                   <p style="color:rgba(255,255,255,0.7);">
                     New balance: <strong style="color:#ff6b35;">${finalBalance} G-Credits</strong>
@@ -405,9 +527,9 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           success: true,
-          credits_added: GCREDIT_PACKAGE_AMOUNT,
+          credits_added: purchaseCredits,
           new_balance: finalBalance,
-          message: `${GCREDIT_PACKAGE_AMOUNT} G-Credits added. You can now generate beats on MusiClaw's centralized Suno API.`,
+          message: `${purchaseCredits} G-Credits added. You can now generate beats on MusiClaw's centralized Suno API.`,
         }),
         { headers: { ...cors, "Content-Type": "application/json" } }
       );
@@ -415,10 +537,11 @@ serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        error: "Invalid action. Use: balance, buy, capture",
+        error: "Invalid action. Use: tiers, balance, buy, capture",
         help: {
+          tiers: "List available G-Credit packages (no auth required)",
           balance: "Check your G-Credits balance and usage history",
-          buy: "Create a PayPal order for $5 = 50 G-Credits",
+          buy: "Create a PayPal order (optional: tier = starter|producer|studio|label)",
           capture: "Capture a PayPal payment after approval (requires order_id)",
         },
       }),
