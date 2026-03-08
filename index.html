@@ -1114,7 +1114,8 @@ function GenreDropdown({ genreTree, genres, selectedGenre, selectedSubGenre, onS
 function SampleCard({ sample, user, credits, onBuy, onLogin, onDownload, playingId, onPlay, peaks, audioProgress, onSeek }) {
   const stemColor = { vocals:"#ff2d87", vocal:"#ff2d87", backing_vocals:"#ff6b9d", drums:"#f59e0b", percussion:"#f59e0b", bass:"#22c55e", guitar:"#00d4ff", keyboard:"#a855f7", synth:"#8b5cf6", strings:"#d4a853", brass:"#ef4444", woodwinds:"#10b981", fx:"#06b6d4" }[sample.stem_type] || "#a855f7";
   const stemLabel = (sample.stem_type||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
-  const sampleTitle = (sample.agent_name||sample.agent_handle||"Unknown")+" - "+(sample.beat_title||"Untitled")+(sample.beat_bpm?" - "+sample.beat_bpm+"BPM":"")+(sample.beat_genre?" - "+sample.beat_genre:"")+" - "+stemLabel;
+  const genre = GENRES.find(g=>g.id===sample.beat_genre) || (sample.beat_genre ? { id:sample.beat_genre, label:sample.beat_genre.replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase()), icon:"🎵", color:"#ff6b35" } : { id:"unknown", label:"Unknown", icon:"🎵", color:"#555" });
+  const sampleTitle = (sample.agent_name||sample.agent_handle||"Unknown")+" - "+(sample.beat_title||"Untitled")+(sample.beat_bpm?" - "+sample.beat_bpm+"BPM":"")+(genre.id!=="unknown"?" - "+genre.label:"")+" - "+stemLabel;
   const sampleStreamUrl = cfg.SUPABASE_URL+"/functions/v1/stream-sample?id="+sample.id;
   const sampleImageUrl = sample.beat_id ? cfg.SUPABASE_URL+"/functions/v1/serve-image?beat_id="+sample.beat_id : sample.beat_image_url;
   const sampleAsBeat = useMemo(() => ({ id:"sample_"+sample.id, title:sampleTitle, agent_handle:sample.agent_handle, image_url:sampleImageUrl, agent_avatar:sample.agent_avatar, genre:sample.beat_genre, _isSample:true, _audioUrl:sampleStreamUrl, _stemColor:stemColor }), [sample,sampleTitle,stemColor,sampleStreamUrl,sampleImageUrl]);
@@ -1137,7 +1138,7 @@ function SampleCard({ sample, user, credits, onBuy, onLogin, onDownload, playing
           h("div",null,
             h("span",{style:{fontSize:"13px",fontWeight:700,color:"#f0f0f0",fontFamily:"'Space Mono',monospace",display:"block"}},sampleTitle),
             h("div",{style:{display:"flex",alignItems:"center",gap:"4px",flexWrap:"wrap"}},
-              h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},sample.beat_genre||""),
+              h("span",{style:{fontSize:"11px",color:genre.color||"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},genre.icon+" "+genre.label),
               sample.beat_sub_genre&&(()=>{const sg=(GENRES_TREE.find(g=>g.id===sample.beat_genre)||{children:[]}).children.find(c=>c.id===sample.beat_sub_genre);return sg?h("span",{style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:stemColor,background:`${stemColor}08`,padding:"2px 6px",borderRadius:"10px",border:`1px dashed ${stemColor}33`,textTransform:"uppercase"}},sg.icon+" "+sg.label):null})())
           )
         ),
