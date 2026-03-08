@@ -50,9 +50,9 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits").eq("api_token_hash", tokenHash).single();
+    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email").eq("api_token_hash", tokenHash).single();
     if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits").eq("api_token", token).single();
+      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email").eq("api_token", token).single();
       agent = fallback;
     }
 
@@ -152,6 +152,10 @@ serve(async (req) => {
         .from("agents").select("suno_cookie").eq("id", agent.id).single();
       effectiveCookie = agentFull?.suno_cookie || null;
     }
+    // Fallback to centralized cookie env var (for G-Credit agents without their own cookie)
+    if (useSelfHosted && !effectiveCookie) {
+      effectiveCookie = Deno.env.get("SUNO_SELF_HOSTED_COOKIE") || null;
+    }
 
     if (useSelfHosted && !effectiveCookie) {
       return new Response(
@@ -213,14 +217,24 @@ serve(async (req) => {
     // ─── G-CREDIT DEDUCTION (centralized self-hosted only) ──────────
     let gcreditDeducted = false;
     if (useCentralized) {
-      const { data: newBal, error: gcErr } = await supabase.rpc("deduct_gcredits", {
-        p_agent_id: agent.id, p_amount: 1,
+      const creditOwnerEmail = agent.owner_email?.trim().toLowerCase();
+      if (!creditOwnerEmail) {
+        return new Response(
+          JSON.stringify({ error: "Agent has no owner_email set. Register with an email first." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      const { data: newBal, error: gcErr } = await supabase.rpc("deduct_owner_gcredits", {
+        p_email: creditOwnerEmail, p_amount: 1,
       });
       if (gcErr) {
+        // Get current balance for error message
+        const { data: ownerCr } = await supabase.from("owner_gcredits").select("g_credits").eq("owner_email", creditOwnerEmail).single();
         return new Response(
           JSON.stringify({
             error: "Insufficient G-Credits. You need 1 G-Credit for stems on the centralized Suno API.",
-            g_credits: agent.g_credits || 0,
+            g_credits: ownerCr?.g_credits ?? 0,
+            owner_email: creditOwnerEmail,
             buy: "POST /functions/v1/manage-gcredits with {\"action\":\"buy\"} — $5 = 50 G-Credits",
           }),
           { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -230,7 +244,7 @@ serve(async (req) => {
       await supabase.from("gcredit_usage").insert({
         agent_id: agent.id, action: "stems", credits_spent: 1, beat_id: beat.id,
       });
-      console.log(`G-Credit deducted: 1 from @${agent.handle} for stems (balance: ${newBal})`);
+      console.log(`G-Credit deducted: 1 from owner ${creditOwnerEmail} via @${agent.handle} for stems (balance: ${newBal})`);
     }
 
     if (useSelfHosted) {
@@ -259,7 +273,7 @@ serve(async (req) => {
               "Content-Type": "application/json",
               "X-Suno-Cookie": effectiveCookie!,
             },
-            body: JSON.stringify({ id: beat.suno_id }),
+            body: JSON.stringify({ audio_id: beat.suno_id }),
           });
 
           const stemsBody = await stemsRes.text();
@@ -268,10 +282,15 @@ serve(async (req) => {
           // Detect expired/lost session
           if (!stemsRes.ok) {
             const stemsErrText = stemsBody || "";
-            if (stemsErrText.includes("Failed to get session id") || stemsErrText.includes("update the SUNO_COOKIE")) {
+            const isSessionExpired = stemsErrText.includes("Failed to get session id")
+              || stemsErrText.includes("update the SUNO_COOKIE")
+              || stemsErrText.includes("Unauthorized")
+              || stemsRes.status === 401;
+
+            if (isSessionExpired) {
               return new Response(
                 JSON.stringify({ error: "Your Suno session has expired or was lost (server restart). Please log into suno.com, copy a fresh cookie, and re-submit it via update-agent-settings.", action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie" }),
-                { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+                { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
               );
             }
           }
@@ -281,22 +300,199 @@ serve(async (req) => {
             results.push("Stem splitting not available on self-hosted API.");
           } else if (stemsRes.ok) {
             let stemsApiError = false;
+            let stemsData: any = null;
             try {
-              const stemsJson = JSON.parse(stemsBody);
-              if (stemsJson.error) stemsApiError = true;
+              stemsData = JSON.parse(stemsBody);
+              if (stemsData.error) stemsApiError = true;
             } catch { /* not JSON */ }
 
             if (!stemsApiError) {
-              await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-              results.push("Stem splitting triggered via self-hosted API");
-              console.log(`Self-hosted stems triggered for beat ${beat.id} by agent ${agent.handle}`);
+              // The suno-api returns stem clip metadata: [{id, status, stem_from_id, ...}]
+              // These clips are being generated asynchronously by Suno
+              const stemClips = Array.isArray(stemsData) ? stemsData : (stemsData?.clips || []);
+              const stemClipIds = stemClips.map((c: any) => c.id).filter(Boolean);
+
+              await supabase.from("beats").update({
+                stems_status: "processing",
+                ...(stemClipIds.length > 0 ? { stems_clip_ids: stemClipIds } : {}),
+              }).eq("id", beat.id);
+              console.log(`Self-hosted stems triggered for beat ${beat.id} by agent ${agent.handle}, clip IDs: ${stemClipIds.join(",")}`);
+
+              // ─── INLINE POLLING: wait for stems to complete ──────────────
+              // Poll GET /api/get?ids=... every 10s for up to 120s
+              if (stemClipIds.length > 0) {
+                const POLL_INTERVAL = 10_000; // 10 seconds
+                const MAX_POLLS = 12; // 12 * 10s = 120s max
+                let stemsComplete = false;
+                let completedStems: Record<string, string> = {};
+
+                for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
+                  await new Promise(r => setTimeout(r, POLL_INTERVAL));
+                  console.log(`Polling stem clips (attempt ${attempt + 1}/${MAX_POLLS}) for beat ${beat.id}: ${stemClipIds.join(",")}`);
+
+                  try {
+                    const pollRes = await fetch(`${selfHostedUrl}/api/get?ids=${stemClipIds.join(",")}`, {
+                      method: "GET",
+                      headers: { "X-Suno-Cookie": effectiveCookie! },
+                    });
+
+                    if (!pollRes.ok) {
+                      console.warn(`Stem poll HTTP ${pollRes.status} for beat ${beat.id}`);
+                      continue;
+                    }
+
+                    const pollData = await pollRes.json();
+                    const clips = Array.isArray(pollData) ? pollData : (pollData?.clips || pollData?.data || []);
+
+                    // Check if all clips have audio_url (= done)
+                    const readyClips = clips.filter((c: any) => c.audio_url && (c.status === "complete" || c.status === "streaming"));
+                    console.log(`Stem poll: ${readyClips.length}/${stemClipIds.length} clips ready`);
+
+                    if (readyClips.length >= stemClipIds.length) {
+                      // All stems are ready — extract stem types from title
+                      // Suno stem titles follow pattern: "Original Title - Bass", "Original Title - Drums", etc.
+                      const KNOWN_STEMS = ["bass", "drums", "vocals", "other", "melody", "piano", "guitar", "strings", "wind"];
+                      for (const clip of readyClips) {
+                        let stemType = "unknown";
+                        const title = (clip.title || "").toLowerCase();
+                        for (const stem of KNOWN_STEMS) {
+                          if (title.endsWith(` - ${stem}`) || title.includes(`_${stem}`) || title === stem) {
+                            stemType = stem;
+                            break;
+                          }
+                        }
+                        // Fallback: use clip metadata if available
+                        if (stemType === "unknown" && clip.metadata?.stem_type) {
+                          stemType = clip.metadata.stem_type.toLowerCase();
+                        }
+                        // Fallback: assign by index (Suno returns: vocals, drums, bass, other)
+                        if (stemType === "unknown") {
+                          const idx = readyClips.indexOf(clip);
+                          const defaultOrder = ["vocals", "drums", "bass", "other"];
+                          stemType = defaultOrder[idx] || `stem_${idx}`;
+                        }
+
+                        // Normalize URL to permanent CDN
+                        let audioUrl = clip.audio_url;
+                        if (clip.id && (!audioUrl || audioUrl.includes("audiopipe.suno.ai"))) {
+                          audioUrl = `https://cdn1.suno.ai/${clip.id}.mp3`;
+                        }
+                        completedStems[stemType] = audioUrl;
+                      }
+                      stemsComplete = true;
+                      break;
+                    }
+                  } catch (pollErr) {
+                    console.warn(`Stem poll error for beat ${beat.id}: ${(pollErr as Error).message}`);
+                  }
+                }
+
+                if (stemsComplete && Object.keys(completedStems).length > 0) {
+                  // ─── UPDATE BEAT WITH STEMS ──────────────────────────────
+                  await supabase.from("beats").update({
+                    stems: completedStems,
+                    stems_status: "complete",
+                  }).eq("id", beat.id);
+                  console.log(`Beat ${beat.id} stems complete: ${Object.keys(completedStems).join(", ")}`);
+                  results.push(`Stems complete: ${Object.keys(completedStems).join(", ")} (${Object.keys(completedStems).length} stems)`);
+
+                  // ─── CREATE SAMPLE ROWS (with silence detection) ─────────
+                  const SILENCE_ENTROPY = 7.5;
+                  let samplesCreated = 0;
+                  let samplesSkipped = 0;
+
+                  for (const [stemType, stemUrl] of Object.entries(completedStems)) {
+                    try {
+                      const headRes = await fetch(stemUrl, { method: "HEAD" });
+                      const fileSize = parseInt(headRes.headers.get("content-length") || "0", 10);
+                      if (fileSize < 1000) { samplesSkipped++; continue; }
+
+                      // Silence detection: Shannon entropy on 32KB from middle
+                      let isSilent = false;
+                      try {
+                        const midpoint = Math.floor(fileSize / 2);
+                        const rangeStart = Math.max(0, midpoint - 16384);
+                        const rangeEnd = Math.min(fileSize - 1, midpoint + 16383);
+                        const partialRes = await fetch(stemUrl, { headers: { Range: `bytes=${rangeStart}-${rangeEnd}` } });
+                        const buf = new Uint8Array(await partialRes.arrayBuffer());
+                        const freq = new Array(256).fill(0);
+                        for (let i = 0; i < buf.length; i++) freq[buf[i]]++;
+                        let entropy = 0;
+                        for (let i = 0; i < 256; i++) {
+                          if (freq[i] === 0) continue;
+                          const p = freq[i] / buf.length;
+                          entropy -= p * Math.log2(p);
+                        }
+                        isSilent = entropy < SILENCE_ENTROPY;
+                        console.log(`Stem ${stemType} for beat ${beat.id}: ${fileSize}B, entropy=${entropy.toFixed(3)}, silent=${isSilent}`);
+                      } catch (rangeErr) {
+                        console.warn(`Range request failed for ${stemType}: ${(rangeErr as Error).message}`);
+                      }
+
+                      if (isSilent) { samplesSkipped++; continue; }
+
+                      const { error: sampleErr } = await supabase.from("samples").upsert(
+                        { beat_id: beat.id, stem_type: stemType, audio_url: stemUrl, file_size: fileSize, audio_amplitude: fileSize },
+                        { onConflict: "beat_id,stem_type" }
+                      );
+                      if (sampleErr) console.error(`Sample insert error ${stemType}: ${sampleErr.message}`);
+                      else samplesCreated++;
+                    } catch (fetchErr) {
+                      console.warn(`Stem fetch failed for ${stemType}: ${(fetchErr as Error).message}`);
+                    }
+                  }
+                  console.log(`Samples for beat ${beat.id}: ${samplesCreated} created, ${samplesSkipped} skipped`);
+                  results.push(`Samples: ${samplesCreated} created, ${samplesSkipped} skipped (silent)`);
+
+                  // ─── AUTO-UPLOAD STEMS TO SUPABASE STORAGE ──────────────
+                  (async () => {
+                    try {
+                      let stemsUploaded = 0;
+                      for (const [stemType, stemUrl] of Object.entries(completedStems)) {
+                        try {
+                          const res = await fetch(stemUrl);
+                          if (res.ok) {
+                            const data = new Uint8Array(await res.arrayBuffer());
+                            await supabase.storage.from("audio").upload(
+                              `beats/${beat.id}/stems/${stemType}.mp3`, data,
+                              { contentType: "audio/mpeg", upsert: true }
+                            );
+                            stemsUploaded++;
+                          }
+                        } catch (e) {
+                          console.error(`Storage: stem upload failed ${stemType}: ${(e as Error).message}`);
+                        }
+                      }
+                      if (stemsUploaded > 0) {
+                        await supabase.from("samples").update({ storage_migrated: true }).eq("beat_id", beat.id);
+                        console.log(`Storage: uploaded ${stemsUploaded} stems for beat ${beat.id}`);
+                      }
+                    } catch (uploadErr) {
+                      console.error(`Storage: stems upload error: ${(uploadErr as Error).message}`);
+                    }
+                  })();
+                } else {
+                  // Stems not ready after 120s — leave as "processing" for manual poll later
+                  results.push(`Stem splitting triggered (${stemClipIds.length} clips) but not yet complete after 120s. Use poll-stems or wait.`);
+                  console.log(`Stems for beat ${beat.id} not complete after max polling. stems_clip_ids stored for later polling.`);
+                }
+              } else {
+                results.push("Stem splitting triggered but no clip IDs returned.");
+              }
             } else {
               await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-              results.push("Stem splitting failed: self-hosted API returned an error");
+              results.push(`Stem splitting failed: ${stemsData?.error || "self-hosted API returned an error"}`);
             }
+          } else if (stemsRes.status === 402) {
+            // Suno account out of credits for stems
+            await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
+            results.push("Stem splitting failed: Suno account out of credits (402). Stems cost 50 Suno credits each.");
           } else {
             await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-            results.push(`Stem splitting failed: self-hosted API returned ${stemsRes.status}. Cookie may have expired.`);
+            const parsed = (() => { try { return JSON.parse(stemsBody); } catch { return null; } })();
+            const detail = parsed?.error || parsed?.detail || `HTTP ${stemsRes.status}`;
+            results.push(`Stem splitting failed: ${detail}`);
+            console.error(`Self-hosted stems error for beat ${beat.id}: ${stemsRes.status} — ${stemsBody.slice(0, 300)}`);
           }
         } catch (stemsErr) {
           console.error(`Self-hosted stems failed for beat ${beat.id}:`, stemsErr.message);
