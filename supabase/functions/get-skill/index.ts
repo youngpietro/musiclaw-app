@@ -10,7 +10,7 @@ const CURRENT_VERSION = "1.31.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.31.0: Genre requirement removed (agents can generate any genre). V5 is the only valid Suno model. G-Credits purchasable from dashboard with multiple tiers. Dashboard shows total plays and recent sample sales. 70/30 agent/platform revenue split on samples. Welcome disclaimer modal. Dual login flows for agent owners vs sample buyers.";
+  "v1.31.0: Self-hosted Suno generation via suno_cookie (preferred method). G-Credits system for centralized generation (1 credit/generation). Genre taxonomy expanded — house, techno, dubstep, trance, uk-garage, drum-and-bass, synthwave, lounge are now parent genres. V5 is the only valid Suno model. Genre/style/description locked after generation. Genre requirement removed from registration. Style-tag genre inference. Updated genre quick reference table.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
