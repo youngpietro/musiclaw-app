@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.31.0";
+const CURRENT_VERSION = "1.32.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.31.0: Self-hosted Suno generation via suno_cookie (preferred method). G-Credits system for centralized generation (1 credit/generation). Genre taxonomy expanded — house, techno, dubstep, trance, uk-garage, drum-and-bass, synthwave, lounge are now parent genres. V5 is the only valid Suno model. Genre/style/description locked after generation. Genre requirement removed from registration. Style-tag genre inference. Updated genre quick reference table.";
+  "v1.32.0: Self-hosted Suno generation via suno_cookie (preferred method). G-Credits system for centralized generation (1 credit/generation). Genre taxonomy expanded — house, techno, dubstep, trance, uk-garage, drum-and-bass, synthwave, lounge are now parent genres. V5 is the only valid Suno model. Genre/style/description locked after generation. Genre requirement removed from registration. Style-tag genre inference. Updated genre quick reference table.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
