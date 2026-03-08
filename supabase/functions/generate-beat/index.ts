@@ -764,52 +764,181 @@ serve(async (req) => {
         make_instrumental: true,
       };
 
-      const selfHostedRes = await fetch(`${selfHostedUrl}/api/custom_generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Suno-Cookie": effectiveSunoCookie!,
-        },
-        body: JSON.stringify(selfHostedPayload),
-      });
+      // ─── FETCH WITH EXPLICIT TIMEOUT (120s) ─────────────────────────
+      const abortCtrl = new AbortController();
+      const fetchTimeout = setTimeout(() => abortCtrl.abort(), 120000);
 
-      const selfHostedData = await selfHostedRes.json();
+      let selfHostedRes: Response;
+      let selfHostedData: any;
+      try {
+        selfHostedRes = await fetch(`${selfHostedUrl}/api/custom_generate`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Suno-Cookie": effectiveSunoCookie!,
+          },
+          body: JSON.stringify(selfHostedPayload),
+          signal: abortCtrl.signal,
+        });
+        clearTimeout(fetchTimeout);
+        selfHostedData = await selfHostedRes.json();
+      } catch (fetchErr: any) {
+        clearTimeout(fetchTimeout);
+        const isTimeout = fetchErr.name === "AbortError" || fetchErr.message?.includes("abort");
+        const isNetworkErr = fetchErr.message?.includes("ConnectionRefused") || fetchErr.message?.includes("ECONNREFUSED")
+          || fetchErr.message?.includes("DNS") || fetchErr.message?.includes("NetworkError");
+        console.warn(`Self-hosted Suno fetch error for @${agent.handle}: ${fetchErr.name}: ${fetchErr.message}`);
+
+        // Refund G-Credit
+        if (gcreditDeducted) {
+          await supabase.rpc("add_owner_gcredits", { p_email: agent.owner_email?.trim().toLowerCase(), p_amount: 1 });
+          console.log(`G-Credit refunded to @${agent.handle} (fetch error)`);
+        }
+
+        if (isTimeout) {
+          return new Response(
+            JSON.stringify({
+              error: "Self-hosted Suno API did not respond within 120 seconds.",
+              error_type: "TIMEOUT",
+              gcredit_refunded: gcreditDeducted,
+              possible_causes: [
+                "The Suno API server may be cold-starting (first request after idle) — try again in 1-2 minutes",
+                "Suno.com may be experiencing high load or downtime",
+                "The Suno API server may need restarting — contact the platform owner",
+              ],
+              action: "Wait 1-2 minutes and retry. If it persists, the Suno API server may need attention.",
+            }),
+            { status: 504, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+
+        if (isNetworkErr) {
+          return new Response(
+            JSON.stringify({
+              error: "Could not reach the self-hosted Suno API server.",
+              error_type: "NETWORK_ERROR",
+              gcredit_refunded: gcreditDeducted,
+              detail: fetchErr.message,
+              possible_causes: [
+                "The Suno API server may be down or restarting",
+                "The server URL may be incorrect",
+              ],
+              action: "Try again in a few minutes. If it persists, check the server status or contact the platform owner.",
+            }),
+            { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            error: "Failed to connect to self-hosted Suno API.",
+            error_type: "FETCH_ERROR",
+            gcredit_refunded: gcreditDeducted,
+            detail: fetchErr.message,
+            action: "Try again. If the error persists, your suno_cookie may need updating via update-agent-settings.",
+          }),
+          { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
 
       if (!selfHostedRes.ok) {
         const errMsg = selfHostedData?.detail || selfHostedData?.error || selfHostedData?.message
           || (typeof selfHostedData === "string" ? selfHostedData : "Unknown error");
-        console.warn(`Self-hosted Suno error for @${agent.handle}: ${selfHostedRes.status} — ${errMsg}`);
+        const errStr = typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg);
+        console.warn(`Self-hosted Suno error for @${agent.handle}: ${selfHostedRes.status} — ${errStr}`);
+
         // Refund G-Credit if we charged for centralized
         if (gcreditDeducted) {
           await supabase.rpc("add_owner_gcredits", { p_email: agent.owner_email?.trim().toLowerCase(), p_amount: 1 });
           console.log(`G-Credit refunded to @${agent.handle} (generation failed)`);
         }
 
-        // Detect expired/lost Suno session (Railway restart or cookie expiry)
-        const isSessionExpired = typeof errMsg === "string" && (
-          errMsg.includes("Failed to get session id") ||
-          errMsg.includes("update the SUNO_COOKIE") ||
-          errMsg.includes("session")
+        // ─── ERROR CLASSIFICATION ────────────────────────────────────
+        // 1. Browser automation timeout (Playwright/Puppeteer locator timeout)
+        const isBrowserTimeout = errStr.includes("TimeoutError") && (
+          errStr.includes("locator(") || errStr.includes("waiting for") || errStr.includes("exceeded")
+        );
+
+        if (isBrowserTimeout) {
+          return new Response(
+            JSON.stringify({
+              error: "Suno's website took too long to respond to the generation request.",
+              error_type: "SUNO_UI_TIMEOUT",
+              gcredit_refunded: gcreditDeducted,
+              suno_error: errStr,
+              possible_causes: [
+                "Suno.com may be experiencing high load or temporary issues",
+                "Suno may have updated their website UI, requiring a server update",
+                "The Suno API server may need a fresh cookie — log into suno.com and update your cookie",
+              ],
+              action: "Try again in 1-2 minutes. If it keeps failing, provide a fresh suno_cookie via update-agent-settings.",
+            }),
+            { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+
+        // 2. Expired/lost Suno session (cookie invalid)
+        const isSessionExpired = (
+          errStr.includes("Failed to get session id") ||
+          errStr.includes("update the SUNO_COOKIE") ||
+          errStr.includes("Unauthorized") ||
+          (errStr.includes("session") && (errStr.includes("expired") || errStr.includes("invalid")))
         );
 
         if (isSessionExpired) {
           return new Response(
             JSON.stringify({
-              error: "Your Suno session has expired or was lost (server restart). Please log into suno.com, copy a fresh cookie, and re-submit it via update-agent-settings.",
-              action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie",
+              error: "Your Suno cookie has expired or is invalid. The session is no longer active.",
+              error_type: "COOKIE_EXPIRED",
               gcredit_refunded: gcreditDeducted,
+              action: "Log into suno.com, open DevTools → Application → Cookies, copy a fresh cookie, and call update-agent-settings with the new suno_cookie.",
+              action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie",
             }),
             { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
           );
         }
 
+        // 3. Suno content policy / generation rejected
+        const isContentRejected = errStr.includes("policy") || errStr.includes("blocked")
+          || errStr.includes("not allowed") || errStr.includes("violat");
+
+        if (isContentRejected) {
+          return new Response(
+            JSON.stringify({
+              error: "Suno rejected the generation due to content policy.",
+              error_type: "CONTENT_POLICY",
+              gcredit_refunded: gcreditDeducted,
+              suno_error: errStr,
+              action: "Change your title and/or style tags to avoid restricted content (artist names, copyrighted references, etc.) and try again.",
+            }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+
+        // 4. Rate limited by Suno
+        const isSunoRateLimit = selfHostedRes.status === 429 || errStr.includes("rate limit") || errStr.includes("too many");
+
+        if (isSunoRateLimit) {
+          return new Response(
+            JSON.stringify({
+              error: "Suno's servers are rate-limiting requests. Too many generations in a short period.",
+              error_type: "SUNO_RATE_LIMIT",
+              gcredit_refunded: gcreditDeducted,
+              action: "Wait 5-10 minutes before trying again.",
+            }),
+            { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+
+        // 5. Generic / unclassified error
         return new Response(
           JSON.stringify({
-            error: "Self-hosted Suno API rejected the request",
+            error: "Self-hosted Suno API returned an error.",
+            error_type: "SUNO_API_ERROR",
             suno_status: selfHostedRes.status,
-            suno_error: errMsg,
+            suno_error: errStr,
             gcredit_refunded: gcreditDeducted,
-            tip: "Your Suno cookie may have expired. Update it via update-agent-settings.",
+            action: "If this persists, try updating your suno_cookie via update-agent-settings. The cookie may need refreshing.",
           }),
           { status: selfHostedRes.status >= 400 ? selfHostedRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }
         );
@@ -933,10 +1062,40 @@ serve(async (req) => {
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
     );
-  } catch (err) {
-    console.error("Generate error:", err.message);
+  } catch (err: any) {
+    console.error("Generate error:", err.name, err.message);
+
+    // Best-effort G-Credit refund on unexpected errors
+    // (gcreditDeducted is in scope from the try block)
+    try {
+      // @ts-ignore — gcreditDeducted may be in scope if the error happened after deduction
+      if (typeof gcreditDeducted !== "undefined" && gcreditDeducted) {
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const sb = createClient(supabaseUrl, supabaseKey);
+        // Try to find the agent to get owner_email
+        const tokenHeader = req.headers.get("authorization")?.replace("Bearer ", "");
+        if (tokenHeader) {
+          const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(tokenHeader));
+          const hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+          const { data: ag } = await sb.from("agents").select("owner_email").eq("api_token_hash", hash).single();
+          if (ag?.owner_email) {
+            await sb.rpc("add_owner_gcredits", { p_email: ag.owner_email.trim().toLowerCase(), p_amount: 1 });
+            console.log(`G-Credit refunded (catch block) for owner ${ag.owner_email}`);
+          }
+        }
+      }
+    } catch (refundErr) {
+      console.error("G-Credit refund in catch block failed:", (refundErr as Error).message);
+    }
+
     return new Response(
-      JSON.stringify({ error: "Beat generation failed. Please try again." }),
+      JSON.stringify({
+        error: "Beat generation failed due to an unexpected error.",
+        error_type: "INTERNAL_ERROR",
+        detail: err.message,
+        action: "Try again. If this persists, check that your suno_cookie is fresh and your agent settings are correct.",
+      }),
       { status: 500, headers: { ...cors, "Content-Type": "application/json" } }
     );
   }
