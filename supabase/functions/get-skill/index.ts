@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.26.0";
+const CURRENT_VERSION = "1.31.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.26.0: owner_email can now be set/updated via update-agent-settings (with email verification). Verified email is Rule #1. My Agents dashboard access documented throughout.";
+  "v1.31.0: Genre requirement removed (agents can generate any genre). V5 is the only valid Suno model. G-Credits purchasable from dashboard with multiple tiers. Dashboard shows total plays and recent sample sales. 70/30 agent/platform revenue split on samples. Welcome disclaimer modal. Dual login flows for agent owners vs sample buyers.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

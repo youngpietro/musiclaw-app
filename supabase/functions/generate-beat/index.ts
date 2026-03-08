@@ -104,7 +104,7 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_self_hosted_url, g_credits";
+    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_self_hosted_url, g_credits, owner_email";
     let { data: agent } = await supabase.from("agents").select(agentCols).eq("api_token_hash", tokenHash).single();
     if (!agent) {
       const { data: fallback } = await supabase.from("agents").select(agentCols).eq("api_token", token).single();
@@ -459,18 +459,28 @@ serve(async (req) => {
         );
       }
 
-      // ─── G-CREDIT DEDUCTION (centralized only) ─────────────────────
+      // ─── G-CREDIT DEDUCTION (centralized only, per-email pool) ─────
       let gcreditDeducted = false;
       if (useCentralized) {
-        const { data: newBal, error: gcErr } = await supabase.rpc("deduct_gcredits", {
-          p_agent_id: agent.id, p_amount: 1,
+        const creditOwnerEmail = agent.owner_email?.trim().toLowerCase();
+        if (!creditOwnerEmail) {
+          return new Response(
+            JSON.stringify({ error: "Agent has no owner_email set. Register with an email first." }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        const { data: newBal, error: gcErr } = await supabase.rpc("deduct_owner_gcredits", {
+          p_email: creditOwnerEmail, p_amount: 1,
         });
         if (gcErr) {
-          console.warn(`G-Credit deduction failed for @${agent.handle}: ${gcErr.message}`);
+          // Get current balance for error message
+          const { data: ownerCr } = await supabase.from("owner_gcredits").select("g_credits").eq("owner_email", creditOwnerEmail).single();
+          console.warn(`G-Credit deduction failed for @${agent.handle} (owner: ${creditOwnerEmail}): ${gcErr.message}`);
           return new Response(
             JSON.stringify({
               error: "Insufficient G-Credits. You need 1 G-Credit to generate on the centralized Suno API.",
-              g_credits: agent.g_credits || 0,
+              g_credits: ownerCr?.g_credits ?? 0,
+              owner_email: creditOwnerEmail,
               buy: "POST /functions/v1/manage-gcredits with {\"action\":\"buy\"} — $5 = 50 G-Credits",
               alternative: "Set your own suno_self_hosted_url via update-agent-settings (free, no G-Credits needed)",
             }),
@@ -478,25 +488,24 @@ serve(async (req) => {
           );
         }
         gcreditDeducted = true;
-        console.log(`G-Credit deducted: 1 from @${agent.handle} (balance: ${newBal})`);
+        console.log(`G-Credit deducted: 1 from owner ${creditOwnerEmail} via @${agent.handle} (balance: ${newBal})`);
 
         // ─── LOW-CREDIT EMAIL NOTIFICATION (fire-and-forget) ────────
         if (newBal === 0 || newBal <= 0) {
           const resendApiKey = Deno.env.get("RESEND_API_KEY");
-          const { data: ownerData } = await supabase.from("agents").select("owner_email").eq("id", agent.id).single();
-          if (resendApiKey && ownerData?.owner_email) {
+          if (resendApiKey && creditOwnerEmail) {
             try {
               await fetch("https://api.resend.com/emails", {
                 method: "POST",
                 headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({
                   from: "MusiClaw <noreply@contact.musiclaw.app>",
-                  to: [ownerData.owner_email],
+                  to: [creditOwnerEmail],
                   subject: `Your G-Credits are empty — MusiClaw`,
                   html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#ff6b35;font-size:24px;margin:0 0 16px;">G-Credits Empty!</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your agent <strong>@${agent.handle}</strong> has used all its G-Credits. Top up to continue generating beats on MusiClaw's centralized Suno API.</p><a href="https://musiclaw.app" style="display:inline-block;background:linear-gradient(135deg,#ff6b35,#e11d48);color:#fff;padding:14px 28px;border-radius:12px;text-decoration:none;font-weight:700;margin-top:16px;">Top Up G-Credits</a><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`
                 }),
               });
-              console.log(`Low-credits email sent to ${ownerData.owner_email} for agent @${agent.handle}`);
+              console.log(`Low-credits email sent to ${creditOwnerEmail} for agent @${agent.handle}`);
             } catch (emailErr) {
               console.error("Low-credits email error:", (emailErr as Error).message);
             }
@@ -528,7 +537,7 @@ serve(async (req) => {
         console.warn(`Self-hosted Suno error for @${agent.handle}: ${selfHostedRes.status} — ${errMsg}`);
         // Refund G-Credit if we charged for centralized
         if (gcreditDeducted) {
-          await supabase.rpc("add_gcredits", { p_agent_id: agent.id, p_amount: 1 });
+          await supabase.rpc("add_owner_gcredits", { p_email: agent.owner_email?.trim().toLowerCase(), p_amount: 1 });
           console.log(`G-Credit refunded to @${agent.handle} (generation failed)`);
         }
 
@@ -680,7 +689,7 @@ serve(async (req) => {
         success: true,
         task_id: taskId,
         generation_source: useSelfHosted ? "selfhosted" : "sunoapi",
-        ...(useSelfHosted ? { used_centralized: useCentralized, g_credits_remaining: useCentralized ? (agent.g_credits || 0) - 1 : undefined } : {}),
+        ...(useSelfHosted && useCentralized ? { used_centralized: true, g_credits_note: "G-Credits are shared across all your agents" } : useSelfHosted ? { used_centralized: false } : {}),
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
         beats: beatRecords.map((b) => ({ id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre, status: b.status, price: b.price, suno_id: b.suno_id || null })),
         message: useSelfHosted

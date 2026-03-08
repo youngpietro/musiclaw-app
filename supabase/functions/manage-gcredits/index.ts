@@ -1,10 +1,10 @@
 // supabase/functions/manage-gcredits/index.ts
 // POST /functions/v1/manage-gcredits
-// Auth: Bearer <agent_api_token> OR { email, code, agent_id } (dashboard auth)
-// Body: { action: "balance" | "buy" | "capture" | "tiers", tier?, order_id? }
-// Manages G-Credits for agents: check balance, purchase via PayPal,
-// capture payment. G-Credits are used to generate beats on MusiClaw's centralized
-// self-hosted Suno API. Agents with their own suno-api instance don't need G-Credits.
+// Auth: Bearer <agent_api_token> OR { email, code } (dashboard auth)
+// Body: { action: "balance" | "buy" | "capture" | "tiers", tier?, order_id?, agent_id? }
+// Manages G-Credits at the OWNER (email) level — all agents under the same
+// owner_email share one G-Credits pool. Credits are used to generate beats
+// on MusiClaw's centralized self-hosted Suno API.
 // SECURITY: Dual auth (Bearer OR email+code), rate limited, CORS restricted
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -53,8 +53,17 @@ const GCREDIT_TIERS = [
   { id: "label",    credits: 700, price: 50.00, label: "Label" },
 ];
 
-// Default tier (backward compat)
 const DEFAULT_TIER = GCREDIT_TIERS[0];
+
+// Helper: get owner G-Credits balance from owner_gcredits table
+async function getOwnerBalance(supabase: any, ownerEmail: string): Promise<number> {
+  const { data } = await supabase
+    .from("owner_gcredits")
+    .select("g_credits")
+    .eq("owner_email", ownerEmail.trim().toLowerCase())
+    .single();
+  return data?.g_credits ?? 0;
+}
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);
@@ -86,7 +95,9 @@ serve(async (req) => {
     }
 
     // ─── AUTH: Bearer token (agent) OR email+code (dashboard) ─────
-    let agent: any = null;
+    let ownerEmail: string = "";
+    let agentForTracking: any = null; // optional, for purchase attribution
+
     const authHeader = req.headers.get("authorization");
 
     if (authHeader?.startsWith("Bearer ")) {
@@ -100,27 +111,35 @@ serve(async (req) => {
 
       let { data: agentData } = await supabase
         .from("agents")
-        .select("id, handle, name, g_credits, paypal_email, owner_email")
+        .select("id, handle, name, owner_email")
         .eq("api_token_hash", tokenHash)
         .single();
 
       if (!agentData) {
         const { data: fallback } = await supabase
           .from("agents")
-          .select("id, handle, name, g_credits, paypal_email, owner_email")
+          .select("id, handle, name, owner_email")
           .eq("api_token", token)
           .single();
         agentData = fallback;
       }
 
-      agent = agentData;
+      if (!agentData || !agentData.owner_email) {
+        return new Response(
+          JSON.stringify({ error: "Authentication failed. Invalid API token." }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      ownerEmail = agentData.owner_email.trim().toLowerCase();
+      agentForTracking = agentData;
     } else {
-      // ── Dashboard auth: email + code + agent_id ──
+      // ── Dashboard auth: email + code ──
       const { email, code, agent_id } = body;
 
       if (!email || typeof email !== "string") {
         return new Response(
-          JSON.stringify({ error: "Authorization required. Use Bearer token or { email, code, agent_id }." }),
+          JSON.stringify({ error: "Authorization required. Provide Bearer token or { email, code }." }),
           { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -137,13 +156,6 @@ serve(async (req) => {
       if (!code || typeof code !== "string" || code.length !== 6) {
         return new Response(
           JSON.stringify({ error: "A 6-digit verification code is required" }),
-          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      if (!agent_id || typeof agent_id !== "string") {
-        return new Response(
-          JSON.stringify({ error: "agent_id is required for dashboard auth" }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -179,54 +191,68 @@ serve(async (req) => {
         );
       }
 
-      // Verify agent belongs to this owner
-      const { data: agentData } = await supabase
-        .from("agents")
-        .select("id, handle, name, g_credits, paypal_email, owner_email")
-        .eq("id", agent_id)
-        .eq("owner_email", normalizedEmail)
-        .single();
+      ownerEmail = normalizedEmail;
 
-      if (!agentData) {
-        return new Response(
-          JSON.stringify({ error: "Agent not found or does not belong to this email" }),
-          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
-        );
+      // If agent_id provided, load for tracking (optional, not required)
+      if (agent_id && typeof agent_id === "string") {
+        const { data: agentData } = await supabase
+          .from("agents")
+          .select("id, handle, name, owner_email")
+          .eq("id", agent_id)
+          .eq("owner_email", normalizedEmail)
+          .single();
+        agentForTracking = agentData || null;
       }
-
-      agent = agentData;
     }
 
-    if (!agent) {
+    if (!ownerEmail) {
       return new Response(
-        JSON.stringify({ error: "Authentication failed. Invalid token or credentials." }),
+        JSON.stringify({ error: "Authentication failed." }),
         { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
     // ─── ACTION: BALANCE ──────────────────────────────────────────
     if (action === "balance") {
-      const { data: recentUsage } = await supabase
-        .from("gcredit_usage")
-        .select("action, credits_spent, beat_id, created_at")
-        .eq("agent_id", agent.id)
-        .order("created_at", { ascending: false })
-        .limit(20);
+      const ownerBalance = await getOwnerBalance(supabase, ownerEmail);
 
-      const { data: totalSpentData } = await supabase
-        .from("gcredit_usage")
-        .select("credits_spent")
-        .eq("agent_id", agent.id);
+      // Get usage across ALL agents for this owner
+      const { data: ownerAgents } = await supabase
+        .from("agents")
+        .select("id")
+        .eq("owner_email", ownerEmail);
 
-      const totalSpent = totalSpentData
-        ? totalSpentData.reduce((sum: number, r: any) => sum + r.credits_spent, 0)
-        : 0;
+      const agentIds = (ownerAgents || []).map((a: any) => a.id);
+
+      let totalSpent = 0;
+      let recentUsage: any[] = [];
+
+      if (agentIds.length > 0) {
+        const { data: usageData } = await supabase
+          .from("gcredit_usage")
+          .select("credits_spent")
+          .in("agent_id", agentIds);
+
+        totalSpent = usageData
+          ? usageData.reduce((sum: number, r: any) => sum + r.credits_spent, 0)
+          : 0;
+
+        const { data: recentData } = await supabase
+          .from("gcredit_usage")
+          .select("action, credits_spent, beat_id, agent_id, created_at")
+          .in("agent_id", agentIds)
+          .order("created_at", { ascending: false })
+          .limit(20);
+
+        recentUsage = recentData || [];
+      }
 
       return new Response(
         JSON.stringify({
-          g_credits: agent.g_credits || 0,
+          g_credits: ownerBalance,
+          owner_email: ownerEmail,
           total_spent: totalSpent,
-          recent_usage: recentUsage || [],
+          recent_usage: recentUsage,
           tiers: GCREDIT_TIERS.map(t => ({ id: t.id, credits: t.credits, price: t.price, label: t.label })),
         }),
         { headers: { ...cors, "Content-Type": "application/json" } }
@@ -235,7 +261,6 @@ serve(async (req) => {
 
     // ─── ACTION: BUY ──────────────────────────────────────────────
     if (action === "buy") {
-      // Resolve tier
       const { tier: tierId } = body;
       const selectedTier = tierId
         ? GCREDIT_TIERS.find(t => t.id === tierId)
@@ -251,12 +276,12 @@ serve(async (req) => {
         );
       }
 
-      // Rate limit: max 10 purchases per hour per agent
+      // Rate limit: max 10 purchases per hour per owner email
       const { data: recentPurchases } = await supabase
         .from("rate_limits")
         .select("id")
         .eq("action", "buy_gcredits")
-        .eq("identifier", agent.id)
+        .eq("identifier", ownerEmail)
         .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
       if (recentPurchases && recentPurchases.length >= 10) {
@@ -268,7 +293,7 @@ serve(async (req) => {
 
       await supabase.from("rate_limits").insert({
         action: "buy_gcredits",
-        identifier: agent.id,
+        identifier: ownerEmail,
       });
 
       // Create PayPal order
@@ -307,9 +332,9 @@ serve(async (req) => {
 
       const orderData = await orderRes.json();
 
-      // Record in DB
+      // Record in DB (agent_id is optional, for attribution)
       await supabase.from("gcredit_purchases").insert({
-        agent_id: agent.id,
+        agent_id: agentForTracking?.id || null,
         credits_amount: selectedTier.credits,
         amount_usd: selectedTier.price,
         paypal_order_id: orderData.id,
@@ -345,12 +370,11 @@ serve(async (req) => {
         );
       }
 
-      // Look up pending purchase
+      // Look up pending purchase (match by order_id only — owner verified via auth)
       const { data: purchase } = await supabase
         .from("gcredit_purchases")
         .select("*")
         .eq("paypal_order_id", order_id)
-        .eq("agent_id", agent.id)
         .single();
 
       if (!purchase) {
@@ -364,12 +388,13 @@ serve(async (req) => {
       const purchasePrice = purchase.amount_usd || DEFAULT_TIER.price;
 
       if (purchase.paypal_status === "completed") {
+        const bal = await getOwnerBalance(supabase, ownerEmail);
         return new Response(
           JSON.stringify({
             success: true,
             credits: purchaseCredits,
             already_captured: true,
-            g_credits: agent.g_credits,
+            new_balance: bal,
           }),
           { headers: { ...cors, "Content-Type": "application/json" } }
         );
@@ -447,40 +472,37 @@ serve(async (req) => {
         })
         .eq("id", purchase.id);
 
-      // Add G-Credits atomically
+      // Add G-Credits to OWNER pool (per-email)
       const { data: newBalance, error: rpcErr } = await supabase.rpc(
-        "add_gcredits",
+        "add_owner_gcredits",
         {
-          p_agent_id: agent.id,
+          p_email: ownerEmail,
           p_amount: purchaseCredits,
         }
       );
 
       if (rpcErr) {
-        console.error("add_gcredits RPC failed:", rpcErr.message);
-        // Fallback: direct update
-        const { data: agentData } = await supabase
-          .from("agents")
-          .select("g_credits")
-          .eq("id", agent.id)
-          .single();
-        const current = agentData?.g_credits || 0;
+        console.error("add_owner_gcredits RPC failed:", rpcErr.message);
+        // Fallback: direct upsert
+        const currentBal = await getOwnerBalance(supabase, ownerEmail);
         await supabase
-          .from("agents")
-          .update({ g_credits: current + purchaseCredits })
-          .eq("id", agent.id);
+          .from("owner_gcredits")
+          .upsert({
+            owner_email: ownerEmail,
+            g_credits: currentBal + purchaseCredits,
+            updated_at: new Date().toISOString(),
+          });
       }
 
       const finalBalance =
-        newBalance ?? (agent.g_credits || 0) + purchaseCredits;
+        newBalance ?? (await getOwnerBalance(supabase, ownerEmail));
 
       console.log(
-        `G-Credits added: ${purchaseCredits} to agent ${agent.handle} (${agent.id}). New balance: ${finalBalance}`
+        `G-Credits added: ${purchaseCredits} to owner ${ownerEmail}. New balance: ${finalBalance}`
       );
 
       // Send confirmation email via Resend
       const resendApiKey = Deno.env.get("RESEND_API_KEY");
-      const ownerEmail = agent.owner_email;
       if (resendApiKey && ownerEmail) {
         try {
           await fetch("https://api.resend.com/emails", {
@@ -497,12 +519,13 @@ serve(async (req) => {
                 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
                   <h1 style="color:#ff6b35;font-size:24px;margin:0 0 16px;">G-Credits Purchased!</h1>
                   <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                    Agent <strong>${agent.handle}</strong> purchased <strong>${purchaseCredits} G-Credits</strong> for <strong>$${purchasePrice.toFixed(2)} USD</strong>.
+                    You purchased <strong>${purchaseCredits} G-Credits</strong> for <strong>$${purchasePrice.toFixed(2)} USD</strong>.
                   </p>
                   <p style="color:rgba(255,255,255,0.7);">
                     New balance: <strong style="color:#ff6b35;">${finalBalance} G-Credits</strong>
                   </p>
                   <p style="color:rgba(255,255,255,0.5);font-size:13px;">
+                    All your agents share this G-Credits pool.<br/>
                     PayPal Order: ${order_id}<br/>
                     1 G-Credit = 1 beat generation (2 beats) or 1 stems call
                   </p>
@@ -513,9 +536,7 @@ serve(async (req) => {
               `,
             }),
           });
-          console.log(
-            `G-Credit purchase email sent to ${ownerEmail} for agent ${agent.handle}`
-          );
+          console.log(`G-Credit purchase email sent to ${ownerEmail}`);
         } catch (emailErr: unknown) {
           console.error(
             "G-Credit email error:",
@@ -529,7 +550,8 @@ serve(async (req) => {
           success: true,
           credits_added: purchaseCredits,
           new_balance: finalBalance,
-          message: `${purchaseCredits} G-Credits added. You can now generate beats on MusiClaw's centralized Suno API.`,
+          owner_email: ownerEmail,
+          message: `${purchaseCredits} G-Credits added to your account. All your agents can now generate beats.`,
         }),
         { headers: { ...cors, "Content-Type": "application/json" } }
       );
