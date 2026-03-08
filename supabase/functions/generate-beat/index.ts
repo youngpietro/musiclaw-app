@@ -24,6 +24,48 @@ const VALID_MODELS = ["V5"];
 const MAX_BEAT_PRICE = 499.99;
 const MAX_STEMS_PRICE = 999.99;
 
+// ─── GENRE NORMALIZATION ──────────────────────────────────────────────
+// Canonical aliases: map common variant spellings → proper genre slug
+const GENRE_ALIASES: Record<string, string> = {
+  "hip-hop": "hiphop", "hip hop": "hiphop", "rap": "hiphop",
+  "r&b": "rnb", "r-b": "rnb", "randb": "rnb", "r-and-b": "rnb", "rhythm-and-blues": "rnb",
+  "lo-fi": "lofi", "lo fi": "lofi",
+  "uk-garage": "uk-garage", "ukgarage": "uk-garage", "uk garage": "uk-garage",
+  "drum-and-bass": "drum-and-bass", "drumandbass": "drum-and-bass", "dnb": "drum-and-bass", "drum and bass": "drum-and-bass",
+  "triphop": "trip-hop", "trip hop": "trip-hop",
+  "synthwave": "synthwave", "synth-wave": "synthwave",
+  "chillhop": "chillhop", "chill-hop": "chillhop",
+  "afrobeat": "afrobeat", "afro-beat": "afrobeat", "afrobeats": "afrobeat",
+};
+
+function normalizeGenreSlug(raw: string): string {
+  const lower = raw.trim().toLowerCase();
+  // Check alias map first (before slug conversion)
+  if (GENRE_ALIASES[lower]) return GENRE_ALIASES[lower];
+  // Convert to slug: spaces/underscores → hyphens, strip special chars
+  const slug = lower
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  // Check alias map again with the slug form
+  if (GENRE_ALIASES[slug]) return GENRE_ALIASES[slug];
+  return slug;
+}
+
+function genreLabelFromSlug(slug: string): string {
+  return slug
+    .split("-")
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+    .replace(/\bRnb\b/, "R&B / Soul")
+    .replace(/\bHiphop\b/, "Hip-Hop")
+    .replace(/\bLofi\b/, "Lo-Fi")
+    .replace(/\bUk\b/, "UK")
+    .replace(/\bEdm\b/, "EDM")
+    .replace(/\bDnb\b/, "D&B");
+}
+
 // ─── SUB-GENRE AUTO-DETECTION ─────────────────────────────────────────
 // Cached sub-genres from DB (5-min TTL to avoid querying on every generation)
 let subGenreCache: { data: any[]; ts: number } | null = null;
@@ -283,6 +325,9 @@ serve(async (req) => {
       );
     }
 
+    // ─── NORMALIZE GENRE ──────────────────────────────────────────────
+    const normalizedGenre = normalizeGenreSlug(String(genre));
+
     // Sanitize text inputs
     const sanitize = (s: string) => s.replace(/<[^>]*>/g, "").replace(/javascript:/gi, "").trim();
     const cleanTitle = sanitize(title).slice(0, 200);
@@ -317,27 +362,27 @@ serve(async (req) => {
     if (sub_genre) {
       // Agent explicitly specified a sub-genre — validate it exists under the parent genre
       const cleanSubGenre = sanitize(String(sub_genre)).toLowerCase().replace(/\s+/g, "-").slice(0, 100);
-      const validSubGenre = allSubGenres.find((sg: any) => sg.id === cleanSubGenre && sg.parent_id === genre);
+      const validSubGenre = allSubGenres.find((sg: any) => sg.id === cleanSubGenre && sg.parent_id === normalizedGenre);
       if (validSubGenre) {
         finalSubGenre = cleanSubGenre;
-        console.log(`Sub-genre specified by agent: ${finalSubGenre} (parent: ${genre})`);
+        console.log(`Sub-genre specified by agent: ${finalSubGenre} (parent: ${normalizedGenre})`);
       } else {
         // Check if it exists under a different parent genre
         const wrongParent = allSubGenres.find((sg: any) => sg.id === cleanSubGenre);
         if (wrongParent) {
           return new Response(
             JSON.stringify({
-              error: `Sub-genre "${cleanSubGenre}" belongs to parent genre "${wrongParent.parent_id}", not "${genre}". Use genre: "${wrongParent.parent_id}" instead.`,
+              error: `Sub-genre "${cleanSubGenre}" belongs to parent genre "${wrongParent.parent_id}", not "${normalizedGenre}". Use genre: "${wrongParent.parent_id}" instead.`,
               correct_genre: wrongParent.parent_id,
             }),
             { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
           );
         }
         // Sub-genre not found — list valid ones for this parent
-        const validSubs = allSubGenres.filter((sg: any) => sg.parent_id === genre).map((sg: any) => sg.id);
+        const validSubs = allSubGenres.filter((sg: any) => sg.parent_id === normalizedGenre).map((sg: any) => sg.id);
         return new Response(
           JSON.stringify({
-            error: `Sub-genre "${cleanSubGenre}" not found under genre "${genre}".`,
+            error: `Sub-genre "${cleanSubGenre}" not found under genre "${normalizedGenre}".`,
             valid_sub_genres: validSubs,
             tip: "Omit sub_genre to use automatic detection from your style tags.",
           }),
@@ -346,9 +391,9 @@ serve(async (req) => {
       }
     } else {
       // Auto-detect from style tags (existing behavior)
-      finalSubGenre = detectSubGenre(genre, cleanStyle, allSubGenres);
+      finalSubGenre = detectSubGenre(normalizedGenre, cleanStyle, allSubGenres);
       if (finalSubGenre) {
-        console.log(`Sub-genre detected: ${finalSubGenre} (parent: ${genre}, style: "${cleanStyle.slice(0, 80)}")`);
+        console.log(`Sub-genre detected: ${finalSubGenre} (parent: ${normalizedGenre}, style: "${cleanStyle.slice(0, 80)}")`);
       }
     }
 
@@ -641,7 +686,7 @@ serve(async (req) => {
       const beatInsert: Record<string, unknown> = {
         agent_id: agent.id,
         title: i === 0 ? cleanTitle : (cleanTitleV2 || `${cleanTitle} (v2)`),
-        genre, sub_genre: finalSubGenre, style: cleanStyle, model, bpm: safeBpm,
+        genre: normalizedGenre, sub_genre: finalSubGenre, style: cleanStyle, model, bpm: safeBpm,
         instrumental: true,
         negative_tags: cleanNegTags,
         task_id: taskId, status: "generating",
@@ -662,17 +707,17 @@ serve(async (req) => {
     // which fires when beat status changes to 'complete'. No manual increment needed.
 
     // ─── AUTO-CATALOG NEW GENRES ────────────────────────────────────
-    // If the genre doesn't exist in the genres table yet, add it automatically
+    // If the normalized genre doesn't exist in the genres table yet, add it
     const { data: existingGenre } = await supabase
-      .from("genres").select("id").eq("id", genre).single();
+      .from("genres").select("id").eq("id", normalizedGenre).single();
     if (!existingGenre) {
       await supabase.from("genres").insert({
-        id: genre,
-        label: genre.charAt(0).toUpperCase() + genre.slice(1).replace(/-/g, " "),
+        id: normalizedGenre,
+        label: genreLabelFromSlug(normalizedGenre),
         icon: "🎵",
         color: "#ff6b35",
       });
-      console.log(`New genre auto-cataloged: ${genre}`);
+      console.log(`New genre auto-cataloged: ${normalizedGenre} (from input: "${genre}")`);
     }
 
     // ─── STORE KEY TEMPORARILY FOR AUTO-WAV CONVERSION ──────────────
@@ -691,6 +736,7 @@ serve(async (req) => {
         generation_source: useSelfHosted ? "selfhosted" : "sunoapi",
         ...(useSelfHosted && useCentralized ? { used_centralized: true, g_credits_note: "G-Credits are shared across all your agents" } : useSelfHosted ? { used_centralized: false } : {}),
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
+        genre_normalized: normalizedGenre !== genre ? `"${genre}" → "${normalizedGenre}"` : undefined,
         beats: beatRecords.map((b) => ({ id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre, status: b.status, price: b.price, suno_id: b.suno_id || null })),
         message: useSelfHosted
           ? (useCentralized
