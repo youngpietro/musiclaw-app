@@ -225,7 +225,18 @@ serve(async (req) => {
     //  ACTION: UPDATE (title and/or price)
     // ═══════════════════════════════════════════════════════════════════
     if (action === "update") {
-      const { beat_id, title, price, stems_price } = body;
+      const { beat_id, title, price, stems_price, genre, style, sub_genre, description } = body;
+
+      // ─── LOCKED FIELDS: genre, style, sub_genre, description ──────
+      if (genre !== undefined || style !== undefined || sub_genre !== undefined || description !== undefined) {
+        return new Response(
+          JSON.stringify({
+            error: "Genre, style, sub_genre, and description cannot be changed after generation. Only title, price, and stems_price are editable.",
+            editable_fields: ["title", "price", "stems_price"],
+          }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
 
       if (!beat_id) {
         return new Response(

@@ -140,10 +140,6 @@ const GENRE_INDICATORS: Record<string, { keywords: string[]; weight: number }[]>
     { keywords: ["bossa nova", "samba", "tango", "merengue"], weight: 7 },
     { keywords: ["latin percussion", "congas", "timbales"], weight: 5 },
   ],
-  "uk-garage": [
-    { keywords: ["uk garage", "2-step", "2step", "garage"], weight: 8 },
-    { keywords: ["shuffle", "skippy beat", "uk underground"], weight: 5 },
-  ],
   "house": [
     { keywords: ["house music", "four-on-the-floor", "4x4 beat"], weight: 8 },
     { keywords: ["deep house", "tech house", "progressive house"], weight: 7 },
@@ -168,6 +164,30 @@ const GENRE_INDICATORS: Record<string, { keywords: string[]; weight: number }[]>
   "trap": [
     { keywords: ["trap", "trap beat", "trap instrumental"], weight: 8 },
     { keywords: ["808 bass", "hi-hat rolls", "dark trap"], weight: 7 },
+  ],
+  "lounge": [
+    { keywords: ["lounge", "lounge music", "lounge jazz", "cocktail bar"], weight: 9 },
+    { keywords: ["hotel bar", "bar atmosphere", "palm trees", "tropical night"], weight: 6 },
+    { keywords: ["balearic", "sunset vibes", "beach bar", "poolside"], weight: 7 },
+    { keywords: ["relaxed groove", "easy listening", "smooth groove"], weight: 5 },
+  ],
+  "synthwave": [
+    { keywords: ["synthwave", "retrowave", "outrun", "80s synth"], weight: 9 },
+    { keywords: ["neon", "neon nostalgia", "retro 80s", "80s electro"], weight: 6 },
+    { keywords: ["cyberpunk", "vaporwave"], weight: 5 },
+  ],
+  "drum-and-bass": [
+    { keywords: ["drum and bass", "dnb", "d&b"], weight: 9 },
+    { keywords: ["jungle", "liquid dnb", "neurofunk", "breakcore"], weight: 7 },
+    { keywords: ["amen break", "fast breakbeat"], weight: 6 },
+  ],
+  "dubstep": [
+    { keywords: ["dubstep", "brostep", "riddim"], weight: 9 },
+    { keywords: ["wobble bass", "filthy bass", "bass drop"], weight: 7 },
+  ],
+  "uk-garage": [
+    { keywords: ["uk garage", "2-step", "2step"], weight: 9 },
+    { keywords: ["shuffle", "skippy beat", "uk underground", "speed garage"], weight: 6 },
   ],
 };
 
