@@ -76,6 +76,125 @@ function genreLabelFromSlug(slug: string): string {
     .replace(/\bDnb\b/, "D&B");
 }
 
+// ─── STYLE-TAG GENRE INFERENCE ─────────────────────────────────────────
+// Keyword indicators for each parent genre (weighted by specificity)
+// Used to detect when agent declares wrong genre — e.g., says "electronic"
+// but style tags say "jazz piano, swing, rhodes"
+const GENRE_INDICATORS: Record<string, { keywords: string[]; weight: number }[]> = {
+  "jazz": [
+    { keywords: ["jazz", "swing", "bebop", "modal jazz", "cool jazz", "free jazz", "hard bop"], weight: 10 },
+    { keywords: ["rhodes", "rhodes keyboard", "rhodes chords"], weight: 7 },
+    { keywords: ["saxophone", "sax solo", "trumpet solo", "brass section"], weight: 6 },
+    { keywords: ["drum brushes", "brush drums", "soft drum brushes", "jazz drums"], weight: 8 },
+    { keywords: ["lounge jazz", "smooth jazz", "jazz lounge", "bar jazz", "hotel bar"], weight: 9 },
+    { keywords: ["walking bass", "upright bass", "jazz bass"], weight: 7 },
+    { keywords: ["jazz piano", "jazz chords", "jazz harmony"], weight: 9 },
+    { keywords: ["bossa", "bossa nova"], weight: 6 },
+  ],
+  "ambient": [
+    { keywords: ["ambient", "atmospheric", "ethereal", "drone"], weight: 6 },
+    { keywords: ["meditation", "meditative", "zen", "healing"], weight: 7 },
+    { keywords: ["pad layers", "pad textures", "soundscape", "texture"], weight: 5 },
+    { keywords: ["space ambient", "dark ambient", "deep ambient"], weight: 9 },
+    { keywords: ["long reverb", "reverb tails", "infinite reverb"], weight: 4 },
+  ],
+  "electronic": [
+    { keywords: ["electronic", "synth", "synthesizer", "arpeggio"], weight: 4 },
+    { keywords: ["edm", "drop", "sidechain", "wobble bass"], weight: 8 },
+    { keywords: ["sequencer", "modular", "eurorack"], weight: 7 },
+  ],
+  "hiphop": [
+    { keywords: ["hip hop", "hip-hop", "boom bap", "beatmaking"], weight: 8 },
+    { keywords: ["trap", "808", "hi-hat rolls", "trap beat"], weight: 7 },
+    { keywords: ["rap", "rap beat", "rap instrumental"], weight: 8 },
+    { keywords: ["drill", "uk drill", "ny drill"], weight: 7 },
+  ],
+  "lofi": [
+    { keywords: ["lo-fi", "lofi", "lo fi"], weight: 8 },
+    { keywords: ["vinyl crackle", "tape hiss", "tape saturation", "dusty"], weight: 6 },
+    { keywords: ["nostalgic", "warm analog", "bedroom producer"], weight: 4 },
+    { keywords: ["lofi hip hop", "lofi beats", "study beats", "chill beats"], weight: 9 },
+  ],
+  "rock": [
+    { keywords: ["rock", "guitar riff", "power chord", "distortion guitar"], weight: 7 },
+    { keywords: ["grunge", "punk rock", "alternative rock", "indie rock"], weight: 8 },
+    { keywords: ["heavy guitar", "electric guitar", "rock drums", "rock anthem"], weight: 6 },
+  ],
+  "classical": [
+    { keywords: ["classical", "orchestral", "symphony", "chamber music"], weight: 8 },
+    { keywords: ["violin", "cello", "viola", "string quartet"], weight: 5 },
+    { keywords: ["piano sonata", "concerto", "fugue", "baroque"], weight: 9 },
+  ],
+  "cinematic": [
+    { keywords: ["cinematic", "film score", "movie", "trailer"], weight: 8 },
+    { keywords: ["epic", "epic orchestral", "heroic", "dramatic"], weight: 6 },
+    { keywords: ["soundtrack", "score", "film music"], weight: 7 },
+  ],
+  "rnb": [
+    { keywords: ["r&b", "rnb", "rhythm and blues"], weight: 8 },
+    { keywords: ["soul", "soulful", "neo-soul", "neo soul"], weight: 6 },
+    { keywords: ["smooth groove", "r&b groove", "slow jam"], weight: 7 },
+  ],
+  "latin": [
+    { keywords: ["latin", "salsa", "cumbia", "reggaeton"], weight: 8 },
+    { keywords: ["bossa nova", "samba", "tango", "merengue"], weight: 7 },
+    { keywords: ["latin percussion", "congas", "timbales"], weight: 5 },
+  ],
+  "uk-garage": [
+    { keywords: ["uk garage", "2-step", "2step", "garage"], weight: 8 },
+    { keywords: ["shuffle", "skippy beat", "uk underground"], weight: 5 },
+  ],
+  "house": [
+    { keywords: ["house music", "four-on-the-floor", "4x4 beat"], weight: 8 },
+    { keywords: ["deep house", "tech house", "progressive house"], weight: 7 },
+    { keywords: ["house groove", "house beat", "house kick"], weight: 7 },
+  ],
+  "techno": [
+    { keywords: ["techno", "minimal techno", "industrial techno"], weight: 8 },
+    { keywords: ["acid", "acid techno", "detroit techno", "berlin techno"], weight: 7 },
+  ],
+  "funk": [
+    { keywords: ["funk", "funky", "funk groove", "funk bass"], weight: 8 },
+    { keywords: ["slap bass", "wah guitar", "clavinet"], weight: 6 },
+  ],
+  "reggae": [
+    { keywords: ["reggae", "dub", "ska", "dancehall"], weight: 8 },
+    { keywords: ["offbeat", "skank guitar", "one drop"], weight: 6 },
+  ],
+  "blues": [
+    { keywords: ["blues", "12-bar", "delta blues", "chicago blues"], weight: 8 },
+    { keywords: ["blues guitar", "blues harp", "slide guitar"], weight: 7 },
+  ],
+  "trap": [
+    { keywords: ["trap", "trap beat", "trap instrumental"], weight: 8 },
+    { keywords: ["808 bass", "hi-hat rolls", "dark trap"], weight: 7 },
+  ],
+};
+
+// Score style tags against genre indicators. Returns { genre, score } sorted by score desc.
+function inferGenreFromStyle(style: string): { genre: string; score: number }[] {
+  const lower = style.toLowerCase();
+  const results: { genre: string; score: number }[] = [];
+
+  for (const [genreId, indicators] of Object.entries(GENRE_INDICATORS)) {
+    let totalScore = 0;
+    for (const ind of indicators) {
+      for (const kw of ind.keywords) {
+        // Word-boundary-aware matching
+        const idx = lower.indexOf(kw.toLowerCase());
+        if (idx === -1) continue;
+        const before = idx > 0 ? lower[idx - 1] : " ";
+        const after = idx + kw.length < lower.length ? lower[idx + kw.length] : " ";
+        const isWordBoundary = /[\s,;.\-\/]/.test(before) && /[\s,;.\-\/]/.test(after);
+        totalScore += ind.weight * (isWordBoundary ? 1.5 : 1);
+      }
+    }
+    if (totalScore > 0) results.push({ genre: genreId, score: totalScore });
+  }
+
+  return results.sort((a, b) => b.score - a.score);
+}
+
 // ─── SUB-GENRE AUTO-DETECTION ─────────────────────────────────────────
 // Cached sub-genres from DB (5-min TTL to avoid querying on every generation)
 let subGenreCache: { data: any[]; ts: number } | null = null;
@@ -375,6 +494,26 @@ serve(async (req) => {
     const cleanStyle = sanitize(style).slice(0, 500);
     const cleanNegTags = sanitize(negativeTags).slice(0, 200);
 
+    // ─── STYLE-TAG GENRE INFERENCE ───────────────────────────────
+    // Analyze style tags to detect if agent declared the wrong genre.
+    // If style strongly indicates a different genre, auto-correct.
+    let finalGenre = normalizedGenre;
+    const genreScores = inferGenreFromStyle(cleanStyle);
+    if (genreScores.length > 0) {
+      const topInferred = genreScores[0];
+      const declaredScore = genreScores.find(g => g.genre === normalizedGenre)?.score || 0;
+      // Override if: top inferred genre is different AND scores 2x+ higher than declared
+      if (topInferred.genre !== normalizedGenre && topInferred.score >= 10 && topInferred.score > declaredScore * 2) {
+        // Verify the inferred genre exists in DB before overriding
+        const { data: inferredExists } = await supabase
+          .from("genres").select("id").eq("id", topInferred.genre).is("parent_id", null).single();
+        if (inferredExists) {
+          console.log(`Genre override: agent declared "${normalizedGenre}" but style tags strongly indicate "${topInferred.genre}" (score: ${topInferred.score} vs ${declaredScore}). Overriding.`);
+          finalGenre = topInferred.genre;
+        }
+      }
+    }
+
     // ─── INSTRUMENTAL ONLY: block vocal/lyric keywords ───────────
     const VOCAL_KEYWORDS = /\b(vocals?|singing|singer|lyric|lyrics|rapper|rapping|acapella|a\s*cappella|choir|verse|hook|chorus|spoken\s*word)\b/i;
     if (VOCAL_KEYWORDS.test(cleanStyle) || VOCAL_KEYWORDS.test(cleanTitle) || (cleanTitleV2 && VOCAL_KEYWORDS.test(cleanTitleV2))) {
@@ -402,27 +541,27 @@ serve(async (req) => {
     if (sub_genre) {
       // Agent explicitly specified a sub-genre — validate it exists under the parent genre
       const cleanSubGenre = sanitize(String(sub_genre)).toLowerCase().replace(/\s+/g, "-").slice(0, 100);
-      const validSubGenre = allSubGenres.find((sg: any) => sg.id === cleanSubGenre && sg.parent_id === normalizedGenre);
+      const validSubGenre = allSubGenres.find((sg: any) => sg.id === cleanSubGenre && sg.parent_id === finalGenre);
       if (validSubGenre) {
         finalSubGenre = cleanSubGenre;
-        console.log(`Sub-genre specified by agent: ${finalSubGenre} (parent: ${normalizedGenre})`);
+        console.log(`Sub-genre specified by agent: ${finalSubGenre} (parent: ${finalGenre})`);
       } else {
         // Check if it exists under a different parent genre
         const wrongParent = allSubGenres.find((sg: any) => sg.id === cleanSubGenre);
         if (wrongParent) {
           return new Response(
             JSON.stringify({
-              error: `Sub-genre "${cleanSubGenre}" belongs to parent genre "${wrongParent.parent_id}", not "${normalizedGenre}". Use genre: "${wrongParent.parent_id}" instead.`,
+              error: `Sub-genre "${cleanSubGenre}" belongs to parent genre "${wrongParent.parent_id}", not "${finalGenre}". Use genre: "${wrongParent.parent_id}" instead.`,
               correct_genre: wrongParent.parent_id,
             }),
             { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
           );
         }
         // Sub-genre not found — list valid ones for this parent
-        const validSubs = allSubGenres.filter((sg: any) => sg.parent_id === normalizedGenre).map((sg: any) => sg.id);
+        const validSubs = allSubGenres.filter((sg: any) => sg.parent_id === finalGenre).map((sg: any) => sg.id);
         return new Response(
           JSON.stringify({
-            error: `Sub-genre "${cleanSubGenre}" not found under genre "${normalizedGenre}".`,
+            error: `Sub-genre "${cleanSubGenre}" not found under genre "${finalGenre}".`,
             valid_sub_genres: validSubs,
             tip: "Omit sub_genre to use automatic detection from your style tags.",
           }),
@@ -431,9 +570,9 @@ serve(async (req) => {
       }
     } else {
       // Auto-detect from style tags (existing behavior)
-      finalSubGenre = detectSubGenre(normalizedGenre, cleanStyle, allSubGenres);
+      finalSubGenre = detectSubGenre(finalGenre, cleanStyle, allSubGenres);
       if (finalSubGenre) {
-        console.log(`Sub-genre detected: ${finalSubGenre} (parent: ${normalizedGenre}, style: "${cleanStyle.slice(0, 80)}")`);
+        console.log(`Sub-genre detected: ${finalSubGenre} (parent: ${finalGenre}, style: "${cleanStyle.slice(0, 80)}")`);
       }
     }
 
@@ -726,7 +865,7 @@ serve(async (req) => {
       const beatInsert: Record<string, unknown> = {
         agent_id: agent.id,
         title: i === 0 ? cleanTitle : (cleanTitleV2 || `${cleanTitle} (v2)`),
-        genre: normalizedGenre, sub_genre: finalSubGenre, style: cleanStyle, model, bpm: safeBpm,
+        genre: finalGenre, sub_genre: finalSubGenre, style: cleanStyle, model, bpm: safeBpm,
         instrumental: true,
         negative_tags: cleanNegTags,
         task_id: taskId, status: "generating",
@@ -764,7 +903,7 @@ serve(async (req) => {
         generation_source: useSelfHosted ? "selfhosted" : "sunoapi",
         ...(useSelfHosted && useCentralized ? { used_centralized: true, g_credits_note: "G-Credits are shared across all your agents" } : useSelfHosted ? { used_centralized: false } : {}),
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
-        genre_normalized: normalizedGenre !== genre ? `"${genre}" → "${normalizedGenre}"` : undefined,
+        genre_normalized: finalGenre !== genre ? `"${genre}" → "${finalGenre}"${finalGenre !== normalizedGenre ? " (style-inferred)" : ""}` : undefined,
         beats: beatRecords.map((b) => ({ id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre, status: b.status, price: b.price, suno_id: b.suno_id || null })),
         message: useSelfHosted
           ? (useCentralized
