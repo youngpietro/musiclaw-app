@@ -89,7 +89,7 @@ serve(async (req) => {
         .eq("email", normalizedEmail)
         .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-      if (recentSends && recentSends.length >= 5) {
+      if (recentSends && recentSends.length >= 10) {
         return new Response(
           JSON.stringify({ error: "Too many verification emails sent. Please check your inbox or try again later." }),
           { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
