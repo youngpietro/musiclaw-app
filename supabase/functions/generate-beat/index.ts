@@ -27,15 +27,25 @@ const MAX_STEMS_PRICE = 999.99;
 // ─── GENRE NORMALIZATION ──────────────────────────────────────────────
 // Canonical aliases: map common variant spellings → proper genre slug
 const GENRE_ALIASES: Record<string, string> = {
+  // Core aliases
   "hip-hop": "hiphop", "hip hop": "hiphop", "rap": "hiphop",
   "r&b": "rnb", "r-b": "rnb", "randb": "rnb", "r-and-b": "rnb", "rhythm-and-blues": "rnb",
   "lo-fi": "lofi", "lo fi": "lofi",
-  "uk-garage": "uk-garage", "ukgarage": "uk-garage", "uk garage": "uk-garage",
-  "drum-and-bass": "drum-and-bass", "drumandbass": "drum-and-bass", "dnb": "drum-and-bass", "drum and bass": "drum-and-bass",
+  "uk-garage": "uk-garage", "ukgarage": "uk-garage", "uk garage": "uk-garage", "2-step": "uk-garage", "2step": "uk-garage",
+  "drum-and-bass": "drum-and-bass", "drumandbass": "drum-and-bass", "dnb": "drum-and-bass", "drum and bass": "drum-and-bass", "jungle": "drum-and-bass",
   "triphop": "trip-hop", "trip hop": "trip-hop",
-  "synthwave": "synthwave", "synth-wave": "synthwave",
-  "chillhop": "chillhop", "chill-hop": "chillhop",
+  "synthwave": "synthwave", "synth-wave": "synthwave", "retrowave": "synthwave", "outrun": "synthwave",
+  "chillhop": "chillhop", "chill-hop": "chillhop", "chill hop": "chillhop",
   "afrobeat": "afrobeat", "afro-beat": "afrobeat", "afrobeats": "afrobeat",
+  // Common alternate names
+  "r and b": "rnb", "rhythm and blues": "rnb",
+  "neosoul": "neo-soul", "neo soul": "neo-soul",
+  "bossanova": "bossa-nova", "bossa nova": "bossa-nova",
+  "postrock": "post-rock", "post rock": "post-rock",
+  "newwave": "new-wave", "new wave": "new-wave",
+  "psytrance": "psytrance", "psy-trance": "psytrance", "psy trance": "psytrance",
+  "dance": "edm", "electronic dance music": "edm",
+  "d&b": "drum-and-bass", "d and b": "drum-and-bass",
 };
 
 function normalizeGenreSlug(raw: string): string {
@@ -325,8 +335,38 @@ serve(async (req) => {
       );
     }
 
-    // ─── NORMALIZE GENRE ──────────────────────────────────────────────
+    // ─── NORMALIZE & VALIDATE GENRE ─────────────────────────────────
     const normalizedGenre = normalizeGenreSlug(String(genre));
+
+    // Validate genre exists in the DB (closed taxonomy — no auto-cataloging)
+    const { data: validGenre } = await supabase
+      .from("genres").select("id").eq("id", normalizedGenre).is("parent_id", null).single();
+    if (!validGenre) {
+      // Also try as a sub-genre (the agent might have sent a sub-genre as genre)
+      const { data: asSub } = await supabase
+        .from("genres").select("id, parent_id").eq("id", normalizedGenre).not("parent_id", "is", null).single();
+      if (asSub) {
+        return new Response(
+          JSON.stringify({
+            error: `"${normalizedGenre}" is a sub-genre of "${asSub.parent_id}". Use genre: "${asSub.parent_id}" and optionally sub_genre: "${normalizedGenre}".`,
+            correct_genre: asSub.parent_id,
+            sub_genre: normalizedGenre,
+          }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      // Genre not found at all — return valid options
+      const { data: allGenres } = await supabase
+        .from("genres").select("id, label").is("parent_id", null).order("label");
+      return new Response(
+        JSON.stringify({
+          error: `Unknown genre "${genre}" (normalized: "${normalizedGenre}"). Pick from the valid genre list.`,
+          valid_genres: (allGenres || []).map((g: any) => g.id),
+          tip: "Use one of the valid genre IDs above. Sub-genres are auto-detected from style tags.",
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
 
     // Sanitize text inputs
     const sanitize = (s: string) => s.replace(/<[^>]*>/g, "").replace(/javascript:/gi, "").trim();
@@ -706,19 +746,7 @@ serve(async (req) => {
     // beats_count is now managed by database trigger (trg_sync_agent_beats_count)
     // which fires when beat status changes to 'complete'. No manual increment needed.
 
-    // ─── AUTO-CATALOG NEW GENRES ────────────────────────────────────
-    // If the normalized genre doesn't exist in the genres table yet, add it
-    const { data: existingGenre } = await supabase
-      .from("genres").select("id").eq("id", normalizedGenre).single();
-    if (!existingGenre) {
-      await supabase.from("genres").insert({
-        id: normalizedGenre,
-        label: genreLabelFromSlug(normalizedGenre),
-        icon: "🎵",
-        color: "#ff6b35",
-      });
-      console.log(`New genre auto-cataloged: ${normalizedGenre} (from input: "${genre}")`);
-    }
+    // Genre existence already validated before beat creation (see genre validation block above)
 
     // ─── STORE KEY TEMPORARILY FOR AUTO-WAV CONVERSION ──────────────
     // Only for sunoapi.org — self-hosted has no callbacks, agents use polling.

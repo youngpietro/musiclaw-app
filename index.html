@@ -174,6 +174,29 @@ let GENRES = [
   { id:"rock", label:"Rock", icon:"🎸", color:"#f97316", parent_id:null },
   { id:"classical", label:"Classical", icon:"🎻", color:"#d4a853", parent_id:null },
   { id:"latin", label:"Latin", icon:"💃", color:"#e11d48", parent_id:null },
+  { id:"uk-garage", label:"UK Garage", icon:"🇬🇧", color:"#8b5cf6", parent_id:null },
+  { id:"drum-and-bass", label:"Drum & Bass", icon:"🥁", color:"#f43f5e", parent_id:null },
+  { id:"reggae", label:"Reggae", icon:"🌴", color:"#22c55e", parent_id:null },
+  { id:"country", label:"Country", icon:"🤠", color:"#d97706", parent_id:null },
+  { id:"pop", label:"Pop", icon:"🎵", color:"#f472b6", parent_id:null },
+  { id:"metal", label:"Metal", icon:"🤘", color:"#6b7280", parent_id:null },
+  { id:"blues", label:"Blues", icon:"🎸", color:"#3b82f6", parent_id:null },
+  { id:"funk", label:"Funk", icon:"🕺", color:"#fb923c", parent_id:null },
+  { id:"soul", label:"Soul", icon:"❤️", color:"#c084fc", parent_id:null },
+  { id:"disco", label:"Disco", icon:"🪩", color:"#e879f9", parent_id:null },
+  { id:"trip-hop", label:"Trip-Hop", icon:"🌀", color:"#6366f1", parent_id:null },
+  { id:"synthwave", label:"Synthwave", icon:"🌆", color:"#f43f5e", parent_id:null },
+  { id:"chillhop", label:"Chillhop", icon:"☕", color:"#a78bfa", parent_id:null },
+  { id:"afrobeat", label:"Afrobeat", icon:"🌍", color:"#f59e0b", parent_id:null },
+  { id:"r-and-b", label:"R&B", icon:"💜", color:"#ec4899", parent_id:null },
+  { id:"world", label:"World", icon:"🌎", color:"#14b8a6", parent_id:null },
+  { id:"trap", label:"Trap", icon:"💎", color:"#a855f7", parent_id:null },
+  { id:"drill", label:"Drill", icon:"🔫", color:"#475569", parent_id:null },
+  { id:"garage", label:"Garage", icon:"🏠", color:"#8b5cf6", parent_id:null },
+  { id:"dubstep", label:"Dubstep", icon:"💥", color:"#7c3aed", parent_id:null },
+  { id:"techno", label:"Techno", icon:"🔊", color:"#1e40af", parent_id:null },
+  { id:"house", label:"House", icon:"🏠", color:"#0ea5e9", parent_id:null },
+  { id:"trance", label:"Trance", icon:"🌈", color:"#06b6d4", parent_id:null },
 ];
 let GENRES_TREE = GENRES.map(g => ({...g, children: []}));
 const TRENDING = [
@@ -923,7 +946,7 @@ function DownloadSuccessModal({ downloadUrl, beatTitle, tier, onClose }) {
 
 function BeatCard({ beat, playingId, onPlay, onBuy, highlight, isLiked, onLike, peaks, audioProgress, onSeek }) {
   const isPlaying = playingId === beat.id;
-  const genre = GENRES.find(g=>g.id===beat.genre);
+  const genre = GENRES.find(g=>g.id===beat.genre) || (beat.genre ? { id:beat.genre, label:beat.genre.replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase()), icon:"🎵", color:"#ff6b35" } : { id:"unknown", label:"Unknown", icon:"🎵", color:"#555" });
   const liked = isLiked || false;
   const [copied, setCopied] = useState(false);
   const gc = genre?.color || "#e11d48";
