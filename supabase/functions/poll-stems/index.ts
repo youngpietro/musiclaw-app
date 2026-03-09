@@ -10,6 +10,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// Stem types that should NOT become purchasable samples.
+// "instrumental" = full beat minus vocals (would undercut beat sales)
+// "vocals" / "vocal" / "backing_vocals" / "lead_vocals" = empty on instrumental beats
+const EXCLUDED_SAMPLE_TYPES = new Set([
+  "instrumental", "vocals", "vocal", "backing_vocals", "lead_vocals",
+]);
+
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
   "https://www.musiclaw.app",
@@ -126,6 +133,17 @@ serve(async (req) => {
 
     const stemClipIds: string[] = beat.stems_clip_ids || [];
     if (stemClipIds.length === 0) {
+      // If Demucs is configured, stems are processed via callback — no clip IDs to poll
+      if (Deno.env.get("DEMUCS_SERVICE_URL")) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            message: "Stems are being processed via Demucs AI. The callback will update the beat automatically — please wait a few minutes.",
+            stems_status: beat.stems_status,
+          }),
+          { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
       return new Response(
         JSON.stringify({ error: "No stem clip IDs found. Stems may not have been triggered properly. Call process-stems again." }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
@@ -210,18 +228,41 @@ serve(async (req) => {
     }
 
     // ─── ALL STEMS READY — EXTRACT AND PROCESS ──────────────────────
-    const KNOWN_STEMS = ["bass", "drums", "vocals", "other", "melody", "piano", "guitar", "strings", "wind"];
+    const KNOWN_STEMS = [
+      "bass", "drums", "vocals", "lead_vocals", "lead vocals",
+      "other", "melody", "piano", "guitar", "strings", "wind",
+      "keyboard", "synth", "percussion", "fx", "pad", "brass",
+      "woodwind", "choir", "sitar", "theremin"
+    ];
     const completedStems: Record<string, string> = {};
 
     for (const clip of readyClips) {
       let stemType = "unknown";
       const title = (clip.title || "").toLowerCase();
-      for (const stem of KNOWN_STEMS) {
-        if (title.endsWith(` - ${stem}`) || title.includes(`_${stem}`) || title === stem) {
-          stemType = stem;
-          break;
+
+      // Pattern 1: "Title (StemType)" — parenthesized suffix (12-stem mode)
+      const parenMatch = title.match(/\(([^)]+)\)\s*$/);
+      if (parenMatch) {
+        const candidate = parenMatch[1].trim().toLowerCase();
+        if (candidate === "lead vocals" || candidate === "lead_vocals") {
+          stemType = "vocals";
+        } else if (KNOWN_STEMS.includes(candidate)) {
+          stemType = candidate;
+        } else {
+          stemType = candidate.replace(/\s+/g, "_");
         }
       }
+
+      // Pattern 2: "Title - StemType" — dash-separated (2-stem mode)
+      if (stemType === "unknown") {
+        for (const stem of KNOWN_STEMS) {
+          if (title.endsWith(` - ${stem}`) || title.includes(`_${stem}`) || title === stem) {
+            stemType = (stem === "lead vocals" || stem === "lead_vocals") ? "vocals" : stem;
+            break;
+          }
+        }
+      }
+
       if (stemType === "unknown" && clip.metadata?.stem_type) {
         stemType = clip.metadata.stem_type.toLowerCase();
       }
@@ -251,6 +292,8 @@ serve(async (req) => {
     let samplesSkipped = 0;
 
     for (const [stemType, stemUrl] of Object.entries(completedStems)) {
+      // Skip non-sample stem types (instrumental = full beat, vocals = empty on instrumental beats)
+      if (EXCLUDED_SAMPLE_TYPES.has(stemType)) { samplesSkipped++; continue; }
       try {
         const headRes = await fetch(stemUrl, { method: "HEAD" });
         const fileSize = parseInt(headRes.headers.get("content-length") || "0", 10);
