@@ -203,6 +203,7 @@ serve(async (req) => {
       ? (agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL"))
       : null;
     const useCentralized = useSelfHosted && !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
+    const demucsServiceUrl = Deno.env.get("DEMUCS_SERVICE_URL");
 
     if ((!useSelfHosted || demucsServiceUrl) && !callbackSecret) {
       console.error("SUNO_CALLBACK_SECRET not configured");
@@ -225,7 +226,6 @@ serve(async (req) => {
     // Charge 1 G-Credit for stems when:
     //  - Demucs is configured (covers Railway CPU/RAM costs), OR
     //  - Centralized Suno is used for stems (covers Suno credits cost)
-    const demucsServiceUrl = Deno.env.get("DEMUCS_SERVICE_URL");
     let gcreditDeducted = false;
     const shouldChargeGCredit =
       (demucsServiceUrl && beat.stems_status !== "complete") ||
