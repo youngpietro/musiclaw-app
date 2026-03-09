@@ -144,8 +144,8 @@ serve(async (req) => {
       );
     }
 
-    // sunoapi.org beats also need task_id
-    if (!useSelfHosted && !beat.task_id) {
+    // sunoapi.org beats need task_id ONLY when using sunoapi.org path (not LALAL.ai)
+    if (!useSelfHosted && !beat.task_id && !agent.lalal_api_key) {
       return new Response(
         JSON.stringify({ error: "Beat has no generation task_id — cannot process WAV/stems via sunoapi.org." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -170,9 +170,11 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    if (!useSelfHosted && !suno_api_key) {
+    // suno_api_key is only required for sunoapi.org beats WITHOUT a LALAL.ai key
+    // (LALAL.ai handles stems directly, sunoapi.org key only needed for WAV + old split_stem path)
+    if (!useSelfHosted && !suno_api_key && !agent.lalal_api_key) {
       return new Response(
-        JSON.stringify({ error: "suno_api_key is required for sunoapi.org beats. Your key is used once and discarded." }),
+        JSON.stringify({ error: "suno_api_key or lalal_api_key is required. Set your LALAL.ai key via update-agent-settings, or pass suno_api_key for sunoapi.org." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -203,7 +205,8 @@ serve(async (req) => {
       ? (agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL"))
       : null;
     const useCentralized = useSelfHosted && !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
-    if (!useSelfHosted && !callbackSecret) {
+    // callbackSecret only needed for sunoapi.org path (not LALAL.ai)
+    if (!useSelfHosted && !callbackSecret && !agent.lalal_api_key) {
       console.error("SUNO_CALLBACK_SECRET not configured");
       return new Response(
         JSON.stringify({ error: "Server misconfigured" }),
@@ -256,27 +259,46 @@ serve(async (req) => {
       console.log(`G-Credit deducted: 1 from owner ${creditOwnerEmail} via @${agent.handle} for stems (balance: ${newBal})`);
     }
 
-    if (useSelfHosted) {
-      // ─── SELF-HOSTED: WAV + STEMS ──────────────────────────────────
-      // Self-hosted gcui-art/suno-api doesn't have dedicated WAV/stems endpoints.
-      // We attempt the stems split via the API; WAV is typically the audio_url itself.
+    // ─── LALAL.AI vs SUNOAPI.ORG ROUTING ──────────────────────────────
+    // If agent has a LALAL.ai key → use LALAL.ai for stems (any beat).
+    // Otherwise, sunoapi.org beats fall back to sunoapi.org split_stem.
+    const lalalKey = agent.lalal_api_key || null;
+    const useLalal = !!lalalKey;
 
-      // 1. WAV: Self-hosted audio is already a direct URL; mark as complete or skip
-      if (beat.wav_status !== "complete") {
-        // For self-hosted beats, the audio_url IS the WAV/MP3 source.
-        // Mark WAV as N/A — no separate WAV conversion needed.
+    if (useSelfHosted || useLalal) {
+      // ─── WAV HANDLING ──────────────────────────────────────────────
+      if (useSelfHosted && beat.wav_status !== "complete") {
         await supabase.from("beats").update({ wav_status: "complete" }).eq("id", beat.id);
         results.push("WAV: self-hosted audio is direct — marked complete");
+      } else if (!useSelfHosted && beat.wav_status !== "complete" && beat.wav_status !== "processing") {
+        // For sunoapi.org beats using LALAL.ai stems, still trigger WAV via sunoapi.org
+        if (suno_api_key && callbackSecret) {
+          try {
+            const wavRes = await fetch("https://api.sunoapi.org/api/v1/wav/generate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${suno_api_key}` },
+              body: JSON.stringify({
+                taskId: beat.task_id, audioId: beat.suno_id,
+                callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${callbackSecret}&beat_id=${beat.id}`,
+              }),
+            });
+            if (wavRes.ok) {
+              await supabase.from("beats").update({ wav_status: "processing" }).eq("id", beat.id);
+              results.push("WAV conversion triggered via sunoapi.org");
+            } else {
+              results.push("WAV conversion skipped (sunoapi.org error)");
+            }
+          } catch { results.push("WAV conversion skipped (network error)"); }
+        } else {
+          results.push("WAV: skipped (no suno_api_key for sunoapi.org WAV)");
+        }
       } else {
         results.push("WAV already complete");
       }
 
-      // 2. Stems: Use LALAL.ai for professional stem splitting
+      // ─── STEMS: Use LALAL.ai for professional stem splitting ────────
       if (beat.stems_status !== "complete") {
-        // Resolve LALAL.ai API key
-        const lalalKey = agent.lalal_api_key || null;
         if (!lalalKey) {
-          // Don't mark as "failed" — key just needs to be configured
           return new Response(
             JSON.stringify({
               error: "LALAL.ai API key required for stem splitting. Set yours via POST /functions/v1/update-agent-settings with { lalal_api_key: \"your-key\" }. Get one at lalal.ai/pricing",
@@ -609,8 +631,8 @@ serve(async (req) => {
         generation_source: generationSource,
         ...(gcreditDeducted ? { gcredit_spent: 1 } : {}),
         results,
-        message: useSelfHosted
-          ? "Stem splitting via LALAL.ai (agent's API key). Up to 9 stems extracted synchronously."
+        message: useLalal
+          ? "Stem splitting via LALAL.ai (agent's API key). Up to 9 stems extracted."
           : "Stem splitting via sunoapi.org (split_stem). Callback updates the beat. Your key was used and NOT stored.",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
