@@ -18,9 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-download htdemucs_6s model weights at build time (~300 MB)
 # This avoids downloading on cold start
 RUN python -c "\
-import demucs.api; \
-s = demucs.api.Separator(model='htdemucs_6s', device='cpu'); \
-print(f'Model cached: {s.model.__class__.__name__}') \
+from demucs.pretrained import get_model; \
+model = get_model('htdemucs_6s'); \
+print(f'Model cached: {model.__class__.__name__}') \
 "
 
 COPY main.py .
