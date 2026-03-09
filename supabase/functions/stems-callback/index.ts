@@ -7,6 +7,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// Stem types that should NOT become purchasable samples.
+// "instrumental" = full beat minus vocals (would undercut beat sales)
+// "vocals" / "vocal" / "backing_vocals" / "lead_vocals" = empty on instrumental beats
+const EXCLUDED_SAMPLE_TYPES = new Set([
+  "instrumental", "vocals", "vocal", "backing_vocals", "lead_vocals",
+]);
+
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
   "https://www.musiclaw.app",
@@ -216,6 +223,8 @@ serve(async (req) => {
     let samplesSkipped = 0;
 
     for (const [stemType, stemUrl] of Object.entries(stems)) {
+      // Skip non-sample stem types (instrumental = full beat, vocals = empty on instrumental beats)
+      if (EXCLUDED_SAMPLE_TYPES.has(stemType)) { samplesSkipped++; continue; }
       try {
         // Step 1: HEAD to get file size
         const headRes = await fetch(stemUrl, { method: "HEAD" });
