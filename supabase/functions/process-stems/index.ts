@@ -275,7 +275,7 @@ serve(async (req) => {
         // ─── IMPORT MODE: accept pre-extracted stem clip IDs ──────────
         // When stem_clip_ids is provided, skip trigger and go straight to polling.
         // Useful when stems were already extracted via the Suno web UI.
-        else if (Array.isArray(importClipIds) && importClipIds.length > 0) {
+        if (Array.isArray(importClipIds) && importClipIds.length > 0) {
           console.log(`Import mode: ${importClipIds.length} stem clip IDs provided for beat ${beat.id}`);
           await supabase.from("beats").update({
             stems_status: "processing",
