@@ -57,9 +57,9 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email").eq("api_token_hash", tokenHash).single();
+    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email, lalal_api_key").eq("api_token_hash", tokenHash).single();
     if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email").eq("api_token", token).single();
+      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email, lalal_api_key").eq("api_token", token).single();
       agent = fallback;
     }
 
@@ -221,9 +221,10 @@ serve(async (req) => {
     const results: string[] = [];
 
     // ─── G-CREDIT DEDUCTION ────────────────────────────────────────────
-    // Charge 1 G-Credit for stems when centralized Suno is used (covers Suno credits cost)
+    // Self-hosted beats now use LALAL.ai (agent pays directly) → no G-Credit for stems.
+    // G-Credits are only charged for sunoapi.org stems if we re-enable that path.
     let gcreditDeducted = false;
-    const shouldChargeGCredit = useCentralized && beat.stems_status !== "complete";
+    const shouldChargeGCredit = false; // LALAL.ai stems = agent-paid, no platform cost
     if (shouldChargeGCredit) {
       const creditOwnerEmail = agent.owner_email?.trim().toLowerCase();
       if (!creditOwnerEmail) {
@@ -270,105 +271,184 @@ serve(async (req) => {
         results.push("WAV already complete");
       }
 
-      // 2. Stems: Use self-hosted Suno API for stem splitting
+      // 2. Stems: Use LALAL.ai for professional stem splitting
       if (beat.stems_status !== "complete") {
-        // ─── IMPORT MODE: accept pre-extracted stem clip IDs ──────────
-        // When stem_clip_ids is provided, skip trigger and go straight to polling.
-        // Useful when stems were already extracted via the Suno web UI.
-        if (Array.isArray(importClipIds) && importClipIds.length > 0) {
-          console.log(`Import mode: ${importClipIds.length} stem clip IDs provided for beat ${beat.id}`);
-          await supabase.from("beats").update({
-            stems_status: "processing",
-            stems_clip_ids: importClipIds,
-          }).eq("id", beat.id);
+        // Resolve LALAL.ai API key
+        const lalalKey = agent.lalal_api_key || null;
+        if (!lalalKey) {
+          // Don't mark as "failed" — key just needs to be configured
+          return new Response(
+            JSON.stringify({
+              error: "LALAL.ai API key required for stem splitting. Set yours via POST /functions/v1/update-agent-settings with { lalal_api_key: \"your-key\" }. Get one at lalal.ai/pricing",
+              beat_id: beat.id,
+            }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        } else {
+        // ─── LALAL.AI STEM SPLITTING ──────────────────────────────────
+        try {
+          console.log(`LALAL.ai stems for beat ${beat.id} (suno_id: ${beat.suno_id})`);
+          await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
 
-          // Go straight to polling these clip IDs
+          // Step 1: Download MP3 from Suno CDN
+          const audioUrl = `https://cdn1.suno.ai/${beat.suno_id}.mp3`;
+          const audioRes = await fetch(audioUrl);
+          if (!audioRes.ok) throw new Error(`Failed to download audio: HTTP ${audioRes.status}`);
+          const audioData = new Uint8Array(await audioRes.arrayBuffer());
+          console.log(`Downloaded ${audioData.length} bytes from ${audioUrl}`);
+
+          // Step 2: Upload to LALAL.ai
+          const uploadRes = await fetch("https://www.lalal.ai/api/v1/upload/", {
+            method: "POST",
+            headers: {
+              "X-License-Key": lalalKey,
+              "Content-Disposition": `attachment; filename="${beat.suno_id}.mp3"`,
+              "Content-Type": "audio/mpeg",
+            },
+            body: audioData,
+          });
+          if (!uploadRes.ok) {
+            const errText = await uploadRes.text();
+            throw new Error(`LALAL.ai upload failed: ${uploadRes.status} ${errText.slice(0, 200)}`);
+          }
+          const uploadData = await uploadRes.json();
+          const sourceId = uploadData.source_id || uploadData.id;
+          console.log(`LALAL.ai upload OK: source_id=${sourceId}, duration=${uploadData.duration}s`);
+
+          // Step 3: Start multistem split (up to 6 stems per request)
+          // Split into two batches since multistem supports max 6 stems
+          const STEM_BATCH_1 = ["vocals", "drum", "bass", "electric_guitar", "acoustic_guitar", "piano"];
+          const STEM_BATCH_2 = ["synthesizer", "strings", "wind"];
+
+          const taskIds: string[] = [];
+
+          for (const stemList of [STEM_BATCH_1, STEM_BATCH_2]) {
+            const splitRes = await fetch("https://www.lalal.ai/api/v1/split/multistem/", {
+              method: "POST",
+              headers: {
+                "X-License-Key": lalalKey,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                source_id: sourceId,
+                presets: {
+                  stem_list: stemList,
+                  splitter: "phoenix",
+                  encoder_format: "mp3",
+                },
+              }),
+            });
+            if (!splitRes.ok) {
+              const errText = await splitRes.text();
+              console.error(`LALAL.ai split failed for batch: ${splitRes.status} ${errText.slice(0, 200)}`);
+              continue;
+            }
+            const splitData = await splitRes.json();
+            // Response may contain task_id directly or in a nested structure
+            const tid = splitData.task_id || splitData.id;
+            if (tid) taskIds.push(tid);
+            console.log(`LALAL.ai split started: task_id=${tid}, stems=${stemList.join(",")}`);
+          }
+
+          if (taskIds.length === 0) {
+            throw new Error("LALAL.ai: no split tasks were created");
+          }
+
+          // Step 4: Poll for completion (max ~3 minutes)
           const POLL_INTERVAL = 5_000;
-          const MAX_POLLS = 6; // 6 * 5s = 30s (shorter since clips should already exist)
-          let stemsComplete = false;
+          const MAX_POLLS = 36; // 36 * 5s = 180s
+          let allComplete = false;
           let completedStems: Record<string, string> = {};
 
           for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
             if (attempt > 0) await new Promise(r => setTimeout(r, POLL_INTERVAL));
-            console.log(`Import poll (attempt ${attempt + 1}/${MAX_POLLS}) for beat ${beat.id}`);
 
-            try {
-              const pollRes = await fetch(`${selfHostedUrl}/api/get?ids=${importClipIds.join(",")}`, {
-                method: "GET",
-                headers: { "X-Suno-Cookie": effectiveCookie! },
-              });
+            const checkRes = await fetch("https://www.lalal.ai/api/v1/check/", {
+              method: "POST",
+              headers: {
+                "X-License-Key": lalalKey,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ task_ids: taskIds }),
+            });
 
-              if (!pollRes.ok) { console.warn(`Import poll HTTP ${pollRes.status}`); continue; }
+            if (!checkRes.ok) {
+              console.warn(`LALAL.ai check HTTP ${checkRes.status}`);
+              continue;
+            }
 
-              const pollData = await pollRes.json();
-              const clips = Array.isArray(pollData) ? pollData : (pollData?.clips || pollData?.data || []);
-              const readyClips = clips.filter((c: any) => c.audio_url && (c.status === "complete" || c.status === "streaming"));
-              console.log(`Import poll: ${readyClips.length}/${importClipIds.length} clips ready`);
+            const checkData = await checkRes.json();
+            let doneCount = 0;
+            let errorCount = 0;
 
-              if (readyClips.length >= importClipIds.length) {
-                // Extract stem types — prefer metadata.stem_type_group_name, fall back to title parsing
-                for (const clip of readyClips) {
-                  let stemType = "unknown";
+            for (const taskId of taskIds) {
+              const taskResult = checkData[taskId] || checkData.results?.[taskId];
+              if (!taskResult) continue;
 
-                  // Primary: Suno metadata (most reliable, from /api/stems discovery)
-                  if (clip.metadata?.stem_type_group_name) {
-                    stemType = clip.metadata.stem_type_group_name.toLowerCase().replace(/\s+/g, "_");
+              const status = taskResult.status || taskResult.state;
+              if (status === "success" || status === "done" || status === "complete") {
+                doneCount++;
+                // Extract stem URLs from tracks array
+                const tracks = taskResult.tracks || taskResult.result?.tracks || [];
+                for (const track of tracks) {
+                  const label = (track.label || track.type || track.name || "unknown").toLowerCase().replace(/\s+/g, "_");
+                  if (track.url && label !== "back") {
+                    // "back" = the backing track (everything minus the extracted stem) — skip
+                    completedStems[label] = track.url;
                   }
-
-                  // Fallback 1: title pattern "(StemType)"
-                  if (stemType === "unknown") {
-                    const title = (clip.title || "").toLowerCase();
-                    const parenMatch = title.match(/\(([^)]+)\)\s*$/);
-                    if (parenMatch) {
-                      stemType = parenMatch[1].trim().toLowerCase().replace(/\s+/g, "_");
-                    }
-                  }
-
-                  // Fallback 2: title pattern "- StemType"
-                  if (stemType === "unknown") {
-                    const title = (clip.title || "").toLowerCase();
-                    const dashMatch = title.match(/\s*-\s*([^-]+)$/);
-                    if (dashMatch) stemType = dashMatch[1].trim().toLowerCase().replace(/\s+/g, "_");
-                  }
-
-                  // Normalize vocals variants
-                  if (stemType === "lead_vocals" || stemType === "backing_vocals") stemType = "vocals";
-
-                  let audioUrl = clip.audio_url;
-                  if (clip.id && (!audioUrl || audioUrl.includes("audiopipe.suno.ai"))) {
-                    audioUrl = `https://cdn1.suno.ai/${clip.id}.mp3`;
-                  }
-                  if (!completedStems[stemType]) completedStems[stemType] = audioUrl;
                 }
-                stemsComplete = true;
-                break;
+              } else if (status === "error" || status === "failed") {
+                errorCount++;
+                console.error(`LALAL.ai task ${taskId} failed: ${JSON.stringify(taskResult)}`);
               }
-            } catch (pollErr) {
-              console.warn(`Import poll error: ${(pollErr as Error).message}`);
+            }
+
+            console.log(`LALAL.ai poll ${attempt + 1}/${MAX_POLLS}: ${doneCount}/${taskIds.length} done, ${errorCount} errors, ${Object.keys(completedStems).length} stems`);
+
+            if (doneCount + errorCount >= taskIds.length) {
+              allComplete = true;
+              break;
             }
           }
 
-          if (stemsComplete && Object.keys(completedStems).length > 0) {
-            await supabase.from("beats").update({ stems: completedStems, stems_status: "complete" }).eq("id", beat.id);
-            results.push(`Stems imported: ${Object.keys(completedStems).join(", ")} (${Object.keys(completedStems).length} stems)`);
+          if (allComplete && Object.keys(completedStems).length > 0) {
+            // ─── DOWNLOAD & STORE STEMS ──────────────────────────────
+            const storedStems: Record<string, string> = {};
+            let samplesCreated = 0;
+            let samplesSkipped = 0;
 
-            // Create sample rows with silence detection (same logic as trigger mode)
-            const SILENCE_ENTROPY_IMPORT = 7.5;
-            let samplesCreated = 0, samplesSkipped = 0;
             for (const [stemType, stemUrl] of Object.entries(completedStems)) {
-              // Skip non-sample stem types (instrumental = full beat, vocals = empty on instrumental beats)
-              if (EXCLUDED_SAMPLE_TYPES.has(stemType)) { samplesSkipped++; continue; }
               try {
-                const headRes = await fetch(stemUrl, { method: "HEAD" });
-                const fileSize = parseInt(headRes.headers.get("content-length") || "0", 10);
+                // Download from LALAL.ai
+                const stemRes = await fetch(stemUrl);
+                if (!stemRes.ok) { console.warn(`Failed to download ${stemType}: ${stemRes.status}`); continue; }
+                const stemData = new Uint8Array(await stemRes.arrayBuffer());
+                const fileSize = stemData.length;
+
                 if (fileSize < 1000) { samplesSkipped++; continue; }
+
+                // Upload to Supabase storage
+                const storagePath = `beats/${beat.id}/stems/${stemType}.mp3`;
+                const { error: uploadErr } = await supabase.storage.from("audio").upload(
+                  storagePath, stemData,
+                  { contentType: "audio/mpeg", upsert: true }
+                );
+                if (uploadErr) {
+                  console.error(`Storage upload error ${stemType}: ${uploadErr.message}`);
+                }
+
+                // Get public URL from storage
+                const { data: publicUrlData } = supabase.storage.from("audio").getPublicUrl(storagePath);
+                const publicUrl = publicUrlData?.publicUrl || stemUrl;
+                storedStems[stemType] = publicUrl;
+
+                // Silence detection: Shannon entropy on 32KB from middle
                 let isSilent = false;
                 try {
                   const midpoint = Math.floor(fileSize / 2);
                   const rangeStart = Math.max(0, midpoint - 16384);
                   const rangeEnd = Math.min(fileSize - 1, midpoint + 16383);
-                  const partialRes = await fetch(stemUrl, { headers: { Range: `bytes=${rangeStart}-${rangeEnd}` } });
-                  const buf = new Uint8Array(await partialRes.arrayBuffer());
+                  const buf = stemData.slice(rangeStart, rangeEnd);
                   const freq = new Array(256).fill(0);
                   for (let i = 0; i < buf.length; i++) freq[buf[i]]++;
                   let entropy = 0;
@@ -377,276 +457,52 @@ serve(async (req) => {
                     const p = freq[i] / buf.length;
                     entropy -= p * Math.log2(p);
                   }
-                  isSilent = entropy < SILENCE_ENTROPY_IMPORT;
-                  console.log(`Import stem ${stemType}: ${fileSize}B, entropy=${entropy.toFixed(3)}, silent=${isSilent}`);
-                } catch (rangeErr) {
-                  console.warn(`Range request failed for ${stemType}: ${(rangeErr as Error).message}`);
-                }
-                if (isSilent) { samplesSkipped++; continue; }
+                  isSilent = entropy < 7.5;
+                  console.log(`Stem ${stemType}: ${fileSize}B, entropy=${entropy.toFixed(3)}, silent=${isSilent}`);
+                } catch (e) { /* ignore entropy errors */ }
+
+                if (isSilent || EXCLUDED_SAMPLE_TYPES.has(stemType)) { samplesSkipped++; continue; }
+
+                // Create sample row
                 const { error: sampleErr } = await supabase.from("samples").upsert(
-                  { beat_id: beat.id, stem_type: stemType, audio_url: stemUrl, file_size: fileSize, audio_amplitude: fileSize },
+                  { beat_id: beat.id, stem_type: stemType, audio_url: publicUrl, file_size: fileSize, audio_amplitude: fileSize, storage_migrated: true },
                   { onConflict: "beat_id,stem_type" }
                 );
                 if (sampleErr) console.error(`Sample insert error ${stemType}: ${sampleErr.message}`);
                 else samplesCreated++;
-              } catch (fetchErr) {
-                console.warn(`Stem fetch failed for ${stemType}: ${(fetchErr as Error).message}`);
+              } catch (stemErr) {
+                console.warn(`Stem processing error for ${stemType}: ${(stemErr as Error).message}`);
               }
             }
-            results.push(`Samples: ${samplesCreated} created, ${samplesSkipped} skipped (silent)`);
 
-            // Auto-upload to storage (fire-and-forget)
-            (async () => {
-              try {
-                let stemsUploaded = 0;
-                for (const [stemType, stemUrl] of Object.entries(completedStems)) {
-                  try {
-                    const res = await fetch(stemUrl);
-                    if (res.ok) {
-                      const data = new Uint8Array(await res.arrayBuffer());
-                      await supabase.storage.from("audio").upload(
-                        `beats/${beat.id}/stems/${stemType}.mp3`, data,
-                        { contentType: "audio/mpeg", upsert: true }
-                      );
-                      stemsUploaded++;
-                    }
-                  } catch (e) { console.error(`Storage: stem upload failed ${stemType}: ${(e as Error).message}`); }
-                }
-                if (stemsUploaded > 0) {
-                  await supabase.from("samples").update({ storage_migrated: true }).eq("beat_id", beat.id);
-                  console.log(`Storage: uploaded ${stemsUploaded} imported stems for beat ${beat.id}`);
-                }
-              } catch (e) { console.error(`Storage: import upload error: ${(e as Error).message}`); }
-            })();
-          } else {
-            await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-            results.push("Stem import failed: clips not ready after polling. Check clip IDs are valid.");
-          }
-        } else {
-        // ─── TRIGGER MODE: call self-hosted API to extract stems ──────
-        try {
-          console.log(`Attempting self-hosted stems for beat ${beat.id} (suno_id: ${beat.suno_id})`);
+            // Update beat record
+            await supabase.from("beats").update({
+              stems: storedStems,
+              stems_status: "complete",
+            }).eq("id", beat.id);
 
-          const stemsRes = await fetch(`${selfHostedUrl}/api/generate_stems`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Suno-Cookie": effectiveCookie!,
-            },
-            body: JSON.stringify({ audio_id: beat.suno_id, title: beat.title, mode: "twelve" }),
-          });
+            results.push(`Stems complete via LALAL.ai: ${Object.keys(storedStems).join(", ")} (${Object.keys(storedStems).length} stems)`);
+            results.push(`Samples: ${samplesCreated} created, ${samplesSkipped} skipped (silent/excluded)`);
+            console.log(`Beat ${beat.id} LALAL.ai stems complete: ${Object.keys(storedStems).join(", ")}`);
 
-          const stemsBody = await stemsRes.text();
-          console.log(`Self-hosted stems response for beat ${beat.id}: status=${stemsRes.status} body=${stemsBody.slice(0, 500)}`);
-
-          // Detect expired/lost session
-          if (!stemsRes.ok) {
-            const stemsErrText = stemsBody || "";
-            const isSessionExpired = stemsErrText.includes("Failed to get session id")
-              || stemsErrText.includes("update the SUNO_COOKIE")
-              || stemsErrText.includes("Unauthorized")
-              || stemsRes.status === 401;
-
-            if (isSessionExpired) {
-              return new Response(
-                JSON.stringify({ error: "Your Suno session has expired or was lost (server restart). Please log into suno.com, copy a fresh cookie, and re-submit it via update-agent-settings.", action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie" }),
-                { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-              );
-            }
-          }
-
-          if (stemsRes.status === 404) {
-            // Self-hosted API doesn't support stems — inform agent
-            results.push("Stem splitting not available on self-hosted API.");
-          } else if (stemsRes.ok) {
-            let stemsApiError = false;
-            let stemsData: any = null;
+            // Clean up LALAL.ai source file
             try {
-              stemsData = JSON.parse(stemsBody);
-              if (stemsData.error) stemsApiError = true;
-            } catch { /* not JSON */ }
-
-            if (!stemsApiError) {
-              // Update status to processing
-              await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-              console.log(`Self-hosted stems triggered for beat ${beat.id} by agent ${agent.handle}`);
-
-              // ─── DISCOVERY-BASED POLLING: find stems via /api/stems ──────
-              // Instead of polling specific clip IDs from the trigger response
-              // (which may only return 2 clips even for 12-stem extraction),
-              // we use /api/stems?parent_id=xxx to scan the library feed and
-              // discover ALL stems linked to this parent clip via metadata.
-              const DISC_INTERVAL = 8_000; // 8 seconds between polls
-              const MAX_DISC_POLLS = 12; // 12 * 8s = 96s polling + 5s init ≈ 100s total
-              let stemsComplete = false;
-              let completedStems: Record<string, string> = {};
-              let discoveredClipIds: string[] = [];
-
-              // Initial wait — give Suno time to start generating stems
-              await new Promise(r => setTimeout(r, 5_000));
-
-              for (let attempt = 0; attempt < MAX_DISC_POLLS; attempt++) {
-                if (attempt > 0) await new Promise(r => setTimeout(r, DISC_INTERVAL));
-                console.log(`Stem discovery (attempt ${attempt + 1}/${MAX_DISC_POLLS}) for beat ${beat.id}, parent=${beat.suno_id}`);
-
-                try {
-                  const discRes = await fetch(
-                    `${selfHostedUrl}/api/stems?parent_id=${beat.suno_id}`,
-                    { method: "GET", headers: { "X-Suno-Cookie": effectiveCookie! } }
-                  );
-
-                  if (!discRes.ok) {
-                    console.warn(`Discovery HTTP ${discRes.status}`);
-                    continue;
-                  }
-
-                  const discData = await discRes.json();
-
-                  if (!discData.parent?.has_stem) {
-                    console.log(`Parent ${beat.suno_id} not ready (has_stem=false)`);
-                    continue;
-                  }
-
-                  const allStems = discData.stems || [];
-                  const readyStems = allStems.filter((s: any) => s.status === "complete");
-                  console.log(`Discovery: ${readyStems.length}/${allStems.length} stems complete`);
-
-                  // Wait until at least 2 stems exist AND all discovered stems are complete
-                  if (allStems.length >= 2 && readyStems.length === allStems.length) {
-                    // Deduplicate by stem_type (first occurrence = most recent from library scan)
-                    for (const stem of readyStems) {
-                      const stemType = (stem.stem_type || "unknown").replace(/\s+/g, "_").toLowerCase();
-                      const normalizedType = (stemType === "lead_vocals" || stemType === "backing_vocals") ? "vocals" : stemType;
-                      if (!completedStems[normalizedType]) {
-                        completedStems[normalizedType] = stem.audio_url;
-                        discoveredClipIds.push(stem.id);
-                      }
-                    }
-                    stemsComplete = true;
-                    break;
-                  }
-                } catch (discErr) {
-                  console.warn(`Discovery error: ${(discErr as Error).message}`);
-                }
-              }
-
-              // Store discovered clip IDs
-              if (discoveredClipIds.length > 0) {
-                await supabase.from("beats").update({ stems_clip_ids: discoveredClipIds }).eq("id", beat.id);
-              }
-
-              if (stemsComplete && Object.keys(completedStems).length > 0) {
-                // ─── UPDATE BEAT WITH STEMS ──────────────────────────────
-                await supabase.from("beats").update({
-                  stems: completedStems,
-                  stems_status: "complete",
-                }).eq("id", beat.id);
-                console.log(`Beat ${beat.id} stems complete: ${Object.keys(completedStems).join(", ")}`);
-                results.push(`Stems complete: ${Object.keys(completedStems).join(", ")} (${Object.keys(completedStems).length} stems)`);
-
-                // ─── CREATE SAMPLE ROWS (with silence detection) ─────────
-                const SILENCE_ENTROPY = 7.5;
-                let samplesCreated = 0;
-                let samplesSkipped = 0;
-
-                for (const [stemType, stemUrl] of Object.entries(completedStems)) {
-                  // Skip non-sample stem types (instrumental = full beat, vocals = empty on instrumental beats)
-                  if (EXCLUDED_SAMPLE_TYPES.has(stemType)) { samplesSkipped++; continue; }
-                  try {
-                    const headRes = await fetch(stemUrl, { method: "HEAD" });
-                    const fileSize = parseInt(headRes.headers.get("content-length") || "0", 10);
-                    if (fileSize < 1000) { samplesSkipped++; continue; }
-
-                    // Silence detection: Shannon entropy on 32KB from middle
-                    let isSilent = false;
-                    try {
-                      const midpoint = Math.floor(fileSize / 2);
-                      const rangeStart = Math.max(0, midpoint - 16384);
-                      const rangeEnd = Math.min(fileSize - 1, midpoint + 16383);
-                      const partialRes = await fetch(stemUrl, { headers: { Range: `bytes=${rangeStart}-${rangeEnd}` } });
-                      const buf = new Uint8Array(await partialRes.arrayBuffer());
-                      const freq = new Array(256).fill(0);
-                      for (let i = 0; i < buf.length; i++) freq[buf[i]]++;
-                      let entropy = 0;
-                      for (let i = 0; i < 256; i++) {
-                        if (freq[i] === 0) continue;
-                        const p = freq[i] / buf.length;
-                        entropy -= p * Math.log2(p);
-                      }
-                      isSilent = entropy < SILENCE_ENTROPY;
-                      console.log(`Stem ${stemType} for beat ${beat.id}: ${fileSize}B, entropy=${entropy.toFixed(3)}, silent=${isSilent}`);
-                    } catch (rangeErr) {
-                      console.warn(`Range request failed for ${stemType}: ${(rangeErr as Error).message}`);
-                    }
-
-                    if (isSilent) { samplesSkipped++; continue; }
-
-                    const { error: sampleErr } = await supabase.from("samples").upsert(
-                      { beat_id: beat.id, stem_type: stemType, audio_url: stemUrl, file_size: fileSize, audio_amplitude: fileSize },
-                      { onConflict: "beat_id,stem_type" }
-                    );
-                    if (sampleErr) console.error(`Sample insert error ${stemType}: ${sampleErr.message}`);
-                    else samplesCreated++;
-                  } catch (fetchErr) {
-                    console.warn(`Stem fetch failed for ${stemType}: ${(fetchErr as Error).message}`);
-                  }
-                }
-                console.log(`Samples for beat ${beat.id}: ${samplesCreated} created, ${samplesSkipped} skipped`);
-                results.push(`Samples: ${samplesCreated} created, ${samplesSkipped} skipped (silent)`);
-
-                // ─── AUTO-UPLOAD STEMS TO SUPABASE STORAGE ──────────────
-                (async () => {
-                  try {
-                    let stemsUploaded = 0;
-                    for (const [stemType, stemUrl] of Object.entries(completedStems)) {
-                      try {
-                        const res = await fetch(stemUrl);
-                        if (res.ok) {
-                          const data = new Uint8Array(await res.arrayBuffer());
-                          await supabase.storage.from("audio").upload(
-                            `beats/${beat.id}/stems/${stemType}.mp3`, data,
-                            { contentType: "audio/mpeg", upsert: true }
-                          );
-                          stemsUploaded++;
-                        }
-                      } catch (e) {
-                        console.error(`Storage: stem upload failed ${stemType}: ${(e as Error).message}`);
-                      }
-                    }
-                    if (stemsUploaded > 0) {
-                      await supabase.from("samples").update({ storage_migrated: true }).eq("beat_id", beat.id);
-                      console.log(`Storage: uploaded ${stemsUploaded} stems for beat ${beat.id}`);
-                    }
-                  } catch (uploadErr) {
-                    console.error(`Storage: stems upload error: ${(uploadErr as Error).message}`);
-                  }
-                })();
-              } else {
-                // Stems not ready after 4 min — leave as "processing" for manual retry
-                results.push(`Stem splitting triggered but stems not ready within timeout. Call process-stems again to re-check (stems may still be generating on Suno).`);
-                console.log(`Stems for beat ${beat.id} not found via discovery after max polling.`);
-              }
-            } else {
-              await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-              results.push(`Stem splitting failed: ${stemsData?.error || "self-hosted API returned an error"}`);
-            }
-          } else if (stemsRes.status === 402) {
-            // Suno account out of credits for stems
-            await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-            results.push("Stem splitting failed: Suno account out of credits (402). Stems cost 50 Suno credits each.");
+              await fetch("https://www.lalal.ai/api/v1/delete/", {
+                method: "POST",
+                headers: { "X-License-Key": lalalKey, "Content-Type": "application/json" },
+                body: JSON.stringify({ source_id: sourceId }),
+              });
+            } catch { /* best-effort cleanup */ }
           } else {
             await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-            const parsed = (() => { try { return JSON.parse(stemsBody); } catch { return null; } })();
-            const detail = parsed?.error || parsed?.detail || `HTTP ${stemsRes.status}`;
-            results.push(`Stem splitting failed: ${detail}`);
-            console.error(`Self-hosted stems error for beat ${beat.id}: ${stemsRes.status} — ${stemsBody.slice(0, 300)}`);
+            results.push("Stem splitting failed: LALAL.ai processing timed out or returned no stems");
           }
-        } catch (stemsErr) {
-          console.error(`Self-hosted stems failed for beat ${beat.id}:`, stemsErr.message);
+        } catch (lalalErr) {
+          console.error(`LALAL.ai stems failed for beat ${beat.id}:`, (lalalErr as Error).message);
           await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-          results.push("Stem splitting failed: network error contacting self-hosted API");
+          results.push(`Stem splitting failed: ${(lalalErr as Error).message}`);
         }
-        } // close else (trigger mode)
+        } // close else (lalal key present)
       } else {
         results.push("Stems already complete");
       }
@@ -753,9 +609,7 @@ serve(async (req) => {
         ...(gcreditDeducted ? { gcredit_spent: 1 } : {}),
         results,
         message: useSelfHosted
-          ? (useCentralized
-            ? "Stem splitting via Suno (1 G-Credit). Discovery polling for all detected stems."
-            : "Stem splitting via your Suno API (free). Discovery polling for all detected stems.")
+          ? "Stem splitting via LALAL.ai (agent's API key). Up to 9 stems extracted synchronously."
           : "Stem splitting via sunoapi.org (split_stem). Callback updates the beat. Your key was used and NOT stored.",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
