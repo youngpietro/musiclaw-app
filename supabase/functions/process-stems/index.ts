@@ -203,9 +203,7 @@ serve(async (req) => {
       ? (agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL"))
       : null;
     const useCentralized = useSelfHosted && !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
-    const demucsServiceUrl = Deno.env.get("DEMUCS_SERVICE_URL");
-
-    if ((!useSelfHosted || demucsServiceUrl) && !callbackSecret) {
+    if (!useSelfHosted && !callbackSecret) {
       console.error("SUNO_CALLBACK_SECRET not configured");
       return new Response(
         JSON.stringify({ error: "Server misconfigured" }),
@@ -223,13 +221,9 @@ serve(async (req) => {
     const results: string[] = [];
 
     // ─── G-CREDIT DEDUCTION ────────────────────────────────────────────
-    // Charge 1 G-Credit for stems when:
-    //  - Demucs is configured (covers Railway CPU/RAM costs), OR
-    //  - Centralized Suno is used for stems (covers Suno credits cost)
+    // Charge 1 G-Credit for stems when centralized Suno is used (covers Suno credits cost)
     let gcreditDeducted = false;
-    const shouldChargeGCredit =
-      (demucsServiceUrl && beat.stems_status !== "complete") ||
-      (useCentralized && !demucsServiceUrl);
+    const shouldChargeGCredit = useCentralized && beat.stems_status !== "complete";
     if (shouldChargeGCredit) {
       const creditOwnerEmail = agent.owner_email?.trim().toLowerCase();
       if (!creditOwnerEmail) {
@@ -276,44 +270,8 @@ serve(async (req) => {
         results.push("WAV already complete");
       }
 
-      // 2. Stems: Use Demucs service if configured, else fall back to self-hosted Suno
+      // 2. Stems: Use self-hosted Suno API for stem splitting
       if (beat.stems_status !== "complete") {
-        // ─── DEMUCS MODE: self-hosted AI stem splitting ───────────────
-        if (demucsServiceUrl) {
-          try {
-            const audioUrl = `https://cdn1.suno.ai/${beat.suno_id}.mp3`;
-            const stemsCbUrl = `${supabaseUrl}/functions/v1/stems-callback?beat_id=${beat.id}&secret=${callbackSecret}`;
-
-            const demucsRes = await fetch(`${demucsServiceUrl}/separate`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Api-Secret": Deno.env.get("DEMUCS_API_SECRET") || "",
-              },
-              body: JSON.stringify({
-                audio_url: audioUrl,
-                beat_id: beat.id,
-                callback_url: stemsCbUrl,
-              }),
-            });
-
-            if (demucsRes.ok) {
-              const demucsData = await demucsRes.json();
-              await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-              results.push(`Stem splitting via Demucs (job: ${demucsData.job_id}). 6 stems: drums, bass, vocals, guitar, piano, other`);
-              console.log(`Demucs triggered for beat ${beat.id} by @${agent.handle} (job: ${demucsData.job_id})`);
-            } else {
-              const errText = await demucsRes.text();
-              console.error(`Demucs error for beat ${beat.id}: ${demucsRes.status} ${errText.slice(0, 300)}`);
-              await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-              results.push(`Stem splitting failed: Demucs service error (${demucsRes.status})`);
-            }
-          } catch (demucsErr) {
-            console.error(`Demucs unreachable for beat ${beat.id}: ${(demucsErr as Error).message}`);
-            await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-            results.push("Stem splitting failed: Demucs service unreachable");
-          }
-        }
         // ─── IMPORT MODE: accept pre-extracted stem clip IDs ──────────
         // When stem_clip_ids is provided, skip trigger and go straight to polling.
         // Useful when stems were already extracted via the Suno web UI.
@@ -742,42 +700,6 @@ serve(async (req) => {
 
       // 2. Trigger stem splitting (if not already complete)
       if (beat.stems_status !== "complete") {
-        if (demucsServiceUrl) {
-          // ─── DEMUCS MODE (sunoapi.org beats) ──────────────────────────
-          try {
-            const audioUrl = `https://cdn1.suno.ai/${beat.suno_id}.mp3`;
-            const stemsCbUrl = `${supabaseUrl}/functions/v1/stems-callback?beat_id=${beat.id}&secret=${callbackSecret}`;
-
-            const demucsRes = await fetch(`${demucsServiceUrl}/separate`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Api-Secret": Deno.env.get("DEMUCS_API_SECRET") || "",
-              },
-              body: JSON.stringify({
-                audio_url: audioUrl,
-                beat_id: beat.id,
-                callback_url: stemsCbUrl,
-              }),
-            });
-
-            if (demucsRes.ok) {
-              const demucsData = await demucsRes.json();
-              await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-              results.push(`Stem splitting via Demucs (job: ${demucsData.job_id}). 6 stems: drums, bass, vocals, guitar, piano, other`);
-              console.log(`Demucs triggered for beat ${beat.id} by @${agent.handle} (job: ${demucsData.job_id})`);
-            } else {
-              const errText = await demucsRes.text();
-              console.error(`Demucs error for beat ${beat.id}: ${demucsRes.status} ${errText.slice(0, 300)}`);
-              await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-              results.push(`Stem splitting failed: Demucs service error (${demucsRes.status})`);
-            }
-          } catch (demucsErr) {
-            console.error(`Demucs unreachable for beat ${beat.id}: ${(demucsErr as Error).message}`);
-            await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-            results.push("Stem splitting failed: Demucs service unreachable");
-          }
-        } else {
         try {
           const stemsRes = await fetch("https://api.sunoapi.org/api/v1/vocal-removal/generate", {
             method: "POST",
@@ -817,7 +739,6 @@ serve(async (req) => {
           await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
           results.push("Stem splitting failed: network error");
         }
-        } // close else (sunoapi.org fallback)
       } else {
         results.push("Stems already complete");
       }
@@ -831,13 +752,11 @@ serve(async (req) => {
         generation_source: generationSource,
         ...(gcreditDeducted ? { gcredit_spent: 1 } : {}),
         results,
-        message: demucsServiceUrl
-          ? "Stem splitting via MusiClaw Demucs (1 G-Credit, 6 stems: drums, bass, vocals, guitar, piano, other). Callback will update the beat record."
-          : useSelfHosted
-            ? (useCentralized
-              ? "Processing via MusiClaw's centralized Suno API (1 G-Credit used). If stems are not supported, upload them directly via upload-beat."
-              : "Processing via your self-hosted Suno API (free). If stems are not supported, upload them directly via upload-beat.")
-            : "Processing started. WAV is auto-triggered on beat completion; stems require this call. Callbacks will update the beat record. Your key was used and NOT stored.",
+        message: useSelfHosted
+          ? (useCentralized
+            ? "Stem splitting via Suno (1 G-Credit). Discovery polling for all detected stems."
+            : "Stem splitting via your Suno API (free). Discovery polling for all detected stems.")
+          : "Stem splitting via sunoapi.org (split_stem). Callback updates the beat. Your key was used and NOT stored.",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
