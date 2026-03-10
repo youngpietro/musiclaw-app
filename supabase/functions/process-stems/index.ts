@@ -10,13 +10,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// Stem types that should NOT become purchasable samples.
-// "instrumental" = full beat minus vocals (would undercut beat sales)
-// "vocals" / "vocal" / "backing_vocals" / "lead_vocals" = empty on instrumental beats
-const EXCLUDED_SAMPLE_TYPES = new Set([
-  "instrumental", "vocals", "vocal", "backing_vocals", "lead_vocals",
-]);
-
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
   "https://www.musiclaw.app",
@@ -57,9 +50,9 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email, lalal_api_key").eq("api_token_hash", tokenHash).single();
+    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email, mvsep_api_key").eq("api_token_hash", tokenHash).single();
     if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email, lalal_api_key").eq("api_token", token).single();
+      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email, mvsep_api_key").eq("api_token", token).single();
       agent = fallback;
     }
 
@@ -104,7 +97,7 @@ serve(async (req) => {
     // ─── LOOK UP BEAT (must belong to this agent) ───────────────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("id, title, suno_id, task_id, status, agent_id, wav_status, stems_status, stems, generation_source")
+      .select("id, title, suno_id, task_id, status, agent_id, wav_status, stems_status, stems, generation_source, audio_url")
       .eq("id", beat_id)
       .eq("agent_id", agent.id)
       .single();
@@ -144,8 +137,8 @@ serve(async (req) => {
       );
     }
 
-    // sunoapi.org beats need task_id ONLY when using sunoapi.org path (not LALAL.ai)
-    if (!useSelfHosted && !beat.task_id && !agent.lalal_api_key) {
+    // sunoapi.org beats need task_id ONLY when using sunoapi.org path (not MVSEP)
+    if (!useSelfHosted && !beat.task_id && !agent.mvsep_api_key) {
       return new Response(
         JSON.stringify({ error: "Beat has no generation task_id — cannot process WAV/stems via sunoapi.org." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -170,11 +163,11 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    // suno_api_key is only required for sunoapi.org beats WITHOUT a LALAL.ai key
-    // (LALAL.ai handles stems directly, sunoapi.org key only needed for WAV + old split_stem path)
-    if (!useSelfHosted && !suno_api_key && !agent.lalal_api_key) {
+    // suno_api_key is only required for sunoapi.org beats WITHOUT an MVSEP key
+    // (MVSEP handles stems directly, sunoapi.org key only needed for WAV + old split_stem path)
+    if (!useSelfHosted && !suno_api_key && !agent.mvsep_api_key) {
       return new Response(
-        JSON.stringify({ error: "suno_api_key or lalal_api_key is required. Set your LALAL.ai key via update-agent-settings, or pass suno_api_key for sunoapi.org." }),
+        JSON.stringify({ error: "suno_api_key or mvsep_api_key is required. Set your MVSEP key via update-agent-settings, or pass suno_api_key for sunoapi.org." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -205,8 +198,8 @@ serve(async (req) => {
       ? (agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL"))
       : null;
     const useCentralized = useSelfHosted && !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
-    // callbackSecret only needed for sunoapi.org path (not LALAL.ai)
-    if (!useSelfHosted && !callbackSecret && !agent.lalal_api_key) {
+    // callbackSecret only needed for sunoapi.org path (not MVSEP)
+    if (!useSelfHosted && !callbackSecret && !agent.mvsep_api_key) {
       console.error("SUNO_CALLBACK_SECRET not configured");
       return new Response(
         JSON.stringify({ error: "Server misconfigured" }),
@@ -224,10 +217,10 @@ serve(async (req) => {
     const results: string[] = [];
 
     // ─── G-CREDIT DEDUCTION ────────────────────────────────────────────
-    // Self-hosted beats now use LALAL.ai (agent pays directly) → no G-Credit for stems.
+    // Stems now use MVSEP (agent pays directly) → no G-Credit for stems.
     // G-Credits are only charged for sunoapi.org stems if we re-enable that path.
     let gcreditDeducted = false;
-    const shouldChargeGCredit = false; // LALAL.ai stems = agent-paid, no platform cost
+    const shouldChargeGCredit = false; // MVSEP stems = agent-paid, no platform cost
     if (shouldChargeGCredit) {
       const creditOwnerEmail = agent.owner_email?.trim().toLowerCase();
       if (!creditOwnerEmail) {
@@ -259,19 +252,18 @@ serve(async (req) => {
       console.log(`G-Credit deducted: 1 from owner ${creditOwnerEmail} via @${agent.handle} for stems (balance: ${newBal})`);
     }
 
-    // ─── LALAL.AI vs SUNOAPI.ORG ROUTING ──────────────────────────────
-    // If agent has a LALAL.ai key → use LALAL.ai for stems (any beat).
+    // ─── MVSEP vs SUNOAPI.ORG ROUTING ──────────────────────────────
+    // If agent has a MVSEP key → use MVSEP for stems (any beat).
     // Otherwise, sunoapi.org beats fall back to sunoapi.org split_stem.
-    const lalalKey = agent.lalal_api_key || null;
-    const useLalal = !!lalalKey;
+    const mvsepKey = agent.mvsep_api_key || null;
+    const useMvsep = !!mvsepKey;
 
-    if (useSelfHosted || useLalal) {
+    if (useSelfHosted || useMvsep) {
       // ─── WAV HANDLING ──────────────────────────────────────────────
       if (useSelfHosted && beat.wav_status !== "complete") {
         await supabase.from("beats").update({ wav_status: "complete" }).eq("id", beat.id);
         results.push("WAV: self-hosted audio is direct — marked complete");
       } else if (!useSelfHosted && beat.wav_status !== "complete" && beat.wav_status !== "processing") {
-        // For sunoapi.org beats using LALAL.ai stems, still trigger WAV via sunoapi.org
         if (suno_api_key && callbackSecret) {
           try {
             const wavRes = await fetch("https://api.sunoapi.org/api/v1/wav/generate", {
@@ -296,236 +288,61 @@ serve(async (req) => {
         results.push("WAV already complete");
       }
 
-      // ─── STEMS: Use LALAL.ai for professional stem splitting ────────
+      // ─── STEMS: Dispatch to Railway stem-processor service ────────
       if (beat.stems_status !== "complete") {
-        if (!lalalKey) {
+        if (!mvsepKey) {
           return new Response(
             JSON.stringify({
-              error: "LALAL.ai API key required for stem splitting. Set yours via POST /functions/v1/update-agent-settings with { lalal_api_key: \"your-key\" }. Get one at lalal.ai/pricing",
+              error: "MVSEP API key required for stem splitting. Set yours via POST /functions/v1/update-agent-settings with { mvsep_api_key: \"your-key\" }. Get one at mvsep.com/user-api",
               beat_id: beat.id,
             }),
             { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
-        } else {
-        // ─── LALAL.AI STEM SPLITTING (two-phase to fit edge function limits) ─
-        // Phase 1: upload + start split → store task IDs → return immediately
-        // Phase 2: poll → download stems → store in Supabase
-        const existingLalal = beat.stems && typeof beat.stems === "object" && (beat.stems as Record<string, unknown>)._lalal
-          ? (beat.stems as Record<string, unknown>)._lalal as { source_id: string; task_ids: string[]; started_at: string }
-          : null;
-
-        if (!existingLalal) {
-          // ─── PHASE 1: Upload to LALAL.ai + start split ────────────
-          try {
-            console.log(`LALAL.ai Phase 1 for beat ${beat.id} (suno_id: ${beat.suno_id})`);
-            await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-
-            // Download MP3 from Suno CDN
-            const audioUrl = `https://cdn1.suno.ai/${beat.suno_id}.mp3`;
-            const audioRes = await fetch(audioUrl);
-            if (!audioRes.ok) throw new Error(`Failed to download audio: HTTP ${audioRes.status}`);
-            const audioData = new Uint8Array(await audioRes.arrayBuffer());
-            console.log(`Downloaded ${audioData.length} bytes from ${audioUrl}`);
-
-            // Upload to LALAL.ai
-            const uploadRes = await fetch("https://www.lalal.ai/api/v1/upload/", {
-              method: "POST",
-              headers: {
-                "X-License-Key": lalalKey,
-                "Content-Disposition": `attachment; filename="${beat.suno_id}.mp3"`,
-                "Content-Type": "audio/mpeg",
-              },
-              body: audioData,
-            });
-            if (!uploadRes.ok) {
-              const errText = await uploadRes.text();
-              throw new Error(`LALAL.ai upload failed: ${uploadRes.status} ${errText.slice(0, 200)}`);
-            }
-            const uploadData = await uploadRes.json();
-            const sourceId = uploadData.source_id || uploadData.id;
-            console.log(`LALAL.ai upload OK: source_id=${sourceId}, duration=${uploadData.duration}s`);
-
-            // Start multistem split (2 batches, max 6 stems each)
-            const STEM_BATCH_1 = ["vocals", "drum", "bass", "electric_guitar", "acoustic_guitar", "piano"];
-            const STEM_BATCH_2 = ["synthesizer", "strings", "wind"];
-            const taskIds: string[] = [];
-
-            for (const stemList of [STEM_BATCH_1, STEM_BATCH_2]) {
-              const splitRes = await fetch("https://www.lalal.ai/api/v1/split/multistem/", {
-                method: "POST",
-                headers: { "X-License-Key": lalalKey, "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  source_id: sourceId,
-                  presets: { stem_list: stemList, splitter: "phoenix", encoder_format: "mp3" },
-                }),
-              });
-              if (!splitRes.ok) {
-                const errText = await splitRes.text();
-                console.error(`LALAL.ai split failed for batch: ${splitRes.status} ${errText.slice(0, 200)}`);
-                continue;
-              }
-              const splitData = await splitRes.json();
-              const tid = splitData.task_id || splitData.id;
-              if (tid) taskIds.push(tid);
-              console.log(`LALAL.ai split started: task_id=${tid}, stems=${stemList.join(",")}`);
-            }
-
-            if (taskIds.length === 0) throw new Error("LALAL.ai: no split tasks were created");
-
-            // Store LALAL.ai state on the beat for Phase 2
-            await supabase.from("beats").update({
-              stems: { _lalal: { source_id: sourceId, task_ids: taskIds, started_at: new Date().toISOString() } },
-              stems_status: "processing",
-            }).eq("id", beat.id);
-
-            results.push(`LALAL.ai split started (${taskIds.length} tasks). Call process-stems again in ~60s to complete.`);
-            console.log(`Phase 1 done for beat ${beat.id}: source_id=${sourceId}, tasks=${taskIds.join(",")}`);
-          } catch (lalalErr) {
-            console.error(`LALAL.ai Phase 1 failed for beat ${beat.id}:`, (lalalErr as Error).message);
-            await supabase.from("beats").update({ stems_status: "failed", stems: null }).eq("id", beat.id);
-            results.push(`Stem splitting failed: ${(lalalErr as Error).message}`);
-          }
-        } else {
-          // ─── PHASE 2: Poll + download + store ──────────────────────
-          try {
-            const { source_id: sourceId, task_ids: taskIds, started_at } = existingLalal;
-            const elapsedMs = Date.now() - new Date(started_at).getTime();
-            console.log(`LALAL.ai Phase 2 for beat ${beat.id}: ${taskIds.length} tasks, ${Math.round(elapsedMs / 1000)}s elapsed`);
-
-            // Poll LALAL.ai (up to 8 polls × 5s = 40s max in this invocation)
-            const POLL_INTERVAL = 5_000;
-            const MAX_POLLS = 8;
-            let allComplete = false;
-            let completedStems: Record<string, string> = {};
-
-            for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-              if (attempt > 0) await new Promise(r => setTimeout(r, POLL_INTERVAL));
-
-              const checkRes = await fetch("https://www.lalal.ai/api/v1/check/", {
-                method: "POST",
-                headers: { "X-License-Key": lalalKey, "Content-Type": "application/json" },
-                body: JSON.stringify({ task_ids: taskIds }),
-              });
-              if (!checkRes.ok) { console.warn(`LALAL.ai check HTTP ${checkRes.status}`); continue; }
-
-              const checkData = await checkRes.json();
-              let doneCount = 0;
-              let errorCount = 0;
-
-              for (const taskId of taskIds) {
-                // LALAL.ai nests results under checkData.result[taskId]
-                const taskResult = checkData.result?.[taskId] || checkData[taskId] || checkData.results?.[taskId];
-                if (!taskResult) { console.log(`No result for task ${taskId}, keys: ${Object.keys(checkData).join(",")}`); continue; }
-                const status = taskResult.status || taskResult.state;
-                console.log(`Task ${taskId} status: ${status}`);
-                if (status === "success" || status === "done" || status === "complete") {
-                  doneCount++;
-                  // Tracks are at taskResult.result.tracks (nested .result)
-                  const tracks = taskResult.result?.tracks || taskResult.tracks || [];
-                  for (const track of tracks) {
-                    const label = (track.label || track.type || track.name || "unknown").toLowerCase().replace(/\s+/g, "_");
-                    if (track.url && track.type !== "back" && label !== "no_multistem") completedStems[label] = track.url;
-                  }
-                } else if (status === "error" || status === "failed") {
-                  errorCount++;
-                  console.error(`LALAL.ai task ${taskId} failed: ${JSON.stringify(taskResult)}`);
-                }
-              }
-
-              console.log(`LALAL.ai poll ${attempt + 1}/${MAX_POLLS}: ${doneCount}/${taskIds.length} done, ${errorCount} errors, ${Object.keys(completedStems).length} stems`);
-              if (doneCount + errorCount >= taskIds.length) { allComplete = true; break; }
-            }
-
-            if (!allComplete) {
-              // Still processing — check if we've been waiting too long (>5 min = give up)
-              if (elapsedMs > 300_000) {
-                await supabase.from("beats").update({ stems_status: "failed", stems: null }).eq("id", beat.id);
-                results.push("Stem splitting timed out after 5 minutes. Please try again.");
-              } else {
-                results.push(`LALAL.ai still processing. Call again in ~30s (elapsed: ${Math.round(elapsedMs / 1000)}s).`);
-              }
-            } else if (Object.keys(completedStems).length > 0) {
-              // ─── DOWNLOAD & STORE STEMS ──────────────────────────────
-              const storedStems: Record<string, string> = {};
-              let samplesCreated = 0;
-              let samplesSkipped = 0;
-
-              for (const [stemType, stemUrl] of Object.entries(completedStems)) {
-                try {
-                  const stemRes = await fetch(stemUrl);
-                  if (!stemRes.ok) { console.warn(`Failed to download ${stemType}: ${stemRes.status}`); continue; }
-                  const stemData = new Uint8Array(await stemRes.arrayBuffer());
-                  const fileSize = stemData.length;
-                  if (fileSize < 1000) { samplesSkipped++; continue; }
-
-                  // Upload to Supabase storage
-                  const storagePath = `beats/${beat.id}/stems/${stemType}.mp3`;
-                  const { error: uploadErr } = await supabase.storage.from("audio").upload(
-                    storagePath, stemData, { contentType: "audio/mpeg", upsert: true }
-                  );
-                  if (uploadErr) console.error(`Storage upload error ${stemType}: ${uploadErr.message}`);
-
-                  const { data: publicUrlData } = supabase.storage.from("audio").getPublicUrl(storagePath);
-                  const publicUrl = publicUrlData?.publicUrl || stemUrl;
-                  storedStems[stemType] = publicUrl;
-
-                  // Silence detection: Shannon entropy on 32KB from middle
-                  let isSilent = false;
-                  try {
-                    const midpoint = Math.floor(fileSize / 2);
-                    const rangeStart = Math.max(0, midpoint - 16384);
-                    const rangeEnd = Math.min(fileSize - 1, midpoint + 16383);
-                    const buf = stemData.slice(rangeStart, rangeEnd);
-                    const freq = new Array(256).fill(0);
-                    for (let i = 0; i < buf.length; i++) freq[buf[i]]++;
-                    let entropy = 0;
-                    for (let i = 0; i < 256; i++) {
-                      if (freq[i] === 0) continue;
-                      const p = freq[i] / buf.length;
-                      entropy -= p * Math.log2(p);
-                    }
-                    isSilent = entropy < 7.5;
-                    console.log(`Stem ${stemType}: ${fileSize}B, entropy=${entropy.toFixed(3)}, silent=${isSilent}`);
-                  } catch { /* ignore entropy errors */ }
-
-                  if (isSilent || EXCLUDED_SAMPLE_TYPES.has(stemType)) { samplesSkipped++; continue; }
-
-                  const { error: sampleErr } = await supabase.from("samples").upsert(
-                    { beat_id: beat.id, stem_type: stemType, audio_url: publicUrl, file_size: fileSize, audio_amplitude: fileSize, storage_migrated: true },
-                    { onConflict: "beat_id,stem_type" }
-                  );
-                  if (sampleErr) console.error(`Sample insert error ${stemType}: ${sampleErr.message}`);
-                  else samplesCreated++;
-                } catch (stemErr) {
-                  console.warn(`Stem processing error for ${stemType}: ${(stemErr as Error).message}`);
-                }
-              }
-
-              // Update beat — replace _lalal state with final stem URLs
-              await supabase.from("beats").update({ stems: storedStems, stems_status: "complete" }).eq("id", beat.id);
-              results.push(`Stems complete via LALAL.ai: ${Object.keys(storedStems).join(", ")} (${Object.keys(storedStems).length} stems)`);
-              results.push(`Samples: ${samplesCreated} created, ${samplesSkipped} skipped (silent/excluded)`);
-              console.log(`Beat ${beat.id} LALAL.ai stems complete: ${Object.keys(storedStems).join(", ")}`);
-
-              // Clean up LALAL.ai source file
-              try {
-                await fetch("https://www.lalal.ai/api/v1/delete/", {
-                  method: "POST",
-                  headers: { "X-License-Key": lalalKey, "Content-Type": "application/json" },
-                  body: JSON.stringify({ source_id: sourceId }),
-                });
-              } catch { /* best-effort cleanup */ }
-            } else {
-              await supabase.from("beats").update({ stems_status: "failed", stems: null }).eq("id", beat.id);
-              results.push("Stem splitting failed: LALAL.ai returned no stems");
-            }
-          } catch (lalalErr) {
-            console.error(`LALAL.ai Phase 2 failed for beat ${beat.id}:`, (lalalErr as Error).message);
-            await supabase.from("beats").update({ stems_status: "failed", stems: null }).eq("id", beat.id);
-            results.push(`Stem splitting failed: ${(lalalErr as Error).message}`);
-          }
         }
-        } // close else (lalal key present)
+
+        // Dispatch to Railway stem-processor (fire-and-forget)
+        const stemProcessorUrl = Deno.env.get("STEM_PROCESSOR_URL");
+        const railwaySecret = Deno.env.get("RAILWAY_SERVICE_SECRET");
+
+        if (!stemProcessorUrl || !railwaySecret) {
+          console.error("STEM_PROCESSOR_URL or RAILWAY_SERVICE_SECRET not configured");
+          return new Response(
+            JSON.stringify({ error: "Stem processor not configured" }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const audioUrl = beat.audio_url || `https://cdn1.suno.ai/${beat.suno_id}.mp3`;
+
+        try {
+          const railwayRes = await fetch(`${stemProcessorUrl}/process-stems`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-service-secret": railwaySecret,
+            },
+            body: JSON.stringify({
+              beat_id: beat.id,
+              agent_id: agent.id,
+              mvsep_api_key: mvsepKey,
+              audio_url: audioUrl,
+              suno_id: beat.suno_id,
+            }),
+          });
+
+          if (railwayRes.ok) {
+            await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
+            results.push("Stem splitting dispatched (MVSEP BS Roformer SW). Will complete automatically in ~2-5 minutes.");
+            console.log(`Beat ${beat.id} dispatched to stem-processor`);
+          } else {
+            const errBody = await railwayRes.text();
+            console.error(`Railway error: ${railwayRes.status} ${errBody.slice(0, 200)}`);
+            results.push("Stem splitting dispatch failed. Please try again.");
+          }
+        } catch (fetchErr) {
+          console.error("Railway fetch error:", (fetchErr as Error).message);
+          results.push("Stem splitting dispatch failed: network error");
+        }
       } else {
         results.push("Stems already complete");
       }
@@ -631,8 +448,8 @@ serve(async (req) => {
         generation_source: generationSource,
         ...(gcreditDeducted ? { gcredit_spent: 1 } : {}),
         results,
-        message: useLalal
-          ? "Stem splitting via LALAL.ai (agent's API key). Up to 9 stems extracted."
+        message: useMvsep
+          ? "Stem splitting dispatched to processor (MVSEP BS Roformer SW). Completes automatically in ~2-5 minutes."
           : "Stem splitting via sunoapi.org (split_stem). Callback updates the beat. Your key was used and NOT stored.",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
