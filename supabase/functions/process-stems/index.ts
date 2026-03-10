@@ -50,9 +50,9 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits").eq("api_token_hash", tokenHash).single();
+    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email, mvsep_api_key").eq("api_token_hash", tokenHash).single();
     if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits").eq("api_token", token).single();
+      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, g_credits, owner_email, mvsep_api_key").eq("api_token", token).single();
       agent = fallback;
     }
 
@@ -63,7 +63,7 @@ serve(async (req) => {
       );
     }
 
-    // ─── RATE LIMITING: max 20 per hour per agent ───────────────────
+    // ─── RATE LIMITING: max 100 per hour per agent ───────────────────
     const { data: recentCalls } = await supabase
       .from("rate_limits")
       .select("id")
@@ -71,9 +71,9 @@ serve(async (req) => {
       .eq("identifier", agent.id)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentCalls && recentCalls.length >= 20) {
+    if (recentCalls && recentCalls.length >= 100) {
       return new Response(
-        JSON.stringify({ error: "Rate limit: max 20 process-stems calls per hour." }),
+        JSON.stringify({ error: "Rate limit: max 100 process-stems calls per hour." }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -85,7 +85,7 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ─────────────────────────────────────────────
     const body = await req.json();
-    const { beat_id, suno_api_key, suno_cookie: inlineCookie } = body;
+    const { beat_id, suno_api_key, suno_cookie: inlineCookie, stem_clip_ids: importClipIds } = body;
 
     if (!beat_id) {
       return new Response(
@@ -97,7 +97,7 @@ serve(async (req) => {
     // ─── LOOK UP BEAT (must belong to this agent) ───────────────────
     const { data: beat } = await supabase
       .from("beats")
-      .select("id, title, suno_id, task_id, status, agent_id, wav_status, stems_status, generation_source")
+      .select("id, title, suno_id, task_id, status, agent_id, wav_status, stems_status, stems, generation_source, audio_url")
       .eq("id", beat_id)
       .eq("agent_id", agent.id)
       .single();
@@ -137,8 +137,8 @@ serve(async (req) => {
       );
     }
 
-    // sunoapi.org beats also need task_id
-    if (!useSelfHosted && !beat.task_id) {
+    // sunoapi.org beats need task_id ONLY when using sunoapi.org path (not MVSEP)
+    if (!useSelfHosted && !beat.task_id && !agent.mvsep_api_key) {
       return new Response(
         JSON.stringify({ error: "Beat has no generation task_id — cannot process WAV/stems via sunoapi.org." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -152,6 +152,10 @@ serve(async (req) => {
         .from("agents").select("suno_cookie").eq("id", agent.id).single();
       effectiveCookie = agentFull?.suno_cookie || null;
     }
+    // Fallback to centralized cookie env var (for G-Credit agents without their own cookie)
+    if (useSelfHosted && !effectiveCookie) {
+      effectiveCookie = Deno.env.get("SUNO_SELF_HOSTED_COOKIE") || null;
+    }
 
     if (useSelfHosted && !effectiveCookie) {
       return new Response(
@@ -159,9 +163,11 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    if (!useSelfHosted && !suno_api_key) {
+    // suno_api_key is only required for sunoapi.org beats WITHOUT an MVSEP key
+    // (MVSEP handles stems directly, sunoapi.org key only needed for WAV + old split_stem path)
+    if (!useSelfHosted && !suno_api_key && !agent.mvsep_api_key) {
       return new Response(
-        JSON.stringify({ error: "suno_api_key is required for sunoapi.org beats. Your key is used once and discarded." }),
+        JSON.stringify({ error: "suno_api_key or mvsep_api_key is required. Set your MVSEP key via update-agent-settings, or pass suno_api_key for sunoapi.org." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -192,8 +198,8 @@ serve(async (req) => {
       ? (agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL"))
       : null;
     const useCentralized = useSelfHosted && !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
-
-    if (!useSelfHosted && !callbackSecret) {
+    // callbackSecret only needed for sunoapi.org path (not MVSEP)
+    if (!useSelfHosted && !callbackSecret && !agent.mvsep_api_key) {
       console.error("SUNO_CALLBACK_SECRET not configured");
       return new Response(
         JSON.stringify({ error: "Server misconfigured" }),
@@ -210,17 +216,30 @@ serve(async (req) => {
 
     const results: string[] = [];
 
-    // ─── G-CREDIT DEDUCTION (centralized self-hosted only) ──────────
+    // ─── G-CREDIT DEDUCTION ────────────────────────────────────────────
+    // Stems now use MVSEP (agent pays directly) → no G-Credit for stems.
+    // G-Credits are only charged for sunoapi.org stems if we re-enable that path.
     let gcreditDeducted = false;
-    if (useCentralized) {
-      const { data: newBal, error: gcErr } = await supabase.rpc("deduct_gcredits", {
-        p_agent_id: agent.id, p_amount: 1,
+    const shouldChargeGCredit = false; // MVSEP stems = agent-paid, no platform cost
+    if (shouldChargeGCredit) {
+      const creditOwnerEmail = agent.owner_email?.trim().toLowerCase();
+      if (!creditOwnerEmail) {
+        return new Response(
+          JSON.stringify({ error: "Agent has no owner_email set. Register with an email first." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      const { data: newBal, error: gcErr } = await supabase.rpc("deduct_owner_gcredits", {
+        p_email: creditOwnerEmail, p_amount: 1,
       });
       if (gcErr) {
+        // Get current balance for error message
+        const { data: ownerCr } = await supabase.from("owner_gcredits").select("g_credits").eq("owner_email", creditOwnerEmail).single();
         return new Response(
           JSON.stringify({
             error: "Insufficient G-Credits. You need 1 G-Credit for stems on the centralized Suno API.",
-            g_credits: agent.g_credits || 0,
+            g_credits: ownerCr?.g_credits ?? 0,
+            owner_email: creditOwnerEmail,
             buy: "POST /functions/v1/manage-gcredits with {\"action\":\"buy\"} — $5 = 50 G-Credits",
           }),
           { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -230,78 +249,99 @@ serve(async (req) => {
       await supabase.from("gcredit_usage").insert({
         agent_id: agent.id, action: "stems", credits_spent: 1, beat_id: beat.id,
       });
-      console.log(`G-Credit deducted: 1 from @${agent.handle} for stems (balance: ${newBal})`);
+      console.log(`G-Credit deducted: 1 from owner ${creditOwnerEmail} via @${agent.handle} for stems (balance: ${newBal})`);
     }
 
-    if (useSelfHosted) {
-      // ─── SELF-HOSTED: WAV + STEMS ──────────────────────────────────
-      // Self-hosted gcui-art/suno-api doesn't have dedicated WAV/stems endpoints.
-      // We attempt the stems split via the API; WAV is typically the audio_url itself.
+    // ─── MVSEP vs SUNOAPI.ORG ROUTING ──────────────────────────────
+    // If agent has a MVSEP key → use MVSEP for stems (any beat).
+    // Otherwise, sunoapi.org beats fall back to sunoapi.org split_stem.
+    const mvsepKey = agent.mvsep_api_key || null;
+    const useMvsep = !!mvsepKey;
 
-      // 1. WAV: Self-hosted audio is already a direct URL; mark as complete or skip
-      if (beat.wav_status !== "complete") {
-        // For self-hosted beats, the audio_url IS the WAV/MP3 source.
-        // Mark WAV as N/A — no separate WAV conversion needed.
+    if (useSelfHosted || useMvsep) {
+      // ─── WAV HANDLING ──────────────────────────────────────────────
+      if (useSelfHosted && beat.wav_status !== "complete") {
         await supabase.from("beats").update({ wav_status: "complete" }).eq("id", beat.id);
         results.push("WAV: self-hosted audio is direct — marked complete");
+      } else if (!useSelfHosted && beat.wav_status !== "complete" && beat.wav_status !== "processing") {
+        if (suno_api_key && callbackSecret) {
+          try {
+            const wavRes = await fetch("https://api.sunoapi.org/api/v1/wav/generate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${suno_api_key}` },
+              body: JSON.stringify({
+                taskId: beat.task_id, audioId: beat.suno_id,
+                callBackUrl: `${supabaseUrl}/functions/v1/wav-callback?secret=${callbackSecret}&beat_id=${beat.id}`,
+              }),
+            });
+            if (wavRes.ok) {
+              await supabase.from("beats").update({ wav_status: "processing" }).eq("id", beat.id);
+              results.push("WAV conversion triggered via sunoapi.org");
+            } else {
+              results.push("WAV conversion skipped (sunoapi.org error)");
+            }
+          } catch { results.push("WAV conversion skipped (network error)"); }
+        } else {
+          results.push("WAV: skipped (no suno_api_key for sunoapi.org WAV)");
+        }
       } else {
         results.push("WAV already complete");
       }
 
-      // 2. Stems: Attempt self-hosted stem splitting
+      // ─── STEMS: Dispatch to Railway stem-processor service ────────
       if (beat.stems_status !== "complete") {
-        try {
-          console.log(`Attempting self-hosted stems for beat ${beat.id} (suno_id: ${beat.suno_id})`);
+        if (!mvsepKey) {
+          return new Response(
+            JSON.stringify({
+              error: "MVSEP API key required for stem splitting. Set yours via POST /functions/v1/update-agent-settings with { mvsep_api_key: \"your-key\" }. Get one at mvsep.com/user-api",
+              beat_id: beat.id,
+            }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
 
-          const stemsRes = await fetch(`${selfHostedUrl}/api/generate_stems`, {
+        // Dispatch to Railway stem-processor (fire-and-forget)
+        const stemProcessorUrl = Deno.env.get("STEM_PROCESSOR_URL");
+        const railwaySecret = Deno.env.get("RAILWAY_SERVICE_SECRET");
+
+        if (!stemProcessorUrl || !railwaySecret) {
+          console.error("STEM_PROCESSOR_URL or RAILWAY_SERVICE_SECRET not configured");
+          return new Response(
+            JSON.stringify({ error: "Stem processor not configured" }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const audioUrl = beat.audio_url || `https://cdn1.suno.ai/${beat.suno_id}.mp3`;
+
+        try {
+          const railwayRes = await fetch(`${stemProcessorUrl}/process-stems`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "X-Suno-Cookie": effectiveCookie!,
+              "x-service-secret": railwaySecret,
             },
-            body: JSON.stringify({ id: beat.suno_id }),
+            body: JSON.stringify({
+              beat_id: beat.id,
+              agent_id: agent.id,
+              mvsep_api_key: mvsepKey,
+              audio_url: audioUrl,
+              suno_id: beat.suno_id,
+            }),
           });
 
-          const stemsBody = await stemsRes.text();
-          console.log(`Self-hosted stems response for beat ${beat.id}: status=${stemsRes.status} body=${stemsBody.slice(0, 500)}`);
-
-          // Detect expired/lost session
-          if (!stemsRes.ok) {
-            const stemsErrText = stemsBody || "";
-            if (stemsErrText.includes("Failed to get session id") || stemsErrText.includes("update the SUNO_COOKIE")) {
-              return new Response(
-                JSON.stringify({ error: "Your Suno session has expired or was lost (server restart). Please log into suno.com, copy a fresh cookie, and re-submit it via update-agent-settings.", action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie" }),
-                { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-              );
-            }
-          }
-
-          if (stemsRes.status === 404) {
-            // Self-hosted API doesn't support stems — inform agent
-            results.push("Stem splitting not available on self-hosted API.");
-          } else if (stemsRes.ok) {
-            let stemsApiError = false;
-            try {
-              const stemsJson = JSON.parse(stemsBody);
-              if (stemsJson.error) stemsApiError = true;
-            } catch { /* not JSON */ }
-
-            if (!stemsApiError) {
-              await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-              results.push("Stem splitting triggered via self-hosted API");
-              console.log(`Self-hosted stems triggered for beat ${beat.id} by agent ${agent.handle}`);
-            } else {
-              await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-              results.push("Stem splitting failed: self-hosted API returned an error");
-            }
+          if (railwayRes.ok) {
+            await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
+            results.push("Stem splitting dispatched (MVSEP BS Roformer SW). Will complete automatically in ~2-5 minutes.");
+            console.log(`Beat ${beat.id} dispatched to stem-processor`);
           } else {
-            await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-            results.push(`Stem splitting failed: self-hosted API returned ${stemsRes.status}. Cookie may have expired.`);
+            const errBody = await railwayRes.text();
+            console.error(`Railway error: ${railwayRes.status} ${errBody.slice(0, 200)}`);
+            results.push("Stem splitting dispatch failed. Please try again.");
           }
-        } catch (stemsErr) {
-          console.error(`Self-hosted stems failed for beat ${beat.id}:`, stemsErr.message);
-          await supabase.from("beats").update({ stems_status: "failed" }).eq("id", beat.id);
-          results.push("Stem splitting failed: network error contacting self-hosted API");
+        } catch (fetchErr) {
+          console.error("Railway fetch error:", (fetchErr as Error).message);
+          results.push("Stem splitting dispatch failed: network error");
         }
       } else {
         results.push("Stems already complete");
@@ -408,11 +448,9 @@ serve(async (req) => {
         generation_source: generationSource,
         ...(gcreditDeducted ? { gcredit_spent: 1 } : {}),
         results,
-        message: useSelfHosted
-          ? (useCentralized
-            ? "Processing via MusiClaw's centralized Suno API (1 G-Credit used). If stems are not supported, upload them directly via upload-beat."
-            : "Processing via your self-hosted Suno API (free). If stems are not supported, upload them directly via upload-beat.")
-          : "Processing started. WAV is auto-triggered on beat completion; stems require this call. Callbacks will update the beat record. Your key was used and NOT stored.",
+        message: useMvsep
+          ? "Stem splitting dispatched to processor (MVSEP BS Roformer SW). Completes automatically in ~2-5 minutes."
+          : "Stem splitting via sunoapi.org (split_stem). Callback updates the beat. Your key was used and NOT stored.",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

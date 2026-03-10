@@ -63,7 +63,7 @@ serve(async (req) => {
       );
     }
 
-    // ─── RATE LIMITING: max 10 polls per hour per agent ─────────────
+    // ─── RATE LIMITING: max 100 polls per hour per agent ─────────────
     const { data: recentPolls } = await supabase
       .from("rate_limits")
       .select("id")
@@ -71,9 +71,9 @@ serve(async (req) => {
       .eq("identifier", agent.id)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentPolls && recentPolls.length >= 10) {
+    if (recentPolls && recentPolls.length >= 100) {
       return new Response(
-        JSON.stringify({ error: "Rate limit: max 10 polls per hour." }),
+        JSON.stringify({ error: "Rate limit: max 100 polls per hour." }),
         { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -129,6 +129,10 @@ serve(async (req) => {
       const { data: agentFull } = await supabase
         .from("agents").select("suno_cookie").eq("id", agent.id).single();
       effectiveCookie = agentFull?.suno_cookie || null;
+    }
+    // Fallback to centralized cookie env var (for G-Credit agents without their own cookie)
+    if (useSelfHosted && !effectiveCookie) {
+      effectiveCookie = Deno.env.get("SUNO_SELF_HOSTED_COOKIE") || null;
     }
 
     if (useSelfHosted && !effectiveCookie) {
@@ -247,17 +251,28 @@ serve(async (req) => {
       const track = tracks[i];
       const beat = beats[i];
 
-      const audioUrl = track.audio_url || track.audioUrl || track.audio || track.song_url || null;
-      const streamUrl = track.stream_url || track.streamUrl || track.stream || null;
-      const imageUrl = track.image_url || track.imageUrl || track.image_large_url || track.image || null;
       const trackId = track.id || track.sunoId || track.suno_id || null;
+      const effectiveId = trackId || beat.suno_id;
+      // Normalize URLs: always prefer permanent CDN URLs over temporary audiopipe streaming URLs
+      let audioUrl = track.audio_url || track.audioUrl || track.audio || track.song_url || null;
+      if (effectiveId && (!audioUrl || audioUrl.includes("audiopipe.suno.ai"))) {
+        audioUrl = `https://cdn1.suno.ai/${effectiveId}.mp3`;
+      }
+      let streamUrl = track.stream_url || track.streamUrl || track.stream || audioUrl || null;
+      if (effectiveId && streamUrl?.includes("audiopipe.suno.ai")) {
+        streamUrl = `https://cdn1.suno.ai/${effectiveId}.mp3`;
+      }
+      let imageUrl = track.image_url || track.imageUrl || track.image_large_url || track.image || null;
+      if (effectiveId && (!imageUrl || imageUrl.includes("audiopipe"))) {
+        imageUrl = `https://cdn2.suno.ai/image_${effectiveId}.jpeg`;
+      }
       const trackStatus = track.status || "unknown";
 
       // Only update if the track actually has audio (never mark complete without audio_url)
       if (audioUrl) {
         const updateData: Record<string, any> = {
           status: "complete",
-          suno_id: trackId || beat.suno_id,
+          suno_id: effectiveId,
         };
         if (audioUrl) updateData.audio_url = audioUrl;
         if (streamUrl || audioUrl) updateData.stream_url = streamUrl || audioUrl;
@@ -265,8 +280,41 @@ serve(async (req) => {
         if (track.duration) updateData.duration = Math.round(track.duration);
 
         await supabase.from("beats").update(updateData).eq("id", beat.id);
-        updated.push({ id: beat.id, title: beat.title, status: "complete" });
+        updated.push({ id: beat.id, title: beat.title, status: "complete", audio_url: audioUrl, image_url: imageUrl });
         console.log(`Beat ${beat.id} (${beat.title}) → complete via manual poll`);
+
+        // ─── AUTO-UPLOAD TO SUPABASE STORAGE (fire-and-forget) ──────
+        // Download audio + image from CDN and store permanently in Supabase Storage
+        (async () => {
+          try {
+            if (audioUrl) {
+              const audioRes = await fetch(audioUrl);
+              if (audioRes.ok) {
+                const audioData = new Uint8Array(await audioRes.arrayBuffer());
+                await supabase.storage.from("audio").upload(
+                  `beats/${beat.id}/track.mp3`, audioData,
+                  { contentType: "audio/mpeg", upsert: true }
+                );
+                console.log(`Storage: uploaded audio for beat ${beat.id}`);
+              }
+            }
+            if (imageUrl) {
+              const imgRes = await fetch(imageUrl);
+              if (imgRes.ok) {
+                const imgData = new Uint8Array(await imgRes.arrayBuffer());
+                const ct = imgRes.headers.get("content-type") || "image/jpeg";
+                await supabase.storage.from("audio").upload(
+                  `beats/${beat.id}/cover.jpg`, imgData,
+                  { contentType: ct, upsert: true }
+                );
+              }
+            }
+            await supabase.from("beats").update({ storage_migrated: true }).eq("id", beat.id);
+            console.log(`Storage: beat ${beat.id} marked as storage_migrated`);
+          } catch (uploadErr) {
+            console.error(`Storage upload error for beat ${beat.id}:`, (uploadErr as Error).message);
+          }
+        })();
       } else {
         updated.push({ id: beat.id, title: beat.title, status: beat.status, trackStatus });
       }

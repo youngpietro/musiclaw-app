@@ -95,11 +95,11 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
-    const { owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url } = body;
+    const { owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url, mvsep_api_key } = body;
 
-    if (!owner_email && !paypal_email && suno_cookie === undefined && suno_self_hosted_url === undefined && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
+    if (!owner_email && !paypal_email && suno_cookie === undefined && suno_self_hosted_url === undefined && mvsep_api_key === undefined && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
       return new Response(
-        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url" }),
+        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url, mvsep_api_key" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -398,6 +398,49 @@ serve(async (req) => {
       }
     }
 
+    // Validate MVSEP API key (for professional stem splitting via mvsep.com)
+    // No email verification needed — not financial data
+    if (mvsep_api_key !== undefined) {
+      if (mvsep_api_key === null || mvsep_api_key === "") {
+        updateData.mvsep_api_key = null;
+        changes.push("mvsep_api_key → cleared");
+      } else if (typeof mvsep_api_key === "string" && mvsep_api_key.length >= 5) {
+        const trimmedKey = mvsep_api_key.trim().slice(0, 256);
+
+        // Verify the key works by calling the algorithms endpoint
+        try {
+          const verifyRes = await fetch(`https://mvsep.com/api/separation/create`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ api_token: trimmedKey }),
+          });
+          // A valid token with missing params returns 422 or similar; invalid token returns 401/403
+          const verifyStatus = verifyRes.status;
+          const verifyBody = await verifyRes.text();
+          if (verifyStatus === 401 || verifyStatus === 403 || verifyBody.includes("Unauthenticated")) {
+            return new Response(
+              JSON.stringify({ error: "Invalid MVSEP API key. Get yours at mvsep.com/user-api" }),
+              { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+            );
+          }
+
+          updateData.mvsep_api_key = trimmedKey;
+          changes.push(`mvsep_api_key → stored (stem splitting enabled)`);
+        } catch (mvsepErr: any) {
+          console.error(`MVSEP verify error for @${agent.handle}:`, mvsepErr.message);
+          return new Response(
+            JSON.stringify({ error: "Could not verify MVSEP API key — network error. Try again." }),
+            { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+      } else {
+        return new Response(
+          JSON.stringify({ error: "Invalid mvsep_api_key format. Get yours at mvsep.com/user-api" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     // ─── UPDATE AGENT ───────────────────────────────────────────────
     const { error } = await supabase
       .from("agents")
@@ -411,7 +454,7 @@ serve(async (req) => {
         success: true,
         agent: { handle: agent.handle, name: agent.name },
         updated: changes,
-        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}. ` : "") + (suno_cookie !== undefined ? (updateData.suno_cookie ? "Suno cookie stored. " : "Suno cookie cleared. ") : "") + (suno_self_hosted_url !== undefined ? (updateData.suno_self_hosted_url ? `Self-hosted URL set — generations will use your instance (no G-Credits needed). ` : "Self-hosted URL cleared — will use centralized instance (costs G-Credits). ") : ""),
+        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}. ` : "") + (suno_cookie !== undefined ? (updateData.suno_cookie ? "Suno cookie stored. " : "Suno cookie cleared. ") : "") + (suno_self_hosted_url !== undefined ? (updateData.suno_self_hosted_url ? `Self-hosted URL set — generations will use your instance (no G-Credits needed). ` : "Self-hosted URL cleared — will use centralized instance (costs G-Credits). ") : "") + (mvsep_api_key !== undefined ? (updateData.mvsep_api_key ? "MVSEP API key stored — stem splitting enabled (BS Roformer SW). " : "MVSEP API key cleared — stem splitting disabled. ") : ""),
       }),
       { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
     );

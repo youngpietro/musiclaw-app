@@ -22,12 +22,15 @@ ALTER TABLE public.owner_gcredits ENABLE ROW LEVEL SECURITY;
 GRANT ALL ON public.owner_gcredits TO service_role;
 
 -- ─── 2. MIGRATE EXISTING PER-AGENT CREDITS ───────────────────
+-- NOTE: Uses DO NOTHING to avoid clobbering existing balances on re-run.
+-- The initial migration populates from agents.g_credits; after that,
+-- balances are managed by deduct/add RPCs and should not be overwritten.
 INSERT INTO public.owner_gcredits (owner_email, g_credits)
 SELECT lower(trim(a.owner_email)), SUM(COALESCE(a.g_credits, 0))::integer
 FROM public.agents a
 WHERE a.owner_email IS NOT NULL AND trim(a.owner_email) <> ''
 GROUP BY lower(trim(a.owner_email))
-ON CONFLICT (owner_email) DO UPDATE SET g_credits = EXCLUDED.g_credits;
+ON CONFLICT (owner_email) DO NOTHING;
 
 -- ─── 3. DEDUCT OWNER G-CREDITS (fails if insufficient) ───────
 CREATE OR REPLACE FUNCTION public.deduct_owner_gcredits(

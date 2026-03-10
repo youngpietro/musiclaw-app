@@ -21,6 +21,10 @@ function getCorsHeaders(req: Request) {
 }
 
 const VALID_MODELS = ["V5"];
+// Map user-facing model names → Suno internal identifiers
+const SUNO_MODEL_MAP: Record<string, string> = {
+  "V5": "chirp-crow",
+};
 const MAX_BEAT_PRICE = 499.99;
 const MAX_STEMS_PRICE = 999.99;
 
@@ -340,7 +344,7 @@ serve(async (req) => {
       );
     }
 
-    // ─── RATE LIMITING: max 10 generations per hour per agent ──────────
+    // ─── RATE LIMITING: max 100 generations per hour per agent ──────────
     const { data: recentGens } = await supabase
       .from("rate_limits")
       .select("id")
@@ -348,23 +352,23 @@ serve(async (req) => {
       .eq("identifier", agent.id)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentGens && recentGens.length >= 10) {
+    if (recentGens && recentGens.length >= 100) {
       return new Response(
-        JSON.stringify({ error: "Rate limit: max 10 generations per hour. Try again later." }),
+        JSON.stringify({ error: "Rate limit: max 100 generations per hour. Try again later." }),
         { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // ─── DAILY LIMIT: max 50 beats per 24 hours per agent ──────────
+    // ─── DAILY LIMIT: max 500 beats per 24 hours per agent ──────────
     const { data: dailyBeats } = await supabase
       .from("beats")
       .select("id")
       .eq("agent_id", agent.id)
       .gte("created_at", new Date(Date.now() - 86400000).toISOString());
 
-    if (dailyBeats && dailyBeats.length >= 50) {
+    if (dailyBeats && dailyBeats.length >= 500) {
       return new Response(
-        JSON.stringify({ error: "Daily limit reached: max 50 beats per 24 hours. Try again tomorrow." }),
+        JSON.stringify({ error: "Daily limit reached: max 500 beats per 24 hours. Try again tomorrow." }),
         { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -631,12 +635,15 @@ serve(async (req) => {
     // ─── CALL SUNO API (route based on credential type) ──────────────
     let taskId: string | null = null;
     let selfHostedClipIds: string[] = [];
+    let selfHostedClipData: any[] = [];
+    let useCentralized = false;
+    let gcreditDeducted = false;
 
     if (useSelfHosted) {
       // ─── SELF-HOSTED: gcui-art/suno-api ────────────────────────────
       // Per-agent URL: agent's own instance → FREE, centralized → costs G-Credits
       const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
-      const useCentralized = !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
+      useCentralized = !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
 
       if (!selfHostedUrl) {
         return new Response(
@@ -704,7 +711,6 @@ serve(async (req) => {
       }
 
       // ─── G-CREDIT DEDUCTION (centralized only, per-email pool) ─────
-      let gcreditDeducted = false;
       if (useCentralized) {
         const creditOwnerEmail = agent.owner_email?.trim().toLowerCase();
         if (!creditOwnerEmail) {
@@ -762,6 +768,8 @@ serve(async (req) => {
         tags: cleanStyle,
         title: cleanTitle,
         make_instrumental: true,
+        model: SUNO_MODEL_MAP[model] || "chirp-crow",
+        wait_audio: true, // Wait for Suno to finish generating (~30-90s) so we get audio URLs immediately
       };
 
       // ─── FETCH WITH EXPLICIT TIMEOUT (120s) ─────────────────────────
@@ -944,11 +952,25 @@ serve(async (req) => {
         );
       }
 
-      // gcui-art/suno-api returns: [{ id, status, ... }] or { clips: [...] }
+      // gcui-art/suno-api returns: [{ id, audio_url, status, duration, ... }] or { clips: [...] }
       const clips = Array.isArray(selfHostedData) ? selfHostedData
         : selfHostedData.clips || selfHostedData.data || [];
       selfHostedClipIds = clips.map((c: any) => c.id).filter(Boolean);
       taskId = selfHostedClipIds[0] || null;
+
+      // With wait_audio=true, clips should already have audio_url and status=complete/streaming
+      // Normalize audio URLs: audiopipe.suno.ai URLs are temporary streaming URLs that expire.
+      // Always use the permanent CDN URL format: https://cdn1.suno.ai/{suno_id}.mp3
+      for (const clip of clips) {
+        if (clip.id && (!clip.audio_url || clip.audio_url.includes("audiopipe.suno.ai"))) {
+          clip.audio_url = `https://cdn1.suno.ai/${clip.id}.mp3`;
+        }
+        // image_url can also be normalized to CDN
+        if (clip.id && (!clip.image_url || clip.image_url.includes("audiopipe"))) {
+          clip.image_url = `https://cdn2.suno.ai/image_${clip.id}.jpeg`;
+        }
+      }
+      selfHostedClipData = clips;
 
       // Log G-Credit usage if centralized
       if (gcreditDeducted) {
@@ -1011,17 +1033,30 @@ serve(async (req) => {
     const numBeats = useSelfHosted ? Math.max(selfHostedClipIds.length, 1) : 2;
     const beatRecords = [];
     for (let i = 0; i < numBeats; i++) {
+      // For self-hosted with wait_audio, clips may already have audio URLs
+      const clip = selfHostedClipData[i] || {};
+      const clipAudioUrl = clip.audio_url || clip.audioUrl || null;
+      const clipStreamUrl = clip.stream_url || clip.streamUrl || clipAudioUrl || null;
+      const clipImageUrl = clip.image_url || clip.imageUrl || clip.image_large_url || null;
+      const clipDuration = clip.duration ? Math.round(clip.duration) : null;
+      const clipReady = !!(clipAudioUrl && (clip.status === "complete" || clip.status === "streaming"));
+
       const beatInsert: Record<string, unknown> = {
         agent_id: agent.id,
         title: i === 0 ? cleanTitle : (cleanTitleV2 || `${cleanTitle} (v2)`),
         genre: finalGenre, sub_genre: finalSubGenre, style: cleanStyle, model, bpm: safeBpm,
         instrumental: true,
         negative_tags: cleanNegTags,
-        task_id: taskId, status: "generating",
+        task_id: taskId,
+        status: clipReady ? "complete" : "generating",
         price: safePrice,
         stems_price: safeStemsPrice,
         generation_source: useSelfHosted ? "selfhosted" : "sunoapi",
         ...(useSelfHosted && selfHostedClipIds[i] ? { suno_id: selfHostedClipIds[i] } : {}),
+        ...(clipAudioUrl ? { audio_url: clipAudioUrl } : {}),
+        ...(clipStreamUrl ? { stream_url: clipStreamUrl } : {}),
+        ...(clipImageUrl ? { image_url: clipImageUrl } : {}),
+        ...(clipDuration ? { duration: clipDuration } : {}),
       };
 
       const { data: beat, error } = await supabase.from("beats")
@@ -1045,6 +1080,51 @@ serve(async (req) => {
       });
     }
 
+    // ─── AUTO-UPLOAD TO SUPABASE STORAGE (self-hosted beats) ────────
+    // Download audio + image from Suno CDN and upload to private storage bucket.
+    // This ensures beats are permanently stored and don't rely on Suno CDN availability.
+    // Uses same pattern as suno-callback: fire-and-forget so we don't delay the response.
+    if (useSelfHosted) {
+      for (const beat of beatRecords) {
+        if (beat.status !== "complete" || !beat.audio_url) continue;
+        (async () => {
+          try {
+            // Upload MP3 audio
+            if (beat.audio_url) {
+              const audioRes = await fetch(beat.audio_url);
+              if (audioRes.ok) {
+                const audioData = new Uint8Array(await audioRes.arrayBuffer());
+                await supabase.storage.from("audio").upload(
+                  `beats/${beat.id}/track.mp3`, audioData,
+                  { contentType: "audio/mpeg", upsert: true }
+                );
+                console.log(`Storage: uploaded audio for beat ${beat.id}`);
+              }
+            }
+            // Upload cover image
+            if (beat.image_url) {
+              const imgRes = await fetch(beat.image_url);
+              if (imgRes.ok) {
+                const imgData = new Uint8Array(await imgRes.arrayBuffer());
+                const ct = imgRes.headers.get("content-type") || "image/jpeg";
+                await supabase.storage.from("audio").upload(
+                  `beats/${beat.id}/cover.jpg`, imgData,
+                  { contentType: ct, upsert: true }
+                );
+                console.log(`Storage: uploaded cover for beat ${beat.id}`);
+              }
+            }
+            // Mark as migrated so stream-beat serves from Supabase Storage
+            await supabase.from("beats").update({ storage_migrated: true }).eq("id", beat.id);
+            console.log(`Storage: beat ${beat.id} marked as storage_migrated`);
+          } catch (uploadErr) {
+            console.error(`Storage upload error for beat ${beat.id}:`, (uploadErr as Error).message);
+            // Non-fatal — beat is still usable via CDN URLs until they expire
+          }
+        })();
+      }
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -1053,11 +1133,24 @@ serve(async (req) => {
         ...(useSelfHosted && useCentralized ? { used_centralized: true, g_credits_note: "G-Credits are shared across all your agents" } : useSelfHosted ? { used_centralized: false } : {}),
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
         genre_normalized: finalGenre !== genre ? `"${genre}" → "${finalGenre}"${finalGenre !== normalizedGenre ? " (style-inferred)" : ""}` : undefined,
-        beats: beatRecords.map((b) => ({ id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre, status: b.status, price: b.price, suno_id: b.suno_id || null })),
+        beats: beatRecords.map((b) => ({
+          id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre,
+          status: b.status, price: b.price, suno_id: b.suno_id || null,
+          audio_url: b.audio_url || null, duration: b.duration || null,
+        })),
         message: useSelfHosted
-          ? (useCentralized
-            ? "Generating via MusiClaw's centralized Suno API (1 G-Credit used). Use poll-suno to check status."
-            : "Generating via your self-hosted Suno instance (free). Use poll-suno to check status.")
+          ? (() => {
+              const completedCount = beatRecords.filter((b: any) => b.status === "complete").length;
+              const total = beatRecords.length;
+              if (completedCount === total) {
+                return useCentralized
+                  ? `${total} beat(s) generated and ready on MusiClaw (1 G-Credit used). Audio is live!`
+                  : `${total} beat(s) generated and ready on MusiClaw (free, self-hosted). Audio is live!`;
+              }
+              return useCentralized
+                ? "Generating via MusiClaw's centralized Suno API (1 G-Credit used). Use poll-suno to check status."
+                : "Generating via your self-hosted Suno instance (free). Use poll-suno to check status.";
+            })()
           : "Generating. Suno callbacks in ~30-60s. WAV conversion is automatic. Your key was used once and NOT stored.",
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
