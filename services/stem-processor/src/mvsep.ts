@@ -74,7 +74,7 @@ export async function pollForCompletion(hash: string): Promise<StemFile[]> {
     );
 
     if (status === "done") {
-      // Step 2: extract final hash and fetch stems
+      // Step 2: extract final hash
       console.log(`MVSEP get-remote response: ${JSON.stringify(remoteData).slice(0, 1000)}`);
       const finalHash = remoteData.data?.hash;
       if (!finalHash) {
@@ -83,15 +83,46 @@ export async function pollForCompletion(hash: string): Promise<StemFile[]> {
         );
       }
 
-      console.log(`MVSEP fetching stems with final hash: ${finalHash}`);
-      const getRes = await fetch(
-        `${MVSEP_API_BASE}/get?hash=${encodeURIComponent(finalHash)}`
-      );
-      if (!getRes.ok) {
-        throw new Error(`MVSEP get failed: ${getRes.status}`);
-      }
+      // Step 3: poll /get with final hash until files are ready
+      // The /get endpoint also has its own processing queue
+      console.log(`MVSEP polling /get with final hash: ${finalHash}`);
+      return await pollGetEndpoint(finalHash);
+    } else if (status === "failed" || status === "error") {
+      throw new Error(`MVSEP separation failed: ${JSON.stringify(remoteData)}`);
+    }
+    // status is "waiting", "processing", "distributing", "merging" — keep polling
+  }
 
-      const getData: any = await getRes.json();
+  throw new Error(
+    `MVSEP get-remote polling timed out after ${MVSEP_MAX_POLL_ATTEMPTS} attempts (${Math.round((MVSEP_MAX_POLL_ATTEMPTS * MVSEP_POLL_INTERVAL_MS) / 1000)}s)`
+  );
+}
+
+/**
+ * Poll the /get endpoint with the final hash until stem files are ready.
+ * The /get endpoint also has its own processing queue and returns
+ * {"status":"waiting","data":{"queue_count":N,"current_order":M}}
+ * until the files are actually available.
+ */
+async function pollGetEndpoint(finalHash: string): Promise<StemFile[]> {
+  for (let attempt = 0; attempt < MVSEP_MAX_POLL_ATTEMPTS; attempt++) {
+    if (attempt > 0) await sleep(MVSEP_POLL_INTERVAL_MS);
+
+    const getRes = await fetch(
+      `${MVSEP_API_BASE}/get?hash=${encodeURIComponent(finalHash)}`
+    );
+    if (!getRes.ok) {
+      console.warn(`MVSEP get HTTP ${getRes.status}`);
+      continue;
+    }
+
+    const getData: any = await getRes.json();
+    const getStatus = getData.status || "";
+    console.log(
+      `MVSEP /get poll ${attempt + 1}/${MVSEP_MAX_POLL_ATTEMPTS}: status=${getStatus} ${getData.data?.queue_count !== undefined ? `(queue: ${getData.data.current_order}/${getData.data.queue_count})` : ""}`
+    );
+
+    if (getStatus === "done") {
       console.log(`MVSEP get response: ${JSON.stringify(getData).slice(0, 2000)}`);
       const files = getData.data?.files || getData.files || [];
       const stemFiles: StemFile[] = [];
@@ -106,13 +137,13 @@ export async function pollForCompletion(hash: string): Promise<StemFile[]> {
       }
 
       return stemFiles;
-    } else if (status === "failed" || status === "error") {
-      throw new Error(`MVSEP separation failed: ${JSON.stringify(remoteData)}`);
+    } else if (getStatus === "failed" || getStatus === "error") {
+      throw new Error(`MVSEP /get failed: ${JSON.stringify(getData)}`);
     }
-    // status is "waiting", "processing", "distributing", "merging" — keep polling
+    // status is "waiting", "processing" — keep polling
   }
 
   throw new Error(
-    `MVSEP polling timed out after ${MVSEP_MAX_POLL_ATTEMPTS} attempts (${Math.round((MVSEP_MAX_POLL_ATTEMPTS * MVSEP_POLL_INTERVAL_MS) / 1000)}s)`
+    `MVSEP /get polling timed out after ${MVSEP_MAX_POLL_ATTEMPTS} attempts`
   );
 }
