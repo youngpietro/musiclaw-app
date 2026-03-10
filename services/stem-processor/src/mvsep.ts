@@ -75,6 +75,7 @@ export async function pollForCompletion(hash: string): Promise<StemFile[]> {
 
     if (status === "done") {
       // Step 2: extract final hash and fetch stems
+      console.log(`MVSEP get-remote response: ${JSON.stringify(remoteData).slice(0, 1000)}`);
       const finalHash = remoteData.data?.hash;
       if (!finalHash) {
         throw new Error(
@@ -82,6 +83,7 @@ export async function pollForCompletion(hash: string): Promise<StemFile[]> {
         );
       }
 
+      console.log(`MVSEP fetching stems with final hash: ${finalHash}`);
       const getRes = await fetch(
         `${MVSEP_API_BASE}/get?hash=${encodeURIComponent(finalHash)}`
       );
@@ -90,6 +92,7 @@ export async function pollForCompletion(hash: string): Promise<StemFile[]> {
       }
 
       const getData: any = await getRes.json();
+      console.log(`MVSEP get response: ${JSON.stringify(getData).slice(0, 2000)}`);
       const files = getData.data?.files || getData.files || [];
       const stemFiles: StemFile[] = [];
 
