@@ -60,7 +60,7 @@ serve(async (req) => {
       );
     }
 
-    // ─── RATE LIMITING: max 30 manage-beats actions per hour per agent ─
+    // ─── RATE LIMITING: max 100 manage-beats actions per hour per agent ─
     const { data: recentActions } = await supabase
       .from("rate_limits")
       .select("id")
@@ -68,9 +68,9 @@ serve(async (req) => {
       .eq("identifier", agent.id)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentActions && recentActions.length >= 30) {
+    if (recentActions && recentActions.length >= 100) {
       return new Response(
-        JSON.stringify({ error: "Rate limit: max 30 beat management actions per hour." }),
+        JSON.stringify({ error: "Rate limit: max 100 beat management actions per hour." }),
         { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }

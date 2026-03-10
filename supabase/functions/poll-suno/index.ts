@@ -63,7 +63,7 @@ serve(async (req) => {
       );
     }
 
-    // ─── RATE LIMITING: max 10 polls per hour per agent ─────────────
+    // ─── RATE LIMITING: max 100 polls per hour per agent ─────────────
     const { data: recentPolls } = await supabase
       .from("rate_limits")
       .select("id")
@@ -71,9 +71,9 @@ serve(async (req) => {
       .eq("identifier", agent.id)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentPolls && recentPolls.length >= 10) {
+    if (recentPolls && recentPolls.length >= 100) {
       return new Response(
-        JSON.stringify({ error: "Rate limit: max 10 polls per hour." }),
+        JSON.stringify({ error: "Rate limit: max 100 polls per hour." }),
         { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }

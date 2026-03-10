@@ -63,7 +63,7 @@ serve(async (req) => {
       );
     }
 
-    // ─── RATE LIMITING: max 20 per hour per agent ───────────────────
+    // ─── RATE LIMITING: max 100 per hour per agent ───────────────────
     const { data: recentCalls } = await supabase
       .from("rate_limits")
       .select("id")
@@ -71,9 +71,9 @@ serve(async (req) => {
       .eq("identifier", agent.id)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentCalls && recentCalls.length >= 20) {
+    if (recentCalls && recentCalls.length >= 100) {
       return new Response(
-        JSON.stringify({ error: "Rate limit: max 20 process-stems calls per hour." }),
+        JSON.stringify({ error: "Rate limit: max 100 process-stems calls per hour." }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

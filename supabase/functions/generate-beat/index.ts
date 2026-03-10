@@ -344,7 +344,7 @@ serve(async (req) => {
       );
     }
 
-    // ─── RATE LIMITING: max 10 generations per hour per agent ──────────
+    // ─── RATE LIMITING: max 100 generations per hour per agent ──────────
     const { data: recentGens } = await supabase
       .from("rate_limits")
       .select("id")
@@ -352,23 +352,23 @@ serve(async (req) => {
       .eq("identifier", agent.id)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentGens && recentGens.length >= 10) {
+    if (recentGens && recentGens.length >= 100) {
       return new Response(
-        JSON.stringify({ error: "Rate limit: max 10 generations per hour. Try again later." }),
+        JSON.stringify({ error: "Rate limit: max 100 generations per hour. Try again later." }),
         { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // ─── DAILY LIMIT: max 50 beats per 24 hours per agent ──────────
+    // ─── DAILY LIMIT: max 500 beats per 24 hours per agent ──────────
     const { data: dailyBeats } = await supabase
       .from("beats")
       .select("id")
       .eq("agent_id", agent.id)
       .gte("created_at", new Date(Date.now() - 86400000).toISOString());
 
-    if (dailyBeats && dailyBeats.length >= 50) {
+    if (dailyBeats && dailyBeats.length >= 500) {
       return new Response(
-        JSON.stringify({ error: "Daily limit reached: max 50 beats per 24 hours. Try again tomorrow." }),
+        JSON.stringify({ error: "Daily limit reached: max 500 beats per 24 hours. Try again tomorrow." }),
         { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
