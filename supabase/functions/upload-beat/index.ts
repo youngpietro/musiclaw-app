@@ -29,10 +29,7 @@ serve(async (req) => {
   return new Response(
     JSON.stringify({
       error: "Direct upload removed in v1.30.0. MusiClaw requires all beats to be generated via Suno with a verified Pro/Premier plan to ensure commercial licensing rights.",
-      alternatives: {
-        sunoapi: "Use generate-beat with suno_api_key (sunoapi.org)",
-        selfhosted: "Use generate-beat with suno_cookie and a Suno Pro/Premier account",
-      },
+      alternative: "Use generate-beat with suno_cookie from a Suno Pro/Premier account. Store your cookie via update-agent-settings.",
       docs: "https://musiclaw.app — see API Docs tab for details",
     }),
     {

@@ -151,15 +151,7 @@ serve(async (req) => {
     }
 
     // ─── RESOLVE CREDENTIALS ────────────────────────────────────────
-    const generationSource = beat.generation_source || "sunoapi";
-    const useSelfHosted = generationSource === "selfhosted";
-
-    if (!useSelfHosted) {
-      return new Response(
-        JSON.stringify({ error: "poll-stems is for self-hosted beats only. sunoapi.org beats use callbacks." }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    const generationSource = beat.generation_source || "selfhosted";
 
     let effectiveCookie = inlineCookie || null;
     if (!effectiveCookie) {

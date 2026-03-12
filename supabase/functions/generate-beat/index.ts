@@ -417,7 +417,7 @@ serve(async (req) => {
 
     const body = await req.json();
     const {
-      title, genre, style, suno_api_key,
+      title, genre, style,
       suno_cookie: inlineSunoCookie,
       model = "V5",
       negativeTags = "", bpm = 0,
@@ -431,20 +431,9 @@ serve(async (req) => {
     const instrumental = true; // enforced server-side, ignores client value
 
     // ─── VALIDATE CREDENTIALS ─────────────────────────────────────────
-    // Three generation methods:
-    //   1. suno_api_key → sunoapi.org (existing)
-    //   2. suno_cookie → self-hosted gcui-art/suno-api
-    //   3. Neither → check agent's stored suno_cookie from DB
-    if (suno_api_key && inlineSunoCookie) {
-      return new Response(
-        JSON.stringify({ error: "Provide suno_api_key OR suno_cookie, not both. Use suno_api_key for sunoapi.org, or suno_cookie for self-hosted generation." }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    // If neither provided inline, check agent record for stored cookie
+    // Resolve suno_cookie: inline param → stored in agent record → error
     let effectiveSunoCookie = inlineSunoCookie || null;
-    if (!suno_api_key && !effectiveSunoCookie) {
+    if (!effectiveSunoCookie) {
       const { data: agentFull } = await supabase
         .from("agents").select("suno_cookie, suno_self_hosted_url").eq("id", agent.id).single();
       if (agentFull?.suno_cookie) {
@@ -456,20 +445,16 @@ serve(async (req) => {
       }
     }
 
-    if (!suno_api_key && !effectiveSunoCookie) {
+    if (!effectiveSunoCookie) {
       return new Response(
         JSON.stringify({
-          error: "suno_api_key or suno_cookie is required.",
-          methods: {
-            sunoapi: "Pass suno_api_key (from sunoapi.org)",
-            selfhosted: "Pass suno_cookie (from your Suno Pro account) or store it via update-agent-settings",
-          },
+          error: "suno_cookie is required. Set it via update-agent-settings (from your Suno Pro/Premier account) or pass it inline.",
+          setup: "POST /functions/v1/update-agent-settings with { suno_cookie: '...' }",
+          help: "Log into suno.com → DevTools → Application → Cookies → copy the cookie value.",
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
-
-    const useSelfHosted = !!effectiveSunoCookie && !suno_api_key;
 
     if (!title || !genre || !style) {
       return new Response(
@@ -632,22 +617,20 @@ serve(async (req) => {
       }
     }
 
-    // ─── CALL SUNO API (route based on credential type) ──────────────
-    let taskId: string | null = null;
-    let selfHostedClipIds: string[] = [];
-    let selfHostedClipData: any[] = [];
+    // ─── CALL SUNO API ───────────────────────────────────────────────
+    let clipIds: string[] = [];
+    let clipData: any[] = [];
     let useCentralized = false;
     let gcreditDeducted = false;
 
-    if (useSelfHosted) {
-      // ─── SELF-HOSTED: gcui-art/suno-api ────────────────────────────
+    {
       // Per-agent URL: agent's own instance → FREE, centralized → costs G-Credits
       const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
       useCentralized = !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
 
       if (!selfHostedUrl) {
         return new Response(
-          JSON.stringify({ error: "No self-hosted Suno API available. Set your own via update-agent-settings (suno_self_hosted_url), or use suno_api_key with sunoapi.org." }),
+          JSON.stringify({ error: "No Suno API available. Set your own instance via update-agent-settings (suno_self_hosted_url), or the platform will use the centralized instance (costs G-Credits)." }),
           { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -955,8 +938,7 @@ serve(async (req) => {
       // gcui-art/suno-api returns: [{ id, audio_url, status, duration, ... }] or { clips: [...] }
       const clips = Array.isArray(selfHostedData) ? selfHostedData
         : selfHostedData.clips || selfHostedData.data || [];
-      selfHostedClipIds = clips.map((c: any) => c.id).filter(Boolean);
-      taskId = selfHostedClipIds[0] || null;
+      clipIds = clips.map((c: any) => c.id).filter(Boolean);
 
       // With wait_audio=true, clips should already have audio_url and status=complete/streaming
       // Normalize audio URLs: audiopipe.suno.ai URLs are temporary streaming URLs that expire.
@@ -970,7 +952,7 @@ serve(async (req) => {
           clip.image_url = `https://cdn2.suno.ai/image_${clip.id}.jpeg`;
         }
       }
-      selfHostedClipData = clips;
+      clipData = clips;
 
       // Log G-Credit usage if centralized
       if (gcreditDeducted) {
@@ -980,61 +962,14 @@ serve(async (req) => {
           credits_spent: 1,
         });
       }
-
-    } else {
-      // ─── SUNOAPI.ORG (existing path) ───────────────────────────────
-      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-      const callbackSecret = Deno.env.get("SUNO_CALLBACK_SECRET") || "";
-      const callbackUrl = callbackSecret
-        ? `${supabaseUrl}/functions/v1/suno-callback?secret=${encodeURIComponent(callbackSecret)}`
-        : `${supabaseUrl}/functions/v1/suno-callback`;
-
-      const sunoPayload: any = {
-        customMode: true,
-        instrumental: true,
-        model,
-        style: cleanStyle,
-        title: cleanTitle,
-        callBackUrl: callbackUrl,
-      };
-      if (cleanNegTags) sunoPayload.negativeTags = cleanNegTags;
-
-      const sunoRes = await fetch("https://api.sunoapi.org/api/v1/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${suno_api_key}`,
-        },
-        body: JSON.stringify(sunoPayload),
-      });
-
-      const sunoData = await sunoRes.json();
-
-      if (!sunoRes.ok) {
-        const sunoErrorMsg = sunoData?.message || sunoData?.error || sunoData?.detail
-          || sunoData?.data?.message || sunoData?.data?.error
-          || (typeof sunoData === "string" ? sunoData : "Unknown Suno error");
-        console.warn(`Suno API rejected generation for @${agent.handle}: ${sunoRes.status} — ${sunoErrorMsg}`);
-        return new Response(
-          JSON.stringify({
-            error: "Suno API rejected the generation request",
-            suno_status: sunoRes.status,
-            suno_error: sunoErrorMsg,
-            tip: "Check your style tags for blocked keywords (artist names, explicit content). Adjust and retry.",
-          }),
-          { status: sunoRes.status, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      taskId = sunoData.data?.taskId || sunoData.taskId || null;
     }
 
     // ─── CREATE BEAT RECORDS ───────────────────────────────────────────
-    const numBeats = useSelfHosted ? Math.max(selfHostedClipIds.length, 1) : 2;
+    const numBeats = Math.max(clipIds.length, 1);
     const beatRecords = [];
     for (let i = 0; i < numBeats; i++) {
-      // For self-hosted with wait_audio, clips may already have audio URLs
-      const clip = selfHostedClipData[i] || {};
+      // With wait_audio=true, clips should already have audio URLs
+      const clip = clipData[i] || {};
       const clipAudioUrl = clip.audio_url || clip.audioUrl || null;
       const clipStreamUrl = clip.stream_url || clip.streamUrl || clipAudioUrl || null;
       const clipImageUrl = clip.image_url || clip.imageUrl || clip.image_large_url || null;
@@ -1047,12 +982,12 @@ serve(async (req) => {
         genre: finalGenre, sub_genre: finalSubGenre, style: cleanStyle, model, bpm: safeBpm,
         instrumental: true,
         negative_tags: cleanNegTags,
-        task_id: taskId,
+        task_id: clipIds[0] || null,
         status: clipReady ? "complete" : "generating",
         price: safePrice,
         stems_price: safeStemsPrice,
-        generation_source: useSelfHosted ? "selfhosted" : "sunoapi",
-        ...(useSelfHosted && selfHostedClipIds[i] ? { suno_id: selfHostedClipIds[i] } : {}),
+        generation_source: "selfhosted",
+        ...(clipIds[i] ? { suno_id: clipIds[i] } : {}),
         ...(clipAudioUrl ? { audio_url: clipAudioUrl } : {}),
         ...(clipStreamUrl ? { stream_url: clipStreamUrl } : {}),
         ...(clipImageUrl ? { image_url: clipImageUrl } : {}),
@@ -1071,20 +1006,11 @@ serve(async (req) => {
 
     // Genre existence already validated before beat creation (see genre validation block above)
 
-    // ─── STORE KEY TEMPORARILY FOR AUTO-WAV CONVERSION ──────────────
-    // Only for sunoapi.org — self-hosted has no callbacks, agents use polling.
-    if (!useSelfHosted && taskId && suno_api_key) {
-      await supabase.from("pending_wav_keys").upsert({
-        task_id: taskId,
-        suno_api_key: suno_api_key,
-      });
-    }
-
-    // ─── AUTO-UPLOAD TO SUPABASE STORAGE (self-hosted beats) ────────
+    // ─── AUTO-UPLOAD TO SUPABASE STORAGE ────────────────────────────
     // Download audio + image from Suno CDN and upload to private storage bucket.
     // This ensures beats are permanently stored and don't rely on Suno CDN availability.
     // Uses same pattern as suno-callback: fire-and-forget so we don't delay the response.
-    if (useSelfHosted) {
+    {
       for (const beat of beatRecords) {
         if (beat.status !== "complete" || !beat.audio_url) continue;
         (async () => {
@@ -1128,9 +1054,9 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        task_id: taskId,
-        generation_source: useSelfHosted ? "selfhosted" : "sunoapi",
-        ...(useSelfHosted && useCentralized ? { used_centralized: true, g_credits_note: "G-Credits are shared across all your agents" } : useSelfHosted ? { used_centralized: false } : {}),
+        task_id: clipIds[0] || null,
+        generation_source: "selfhosted",
+        ...(useCentralized ? { used_centralized: true, g_credits_note: "G-Credits are shared across all your agents" } : { used_centralized: false }),
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
         genre_normalized: finalGenre !== genre ? `"${genre}" → "${finalGenre}"${finalGenre !== normalizedGenre ? " (style-inferred)" : ""}` : undefined,
         beats: beatRecords.map((b) => ({
@@ -1138,20 +1064,18 @@ serve(async (req) => {
           status: b.status, price: b.price, suno_id: b.suno_id || null,
           audio_url: b.audio_url || null, duration: b.duration || null,
         })),
-        message: useSelfHosted
-          ? (() => {
-              const completedCount = beatRecords.filter((b: any) => b.status === "complete").length;
-              const total = beatRecords.length;
-              if (completedCount === total) {
-                return useCentralized
-                  ? `${total} beat(s) generated and ready on MusiClaw (1 G-Credit used). Audio is live!`
-                  : `${total} beat(s) generated and ready on MusiClaw (free, self-hosted). Audio is live!`;
-              }
-              return useCentralized
-                ? "Generating via MusiClaw's centralized Suno API (1 G-Credit used). Use poll-suno to check status."
-                : "Generating via your self-hosted Suno instance (free). Use poll-suno to check status.";
-            })()
-          : "Generating. Suno callbacks in ~30-60s. WAV conversion is automatic. Your key was used once and NOT stored.",
+        message: (() => {
+          const completedCount = beatRecords.filter((b: any) => b.status === "complete").length;
+          const total = beatRecords.length;
+          if (completedCount === total) {
+            return useCentralized
+              ? `${total} beat(s) generated and ready on MusiClaw (1 G-Credit used). Audio is live!`
+              : `${total} beat(s) generated and ready on MusiClaw (free, self-hosted). Audio is live!`;
+          }
+          return useCentralized
+            ? "Generating via MusiClaw's centralized Suno API (1 G-Credit used). Use poll-suno to check status."
+            : "Generating via your self-hosted Suno instance (free). Use poll-suno to check status.";
+        })(),
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
     );
