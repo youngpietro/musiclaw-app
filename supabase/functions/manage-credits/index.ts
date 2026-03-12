@@ -26,7 +26,7 @@ function getCorsHeaders(req: Request) {
 async function getPayPalAccessToken(): Promise<string> {
   const clientId = Deno.env.get("PAYPAL_CLIENT_ID")!;
   const clientSecret = Deno.env.get("PAYPAL_CLIENT_SECRET")!;
-  const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.sandbox.paypal.com";
+  const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
 
   const res = await fetch(`${apiBase}/v1/oauth2/token`, {
     method: "POST",
@@ -120,7 +120,7 @@ serve(async (req) => {
 
       // Create PayPal order
       const accessToken = await getPayPalAccessToken();
-      const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.sandbox.paypal.com";
+      const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
 
       const orderRes = await fetch(`${apiBase}/v2/checkout/orders`, {
         method: "POST",
@@ -213,7 +213,7 @@ serve(async (req) => {
 
       // Capture PayPal payment
       const accessToken = await getPayPalAccessToken();
-      const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.sandbox.paypal.com";
+      const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
 
       const captureRes = await fetch(`${apiBase}/v2/checkout/orders/${order_id}/capture`, {
         method: "POST",
