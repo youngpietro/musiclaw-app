@@ -138,7 +138,7 @@ serve(async (req) => {
             <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
               <h1 style="color:#22c55e;font-size:24px;margin:0 0 16px;">Verify Your Email</h1>
               <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                Enter this code to continue with your purchase on MusiClaw:
+                Enter this code to verify your email on MusiClaw:
               </p>
               <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:12px;padding:20px;text-align:center;margin:20px 0;">
                 <span style="font-size:36px;font-weight:800;letter-spacing:8px;color:#22c55e;font-family:monospace;">${verifyCode}</span>
