@@ -64,11 +64,6 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // ─── CLEANUP STALE PENDING WAV KEYS (safety net — 1 hour max) ─────
-    await supabase.from("pending_wav_keys")
-      .delete()
-      .lt("created_at", new Date(Date.now() - 3600000).toISOString());
-
     // ─── SECRET VALIDATION (required) ──────────────────────────────────
     const url = new URL(req.url);
     const expectedSecret = Deno.env.get("SUNO_CALLBACK_SECRET");
@@ -282,10 +277,6 @@ serve(async (req) => {
         })();
       }
 
-      // Clean up pending WAV keys (legacy — no longer needed for new beats)
-      if (taskId) {
-        await supabase.from("pending_wav_keys").delete().eq("task_id", taskId);
-      }
     } else if (isFirst && tracks.length > 0) {
       for (let i = 0; i < Math.min(tracks.length, beats.length); i++) {
         const track = tracks[i];

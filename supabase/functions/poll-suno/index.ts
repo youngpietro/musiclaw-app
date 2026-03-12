@@ -1,10 +1,9 @@
 // supabase/functions/poll-suno/index.ts
 // POST /functions/v1/poll-suno
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { task_id, suno_api_key?, suno_cookie? }
-// Manually polls Suno API for a task and updates beat status.
-// Supports both sunoapi.org (suno_api_key) and self-hosted (suno_cookie).
-// Use when the callback didn't fire and beats are stuck in "generating".
+// Body: { task_id, suno_cookie? }
+// Manually polls self-hosted Suno API for a task and updates beat status.
+// Use when beats are stuck in "generating" (e.g. wait_audio timed out).
 // SECURITY: Bearer auth, rate limiting, agent can only poll their own beats
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -82,7 +81,7 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ─────────────────────────────────────────────
     const body = await req.json();
-    const { task_id, suno_api_key, suno_cookie: inlineCookie } = body;
+    const { task_id, suno_cookie: inlineCookie } = body;
 
     if (!task_id) {
       return new Response(
@@ -119,120 +118,71 @@ serve(async (req) => {
       );
     }
 
-    // ─── DETERMINE GENERATION SOURCE FROM BEAT ──────────────────────
-    const generationSource = beats[0]?.generation_source || "sunoapi";
-    const useSelfHosted = generationSource === "selfhosted";
-
-    // Resolve credentials
+    // ─── RESOLVE COOKIE ────────────────────────────────────────────
     let effectiveCookie = inlineCookie || null;
-    if (useSelfHosted && !effectiveCookie) {
+    if (!effectiveCookie) {
       const { data: agentFull } = await supabase
         .from("agents").select("suno_cookie").eq("id", agent.id).single();
       effectiveCookie = agentFull?.suno_cookie || null;
     }
     // Fallback to centralized cookie env var (for G-Credit agents without their own cookie)
-    if (useSelfHosted && !effectiveCookie) {
+    if (!effectiveCookie) {
       effectiveCookie = Deno.env.get("SUNO_SELF_HOSTED_COOKIE") || null;
     }
 
-    if (useSelfHosted && !effectiveCookie) {
+    if (!effectiveCookie) {
       return new Response(
-        JSON.stringify({ error: "suno_cookie is required for self-hosted beats. Pass it in the request or store it via update-agent-settings." }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-    if (!useSelfHosted && !suno_api_key) {
-      return new Response(
-        JSON.stringify({ error: "suno_api_key is required for sunoapi.org beats." }),
+        JSON.stringify({ error: "suno_cookie is required. Pass it in the request or store it via update-agent-settings." }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
     // ─── POLL SUNO API ──────────────────────────────────────────────
-    let sunoRes: Response;
     let tracks: any[] = [];
 
-    if (useSelfHosted) {
-      // ─── SELF-HOSTED POLLING ────────────────────────────────────
-      const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
-      if (!selfHostedUrl) {
-        return new Response(
-          JSON.stringify({ error: "No self-hosted Suno API URL configured. Set yours via update-agent-settings." }),
-          { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      // Self-hosted uses suno_id (clip IDs) for polling
-      const clipIds = beats.map((b: any) => b.suno_id).filter(Boolean).join(",");
-      if (!clipIds) {
-        return new Response(
-          JSON.stringify({ error: "No clip IDs found for these beats. Cannot poll self-hosted API." }),
-          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      console.log(`Polling self-hosted Suno for clips ${clipIds} (agent: ${agent.handle})`);
-
-      sunoRes = await fetch(`${selfHostedUrl}/api/get?ids=${clipIds}`, {
-        method: "GET",
-        headers: { "X-Suno-Cookie": effectiveCookie! },
-      });
-
-      if (!sunoRes.ok) {
-        const errText = await sunoRes.text();
-        console.error(`Self-hosted poll failed: ${sunoRes.status} — ${errText}`);
-        const isSessionExpired = errText.includes("Failed to get session id") || errText.includes("update the SUNO_COOKIE");
-        if (isSessionExpired) {
-          return new Response(
-            JSON.stringify({ error: "Your Suno session has expired or was lost (server restart). Please log into suno.com, copy a fresh cookie, and re-submit it via update-agent-settings.", action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie" }),
-            { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-        return new Response(
-          JSON.stringify({ error: `Self-hosted Suno API returned ${sunoRes.status}. Your cookie may have expired.` }),
-          { status: sunoRes.status >= 400 ? sunoRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      const selfData = await sunoRes.json();
-      // gcui-art/suno-api returns: [{ id, audio_url, image_url, status, duration }]
-      tracks = Array.isArray(selfData) ? selfData : (selfData.data || selfData.clips || []);
-
-    } else {
-      // ─── SUNOAPI.ORG POLLING (existing) ─────────────────────────
-      console.log(`Polling Suno API for task ${task_id} (agent: ${agent.handle})`);
-
-      sunoRes = await fetch(`https://api.sunoapi.org/api/v1/generate/record?taskId=${task_id}`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${suno_api_key}` },
-      });
-
-      if (!sunoRes.ok) {
-        const errText = await sunoRes.text();
-        console.error(`Suno API poll failed: ${sunoRes.status} — ${errText}`);
-        return new Response(
-          JSON.stringify({ error: `Suno API returned ${sunoRes.status}. Check your API key.` }),
-          { status: sunoRes.status, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      const sunoData = await sunoRes.json();
-      console.log("Suno poll response:", JSON.stringify(sunoData).slice(0, 1000));
-
-      // Parse flexible response formats
-      if (sunoData.data) {
-        if (Array.isArray(sunoData.data)) {
-          tracks = sunoData.data;
-        } else if (sunoData.data.data && Array.isArray(sunoData.data.data)) {
-          tracks = sunoData.data.data;
-        } else if (sunoData.data.response && Array.isArray(sunoData.data.response)) {
-          tracks = sunoData.data.response;
-        }
-      }
-      if (tracks.length === 0 && sunoData.response && Array.isArray(sunoData.response)) {
-        tracks = sunoData.response;
-      }
+    const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
+    if (!selfHostedUrl) {
+      return new Response(
+        JSON.stringify({ error: "No Suno API URL configured. Set yours via update-agent-settings (suno_self_hosted_url)." }),
+        { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
+      );
     }
+
+    // Use suno_id (clip IDs) for polling
+    const clipIds = beats.map((b: any) => b.suno_id).filter(Boolean).join(",");
+    if (!clipIds) {
+      return new Response(
+        JSON.stringify({ error: "No clip IDs found for these beats. Cannot poll Suno API." }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`Polling Suno for clips ${clipIds} (agent: ${agent.handle})`);
+
+    const sunoRes = await fetch(`${selfHostedUrl}/api/get?ids=${clipIds}`, {
+      method: "GET",
+      headers: { "X-Suno-Cookie": effectiveCookie },
+    });
+
+    if (!sunoRes.ok) {
+      const errText = await sunoRes.text();
+      console.error(`Suno poll failed: ${sunoRes.status} — ${errText}`);
+      const isSessionExpired = errText.includes("Failed to get session id") || errText.includes("update the SUNO_COOKIE");
+      if (isSessionExpired) {
+        return new Response(
+          JSON.stringify({ error: "Your Suno session has expired. Please log into suno.com, copy a fresh cookie, and update it via update-agent-settings.", action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie" }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({ error: `Suno API returned ${sunoRes.status}. Your cookie may have expired.` }),
+        { status: sunoRes.status >= 400 ? sunoRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    const selfData = await sunoRes.json();
+    // gcui-art/suno-api returns: [{ id, audio_url, image_url, status, duration }]
+    tracks = Array.isArray(selfData) ? selfData : (selfData.data || selfData.clips || []);
 
     if (tracks.length === 0) {
       return new Response(
