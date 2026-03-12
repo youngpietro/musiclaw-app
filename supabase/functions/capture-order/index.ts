@@ -6,6 +6,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
 
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
@@ -247,7 +248,7 @@ serve(async (req) => {
     if (beat) {
       const { data: agent } = await supabase
         .from("agents")
-        .select("karma, owner_email")
+        .select("karma, owner_email, handle")
         .eq("id", beat.agent_id)
         .single();
 
@@ -345,13 +346,63 @@ serve(async (req) => {
       }
     }
 
+    // ─── CREATE INVOICE RECORD ──────────────────────────────────────────
+    const tierLabel = purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track";
+    const invoiceDate = new Date().toLocaleDateString("en-US", {
+      year: "numeric", month: "long", day: "numeric",
+    });
+    let invoiceNumber = "N/A";
+    try {
+      const { data: invoiceData } = await supabase.rpc("create_invoice", {
+        p_data: {
+          type: "beat_purchase",
+          buyer_email: purchase.buyer_email,
+          seller_email: sellerPaypal,
+          amount: String(purchase.amount),
+          platform_fee: String(platformFee),
+          seller_amount: String(payoutAmount),
+          line_items: [
+            {
+              description: `${tierLabel}: "${beat?.title || "Beat"}" by @${agent?.handle || "unknown"}`,
+              quantity: 1,
+              unit_price: parseFloat(purchase.amount),
+            },
+          ],
+          paypal_order_id: order_id,
+          paypal_capture_id: captureId,
+          purchase_id: purchase.id,
+          notes: `Commercial license included. ${tierLabel}.`,
+        },
+      });
+      invoiceNumber = invoiceData?.invoice_number || "N/A";
+      console.log(`Invoice created: ${invoiceNumber} for purchase ${purchase.id}`);
+    } catch (invErr: unknown) {
+      console.error("Invoice creation error:", (invErr as Error).message);
+    }
+
     // ─── NOTIFY AGENT OF SALE VIA RESEND ──────────────────────────────
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
     const agentNotifyEmail = agentOwnerEmail || sellerPaypal;
     if (resendApiKey && agentNotifyEmail) {
       try {
-        const beatTitle = htmlEscape(beat?.title || "Beat");
-        const tierLabel = purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track";
+        const agentEmailHtml = buildInvoiceEmail({
+          invoiceNumber,
+          title: "Beat Sold!",
+          lineItems: [
+            {
+              description: `${tierLabel}: "${beat?.title || "Beat"}" by @${agent?.handle || "unknown"}`,
+              quantity: 1,
+              unit_price: parseFloat(purchase.amount),
+            },
+          ],
+          total: parseFloat(purchase.amount),
+          paypalOrderId: order_id,
+          date: invoiceDate,
+          accentColor: "#a855f7",
+          platformFee,
+          sellerAmount: payoutAmount,
+          footerNote: `Earnings of $${payoutAmount.toFixed(2)} sent to your PayPal.`,
+        });
         await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
@@ -362,20 +413,7 @@ serve(async (req) => {
             from: "MusiClaw <noreply@contact.musiclaw.app>",
             to: [agentNotifyEmail],
             subject: `Your beat "${beat?.title || "Beat"}" was sold! — MusiClaw`,
-            html: `
-              <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
-                <h1 style="color:#a855f7;font-size:24px;margin:0 0 16px;">Beat Sold!</h1>
-                <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                  Your beat <strong>&ldquo;${beatTitle}&rdquo;</strong> was purchased (${tierLabel}).
-                </p>
-                <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                  Earnings: <strong style="color:#22c55e;">$${payoutAmount.toFixed(2)}</strong> sent to your PayPal.
-                </p>
-                <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">
-                  MusiClaw.app &mdash; Where AI agents find their voice
-                </p>
-              </div>
-            `,
+            html: agentEmailHtml,
           }),
         });
         console.log(`Sale notification sent for purchase ${purchase.id}`);
@@ -390,7 +428,33 @@ serve(async (req) => {
     const recipientEmail = purchase.buyer_email || paypalPayerEmail;
     if (resendApiKey && recipientEmail) {
       try {
-        const beatTitle = htmlEscape(beat?.title || "Beat");
+        const downloadButton = `
+          <a href="${emailDownloadUrl}" style="display:inline-block;background:#22c55e;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:16px 0 8px;">
+            Download${purchase.purchase_tier === "stems" ? " MP3 + Stems" : " Your Beat"}
+          </a>
+          <p style="color:rgba(255,255,255,0.35);font-size:12px;margin:4px 0 0;">
+            This link is permanently available. You can download WAV or MP3.
+          </p>
+        `;
+
+        const buyerEmailHtml = buildInvoiceEmail({
+          invoiceNumber,
+          title: "Purchase Complete!",
+          lineItems: [
+            {
+              description: `${tierLabel}: "${beat?.title || "Beat"}" by @${agent?.handle || "unknown"}`,
+              quantity: 1,
+              unit_price: parseFloat(purchase.amount),
+            },
+          ],
+          total: parseFloat(purchase.amount),
+          paypalOrderId: order_id,
+          date: invoiceDate,
+          accentColor: "#22c55e",
+          extraHtml: downloadButton,
+          footerNote: "Every AI-generated beat includes a commercial license.",
+        });
+
         const emailRes = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
@@ -400,28 +464,8 @@ serve(async (req) => {
           body: JSON.stringify({
             from: "MusiClaw <noreply@contact.musiclaw.app>",
             to: [recipientEmail],
-            subject: `Your beat is ready: ${beatTitle} - MusiClaw`,
-            html: `
-              <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
-                <h1 style="color:#22c55e;font-size:24px;margin:0 0 16px;">Purchase Complete!</h1>
-                <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                  Thank you for your purchase. Your beat <strong>&ldquo;${beatTitle}&rdquo;</strong> is ready to download.
-                </p>
-                <p style="color:rgba(255,255,255,0.5);font-size:13px;">
-                  Package: <strong>${purchase.purchase_tier === "stems" ? "WAV + Stems" : "WAV Track"}</strong>
-                </p>
-                <a href="${emailDownloadUrl}" style="display:inline-block;background:#22c55e;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;margin:20px 0;">
-                  Download${purchase.purchase_tier === "stems" ? " MP3 + Stems" : " Your Beat"}
-                </a>
-                <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:24px;">
-                  This link is permanently available. You can download WAV or MP3.<br/>
-                  Every AI-generated beat includes a commercial license.
-                </p>
-                <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
-                  MusiClaw.app &mdash; Where AI agents find their voice
-                </p>
-              </div>
-            `,
+            subject: `Your beat is ready: ${beat?.title || "Beat"} - MusiClaw`,
+            html: buyerEmailHtml,
           }),
         });
         if (!emailRes.ok) {

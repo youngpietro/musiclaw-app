@@ -9,6 +9,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
 
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
@@ -301,6 +302,8 @@ serve(async (req) => {
       const apiBase =
         Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
 
+      const invoiceId = `MC-GCRED-${Date.now()}-${ownerEmail.replace(/[^a-z0-9]/gi, "").slice(0, 8)}`;
+
       const orderRes = await fetch(`${apiBase}/v2/checkout/orders`, {
         method: "POST",
         headers: {
@@ -312,12 +315,19 @@ serve(async (req) => {
           purchase_units: [
             {
               description: `MusiClaw G-Credits — ${selectedTier.label} (${selectedTier.credits} generation credits)`,
+              invoice_id: invoiceId,
+              custom_id: JSON.stringify({ type: "gcredits", tier: selectedTier.id, owner: ownerEmail }),
               amount: {
                 currency_code: "USD",
                 value: selectedTier.price.toFixed(2),
               },
             },
           ],
+          application_context: {
+            brand_name: "MusiClaw",
+            user_action: "PAY_NOW",
+            shipping_preference: "NO_SHIPPING",
+          },
         }),
       });
 
@@ -501,10 +511,61 @@ serve(async (req) => {
         `G-Credits added: ${purchaseCredits} to owner ${ownerEmail}. New balance: ${finalBalance}`
       );
 
+      // ─── CREATE INVOICE RECORD ──────────────────────────────────────
+      const matchedTier = GCREDIT_TIERS.find(t => t.credits === purchaseCredits) || null;
+      const tierLabel = matchedTier?.label || "Custom";
+      const invoiceDate = new Date().toLocaleDateString("en-US", {
+        year: "numeric", month: "long", day: "numeric",
+      });
+      let invoiceNumber = "N/A";
+      try {
+        const { data: invoiceData } = await supabase.rpc("create_invoice", {
+          p_data: {
+            type: "gcredit_purchase",
+            buyer_email: ownerEmail,
+            amount: String(purchasePrice),
+            line_items: [
+              { description: `${purchaseCredits} G-Credits (${tierLabel} tier)`, quantity: 1, unit_price: purchasePrice },
+            ],
+            paypal_order_id: order_id,
+            paypal_capture_id: capturedPayment?.id || "",
+            gcredit_purchase_id: purchase.id,
+            notes: "1 G-Credit = 1 beat generation (2 beats) or 1 stems call.",
+          },
+        });
+        invoiceNumber = invoiceData?.invoice_number || "N/A";
+        console.log(`Invoice created: ${invoiceNumber} for gcredit purchase ${purchase.id}`);
+      } catch (invErr: unknown) {
+        console.error("Invoice creation error:", (invErr as Error).message);
+      }
+
       // Send confirmation email via Resend
       const resendApiKey = Deno.env.get("RESEND_API_KEY");
       if (resendApiKey && ownerEmail) {
         try {
+          const balanceHtml = `
+            <p style="color:rgba(255,255,255,0.7);margin:12px 0 0;">
+              New balance: <strong style="color:#ff6b35;">${finalBalance} G-Credits</strong>
+            </p>
+            <p style="color:rgba(255,255,255,0.4);font-size:12px;margin:4px 0 0;">
+              All your agents share this G-Credits pool.
+            </p>
+          `;
+
+          const emailHtml = buildInvoiceEmail({
+            invoiceNumber,
+            title: "G-Credits Purchased!",
+            lineItems: [
+              { description: `${purchaseCredits} G-Credits (${tierLabel} tier)`, quantity: 1, unit_price: purchasePrice },
+            ],
+            total: purchasePrice,
+            paypalOrderId: order_id,
+            date: invoiceDate,
+            accentColor: "#ff6b35",
+            extraHtml: balanceHtml,
+            footerNote: "1 G-Credit = 1 beat generation (2 beats) or 1 stems call.",
+          });
+
           await fetch("https://api.resend.com/emails", {
             method: "POST",
             headers: {
@@ -515,25 +576,7 @@ serve(async (req) => {
               from: "MusiClaw <noreply@contact.musiclaw.app>",
               to: [ownerEmail],
               subject: `Receipt: ${purchaseCredits} G-Credits purchased — MusiClaw`,
-              html: `
-                <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
-                  <h1 style="color:#ff6b35;font-size:24px;margin:0 0 16px;">G-Credits Purchased!</h1>
-                  <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                    You purchased <strong>${purchaseCredits} G-Credits</strong> for <strong>$${purchasePrice.toFixed(2)} USD</strong>.
-                  </p>
-                  <p style="color:rgba(255,255,255,0.7);">
-                    New balance: <strong style="color:#ff6b35;">${finalBalance} G-Credits</strong>
-                  </p>
-                  <p style="color:rgba(255,255,255,0.5);font-size:13px;">
-                    All your agents share this G-Credits pool.<br/>
-                    PayPal Order: ${order_id}<br/>
-                    1 G-Credit = 1 beat generation (2 beats) or 1 stems call
-                  </p>
-                  <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">
-                    MusiClaw.app — Where AI agents find their voice
-                  </p>
-                </div>
-              `,
+              html: emailHtml,
             }),
           });
           console.log(`G-Credit purchase email sent to ${ownerEmail}`);
