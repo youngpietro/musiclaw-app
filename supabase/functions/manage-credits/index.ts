@@ -6,6 +6,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
 
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
@@ -122,6 +123,8 @@ serve(async (req) => {
       const accessToken = await getPayPalAccessToken();
       const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
 
+      const invoiceId = `MC-CRED-${Date.now()}-${user.id.slice(0, 8)}`;
+
       const orderRes = await fetch(`${apiBase}/v2/checkout/orders`, {
         method: "POST",
         headers: {
@@ -133,12 +136,19 @@ serve(async (req) => {
           purchase_units: [
             {
               description: `MusiClaw Sample Credits (${CREDIT_PACKAGE_AMOUNT} credits)`,
+              invoice_id: invoiceId,
+              custom_id: JSON.stringify({ type: "credits", user_id: user.id }),
               amount: {
                 currency_code: "USD",
                 value: CREDIT_PACKAGE_PRICE.toFixed(2),
               },
             },
           ],
+          application_context: {
+            brand_name: "MusiClaw",
+            user_action: "PAY_NOW",
+            shipping_preference: "NO_SHIPPING",
+          },
         }),
       });
 
@@ -292,11 +302,57 @@ serve(async (req) => {
       }
       console.log(`Credits added: ${CREDIT_PACKAGE_AMOUNT} to user ${user.id}`);
 
+      // ─── CREATE INVOICE RECORD ──────────────────────────────────────
+      const invoiceDate = new Date().toLocaleDateString("en-US", {
+        year: "numeric", month: "long", day: "numeric",
+      });
+      let invoiceNumber = "N/A";
+      try {
+        const { data: invoiceData } = await supabase.rpc("create_invoice", {
+          p_data: {
+            type: "credit_purchase",
+            buyer_email: user.email || "",
+            amount: String(CREDIT_PACKAGE_PRICE),
+            line_items: [
+              { description: `${CREDIT_PACKAGE_AMOUNT} Sample Credits`, quantity: 1, unit_price: CREDIT_PACKAGE_PRICE },
+            ],
+            paypal_order_id: order_id,
+            paypal_capture_id: capturedPayment?.id || "",
+            credit_purchase_id: creditPurchase.id,
+            notes: "Each credit = 1 sample download.",
+          },
+        });
+        invoiceNumber = invoiceData?.invoice_number || "N/A";
+        console.log(`Invoice created: ${invoiceNumber} for credit purchase ${creditPurchase.id}`);
+      } catch (invErr: unknown) {
+        console.error("Invoice creation error:", (invErr as Error).message);
+      }
+
       // ─── SEND CONFIRMATION EMAIL VIA RESEND ──────────────────────────
       const resendApiKey = Deno.env.get("RESEND_API_KEY");
       const userEmail = user.email;
       if (resendApiKey && userEmail) {
         try {
+          const balanceHtml = `
+            <p style="color:rgba(255,255,255,0.7);margin:12px 0 0;">
+              New balance: <strong style="color:#a855f7;">${newBalance} credits</strong>
+            </p>
+          `;
+
+          const emailHtml = buildInvoiceEmail({
+            invoiceNumber,
+            title: "Credits Purchased!",
+            lineItems: [
+              { description: `${CREDIT_PACKAGE_AMOUNT} Sample Credits`, quantity: 1, unit_price: CREDIT_PACKAGE_PRICE },
+            ],
+            total: CREDIT_PACKAGE_PRICE,
+            paypalOrderId: order_id,
+            date: invoiceDate,
+            accentColor: "#a855f7",
+            extraHtml: balanceHtml,
+            footerNote: "Each credit = 1 sample download.",
+          });
+
           await fetch("https://api.resend.com/emails", {
             method: "POST",
             headers: {
@@ -307,24 +363,7 @@ serve(async (req) => {
               from: "MusiClaw <noreply@contact.musiclaw.app>",
               to: [userEmail],
               subject: `Receipt: ${CREDIT_PACKAGE_AMOUNT} credits purchased — MusiClaw`,
-              html: `
-                <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
-                  <h1 style="color:#a855f7;font-size:24px;margin:0 0 16px;">Credits Purchased!</h1>
-                  <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                    You purchased <strong>${CREDIT_PACKAGE_AMOUNT} credits</strong> for <strong>$${CREDIT_PACKAGE_PRICE.toFixed(2)} USD</strong>.
-                  </p>
-                  <p style="color:rgba(255,255,255,0.7);">
-                    New balance: <strong style="color:#a855f7;">${newBalance} credits</strong>
-                  </p>
-                  <p style="color:rgba(255,255,255,0.5);font-size:13px;">
-                    PayPal Order: ${order_id}<br/>
-                    Each credit = 1 sample download
-                  </p>
-                  <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">
-                    MusiClaw.app &mdash; Where AI agents find their voice
-                  </p>
-                </div>
-              `,
+              html: emailHtml,
             }),
           });
           console.log(`Credit purchase confirmation email sent for user ${user.id}`);

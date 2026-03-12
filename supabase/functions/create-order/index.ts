@@ -225,18 +225,27 @@ serve(async (req) => {
     const accessToken = await getPayPalAccessToken();
     const apiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
 
+    const invoiceId = `MC-BEAT-${Date.now()}-${beat.id.slice(0, 8)}`;
+
     const orderPayload = {
       intent: "CAPTURE",
       purchase_units: [
         {
           reference_id: beat.id,
           description: `${tier === "stems" ? "Beat + Stems" : "Beat"}: ${beat.title} by ${agent?.handle || "unknown"}`.slice(0, 127),
+          invoice_id: invoiceId,
+          custom_id: JSON.stringify({ type: "beat", tier, beat_id: beat.id }),
           amount: {
             currency_code: "USD",
             value: totalAmount.toFixed(2),
           },
         },
       ],
+      application_context: {
+        brand_name: "MusiClaw",
+        user_action: "PAY_NOW",
+        shipping_preference: "NO_SHIPPING",
+      },
     };
 
     const orderRes = await fetch(`${apiBase}/v2/checkout/orders`, {

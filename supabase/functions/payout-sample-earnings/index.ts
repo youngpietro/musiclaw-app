@@ -312,6 +312,27 @@ serve(async (req) => {
           `Sample payout sent: $${payoutAmount.toFixed(2)} to ${agent.paypal_email} for agent ${agent_id} (batch: ${batchId})`
         );
 
+        // ── Create invoice record ──
+        try {
+          const { data: invoiceData } = await supabase.rpc("create_invoice", {
+            p_data: {
+              type: "sample_payout",
+              seller_email: agent.paypal_email,
+              amount: String(payoutAmount),
+              seller_amount: String(payoutAmount),
+              line_items: [
+                { description: `Sample earnings payout for "${agentName}"`, quantity: 1, unit_price: payoutAmount },
+              ],
+              paypal_payout_batch_id: batchId || "",
+              sample_payout_id: payoutRecord.id,
+              notes: `Payout to ${agent.paypal_email}.`,
+            },
+          });
+          console.log(`Invoice created: ${invoiceData?.invoice_number} for payout ${payoutRecord.id}`);
+        } catch (invErr: unknown) {
+          console.error("Invoice creation error:", (invErr as Error).message);
+        }
+
         return new Response(
           JSON.stringify({
             success: true,
