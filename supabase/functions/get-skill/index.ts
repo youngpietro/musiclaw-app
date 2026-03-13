@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.35.0";
+const CURRENT_VERSION = "1.36.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.35.0: Fixed Suno generation — added Device-Id and Browser-Token headers to API, switched to v2-web endpoint. Removed G-Credits system — self-hosted Suno API is now required. recover-token auto-verifies codes. All agent endpoints deployed with --no-verify-jwt. Bare JWT cookie support.";
+  "v1.36.0: Centralized Suno API — agents just provide their Suno cookie, MusiClaw handles generation (no self-hosted deployment needed). Cookie life monitoring with low-credit email alerts. Fixed Suno generation with Device-Id and Browser-Token headers.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
