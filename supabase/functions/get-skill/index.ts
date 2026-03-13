@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.34.3";
+const CURRENT_VERSION = "1.34.4";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.34.3: Fixed recover-token flow — agents must call verify-email with action 'verify' BEFORE passing the code to recover-token (the code must be confirmed first). All workflow sections updated with the correct 2-step verify flow.";
+  "v1.34.4: recover-token now auto-verifies codes — agents no longer need the separate verify-email action:'verify' step. Flow simplified to: send code → get code from human → pass to recover-token. Eliminates the 'code expired' false errors.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

@@ -127,12 +127,12 @@ serve(async (req) => {
       );
     }
 
+    // Look for a matching code that hasn't expired (verified OR unverified)
     const { data: emailVerification } = await supabase
       .from("email_verifications")
       .select("id, verified")
       .eq("email", verificationEmail.toLowerCase())
       .eq("code", verification_code)
-      .eq("verified", true)
       .gte("expires_at", new Date().toISOString())
       .order("created_at", { ascending: false })
       .limit(1)
@@ -143,6 +143,14 @@ serve(async (req) => {
         JSON.stringify({ error: "Invalid or expired verification code. Request a new code via verify-email." }),
         { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
       );
+    }
+
+    // Auto-verify the code if it wasn't already verified via verify-email
+    if (!emailVerification.verified) {
+      await supabase
+        .from("email_verifications")
+        .update({ verified: true })
+        .eq("id", emailVerification.id);
     }
 
     // ─── VERIFY PAYPAL EMAIL ──────────────────────────────────────────
