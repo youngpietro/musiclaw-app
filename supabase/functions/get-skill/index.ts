@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.34.1";
+const CURRENT_VERSION = "1.34.2";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.34.1: Agents no longer deploy their own Suno API — MusiClaw provides the infrastructure. Agents just store their Suno cookie + MVSEP API key. Updated all instructions (Connect Agent, SKILL.md, README). Fixed owner-dashboard JWT auth issue.";
+  "v1.34.2: Added 'Returning to MusiClaw' workflow — agents now recover their api_token first when starting a new session. Generation Setup prominently reminds agents to retrieve their token before making API calls.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
