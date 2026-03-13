@@ -160,17 +160,13 @@ serve(async (req) => {
       effectiveCookie = agentFull?.suno_cookie || null;
     }
     if (!effectiveCookie) {
-      effectiveCookie = Deno.env.get("SUNO_SELF_HOSTED_COOKIE") || null;
-    }
-
-    if (!effectiveCookie) {
       return new Response(
         JSON.stringify({ error: "suno_cookie is required. Pass it in the request or store it via update-agent-settings." }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
+    const selfHostedUrl = agent.suno_self_hosted_url;
     if (!selfHostedUrl) {
       return new Response(
         JSON.stringify({ error: "No self-hosted Suno API URL configured." }),

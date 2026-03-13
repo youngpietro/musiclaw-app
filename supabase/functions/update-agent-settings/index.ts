@@ -295,7 +295,10 @@ serve(async (req) => {
               updateData.suno_plan_verified = true;
               updateData.suno_plan_type = planType;
               updateData.suno_plan_verified_at = new Date().toISOString();
-              changes.push(`suno_plan → ${planType} (verified, monthly_limit: ${monthlyLimit})`);
+              updateData.suno_credits_left = creditsLeft;
+              updateData.suno_monthly_limit = monthlyLimit;
+              updateData.suno_credits_checked_at = new Date().toISOString();
+              changes.push(`suno_plan → ${planType} (verified, monthly_limit: ${monthlyLimit}, credits_left: ${creditsLeft})`);
               planVerified = true;
             } else {
               console.warn(`Suno billing API returned ${billingRes.status} for @${agent.handle}`);
@@ -306,8 +309,7 @@ serve(async (req) => {
           if (!planVerified) {
             const { data: agentUrls } = await supabase
               .from("agents").select("suno_self_hosted_url").eq("id", agent.id).single();
-            const centralizedUrl = Deno.env.get("SUNO_SELF_HOSTED_URL");
-            const verifyUrl = agentUrls?.suno_self_hosted_url || centralizedUrl;
+            const verifyUrl = agentUrls?.suno_self_hosted_url;
 
             if (verifyUrl) {
               const limitRes = await fetch(`${verifyUrl}/api/get_limit`, {
@@ -317,6 +319,7 @@ serve(async (req) => {
               if (limitRes.ok) {
                 const limitData = await limitRes.json();
                 const monthlyLimit = limitData.monthly_limit ?? 0;
+                const creditsLeft = limitData.credits_left ?? 0;
                 let planType = "free";
                 if (monthlyLimit >= 10000) planType = "premier";
                 else if (monthlyLimit >= 2500) planType = "pro";
@@ -335,7 +338,10 @@ serve(async (req) => {
                 updateData.suno_plan_verified = true;
                 updateData.suno_plan_type = planType;
                 updateData.suno_plan_verified_at = new Date().toISOString();
-                changes.push(`suno_plan → ${planType} (verified via suno-api, monthly_limit: ${monthlyLimit})`);
+                updateData.suno_credits_left = creditsLeft;
+                updateData.suno_monthly_limit = monthlyLimit;
+                updateData.suno_credits_checked_at = new Date().toISOString();
+                changes.push(`suno_plan → ${planType} (verified via suno-api, monthly_limit: ${monthlyLimit}, credits_left: ${creditsLeft})`);
                 planVerified = true;
               }
             }
@@ -367,9 +373,9 @@ serve(async (req) => {
     // No email verification needed — not financial data
     if (suno_self_hosted_url !== undefined) {
       if (suno_self_hosted_url === null || suno_self_hosted_url === "") {
-        // Allow clearing the URL (fall back to centralized)
+        // Allow clearing the URL — agent must set one before generating
         updateData.suno_self_hosted_url = null;
-        changes.push("suno_self_hosted_url → cleared (will use centralized, costs G-Credits)");
+        changes.push("suno_self_hosted_url → cleared (you must set a URL to generate beats)");
       } else if (typeof suno_self_hosted_url === "string") {
         const cleanUrl = suno_self_hosted_url.trim().slice(0, 256);
         // Must be HTTPS
@@ -389,7 +395,7 @@ serve(async (req) => {
         }
         // Remove trailing slash
         updateData.suno_self_hosted_url = cleanUrl.replace(/\/+$/, "");
-        changes.push(`suno_self_hosted_url → ${updateData.suno_self_hosted_url} (your own instance — no G-Credits needed)`);
+        changes.push(`suno_self_hosted_url → ${updateData.suno_self_hosted_url} (your self-hosted instance, required for generation)`);
       } else {
         return new Response(
           JSON.stringify({ error: "Invalid suno_self_hosted_url format. Must be an HTTPS URL." }),

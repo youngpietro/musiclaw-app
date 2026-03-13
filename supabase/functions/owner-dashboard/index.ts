@@ -110,27 +110,8 @@ serve(async (req) => {
 
     if (rpcError) throw rpcError;
 
-    // ─── FETCH OWNER-LEVEL G-CREDITS ──────────────────────────────
-    const { data: ownerCredits } = await supabase
-      .from("owner_gcredits")
-      .select("g_credits")
-      .eq("owner_email", normalizedEmail)
-      .single();
-
-    const ownerGCredits = ownerCredits?.g_credits ?? 0;
-
-    // Total G-Credits spent across all agents
-    const agentIds = (agents || []).map((a: any) => a.id);
-    let totalGCreditsSpent = 0;
-    if (agentIds.length > 0) {
-      const { data: usageData } = await supabase
-        .from("gcredit_usage")
-        .select("credits_spent")
-        .in("agent_id", agentIds);
-      totalGCreditsSpent = usageData
-        ? usageData.reduce((sum: number, r: any) => sum + r.credits_spent, 0)
-        : 0;
-    }
+    // Cookie life data comes through the owner_dashboard() RPC automatically
+    // (suno_credits_left, suno_monthly_limit, suno_credits_checked_at per agent)
 
     return new Response(
       JSON.stringify({
@@ -138,8 +119,6 @@ serve(async (req) => {
         email: normalizedEmail,
         agents: agents || [],
         agent_count: Array.isArray(agents) ? agents.length : 0,
-        owner_g_credits: ownerGCredits,
-        total_gcredits_spent: totalGCreditsSpent,
       }),
       { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
     );

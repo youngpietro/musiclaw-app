@@ -299,7 +299,7 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_self_hosted_url, g_credits, owner_email";
+    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_self_hosted_url, owner_email";
     let { data: agent } = await supabase.from("agents").select(agentCols).eq("api_token_hash", tokenHash).single();
     if (!agent) {
       const { data: fallback } = await supabase.from("agents").select(agentCols).eq("api_token", token).single();
@@ -620,18 +620,18 @@ serve(async (req) => {
     // ─── CALL SUNO API ───────────────────────────────────────────────
     let clipIds: string[] = [];
     let clipData: any[] = [];
-    let useCentralized = false;
-    let gcreditDeducted = false;
 
     {
-      // Per-agent URL: agent's own instance → FREE, centralized → costs G-Credits
-      const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
-      useCentralized = !agent.suno_self_hosted_url && !!Deno.env.get("SUNO_SELF_HOSTED_URL");
+      // Agent MUST have their own self-hosted Suno API instance
+      const selfHostedUrl = agent.suno_self_hosted_url;
 
       if (!selfHostedUrl) {
         return new Response(
-          JSON.stringify({ error: "No Suno API available. Set your own instance via update-agent-settings (suno_self_hosted_url), or the platform will use the centralized instance (costs G-Credits)." }),
-          { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
+          JSON.stringify({
+            error: "suno_self_hosted_url is required. Deploy gcui-art/suno-api and set your URL via update-agent-settings.",
+            action: "POST /functions/v1/update-agent-settings with {\"suno_self_hosted_url\":\"https://your-suno.up.railway.app\"}",
+          }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
 
@@ -693,57 +693,50 @@ serve(async (req) => {
         );
       }
 
-      // ─── G-CREDIT DEDUCTION (centralized only, per-email pool) ─────
-      if (useCentralized) {
-        const creditOwnerEmail = agent.owner_email?.trim().toLowerCase();
-        if (!creditOwnerEmail) {
-          return new Response(
-            JSON.stringify({ error: "Agent has no owner_email set. Register with an email first." }),
-            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-        const { data: newBal, error: gcErr } = await supabase.rpc("deduct_owner_gcredits", {
-          p_email: creditOwnerEmail, p_amount: 1,
+      // ─── COOKIE LIFE TRACKING (fire-and-forget) ──────────────────
+      let cookieHealth: { credits_left: number | null; monthly_limit: number | null; plan_type: string } | null = null;
+      try {
+        const limitRes = await fetch(`${selfHostedUrl}/api/get_limit`, {
+          method: "GET",
+          headers: { "X-Suno-Cookie": effectiveSunoCookie },
         });
-        if (gcErr) {
-          // Get current balance for error message
-          const { data: ownerCr } = await supabase.from("owner_gcredits").select("g_credits").eq("owner_email", creditOwnerEmail).single();
-          console.warn(`G-Credit deduction failed for @${agent.handle} (owner: ${creditOwnerEmail}): ${gcErr.message}`);
-          return new Response(
-            JSON.stringify({
-              error: "Insufficient G-Credits. You need 1 G-Credit to generate on the centralized Suno API.",
-              g_credits: ownerCr?.g_credits ?? 0,
-              owner_email: creditOwnerEmail,
-              buy: "POST /functions/v1/manage-gcredits with {\"action\":\"buy\"} — $5 = 50 G-Credits",
-              alternative: "Set your own suno_self_hosted_url via update-agent-settings (free, no G-Credits needed)",
-            }),
-            { status: 402, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-        gcreditDeducted = true;
-        console.log(`G-Credit deducted: 1 from owner ${creditOwnerEmail} via @${agent.handle} (balance: ${newBal})`);
+        if (limitRes.ok) {
+          const ld = await limitRes.json();
+          const ml = ld.monthly_limit ?? ld.data?.monthly_limit ?? null;
+          const cl = ld.credits_left ?? ld.data?.credits_left ?? null;
+          let pt = planData?.suno_plan_type || "unknown";
+          if (ml !== null) {
+            if (ml >= 10000) pt = "premier";
+            else if (ml >= 2500) pt = "pro";
+          }
+          cookieHealth = { credits_left: cl, monthly_limit: ml, plan_type: pt };
 
-        // ─── LOW-CREDIT EMAIL NOTIFICATION (fire-and-forget) ────────
-        if (newBal === 0 || newBal <= 0) {
-          const resendApiKey = Deno.env.get("RESEND_API_KEY");
-          if (resendApiKey && creditOwnerEmail) {
-            try {
-              await fetch("https://api.resend.com/emails", {
+          // Store on agents table (fire-and-forget)
+          supabase.from("agents").update({
+            suno_credits_left: cl,
+            suno_monthly_limit: ml,
+            suno_credits_checked_at: new Date().toISOString(),
+          }).eq("id", agent.id).then(() => {});
+
+          // Low-credit email notification to owner
+          if (cl !== null && cl < 100 && agent.owner_email) {
+            const resendApiKey = Deno.env.get("RESEND_API_KEY");
+            if (resendApiKey) {
+              fetch("https://api.resend.com/emails", {
                 method: "POST",
                 headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({
                   from: "MusiClaw <noreply@contact.musiclaw.app>",
-                  to: [creditOwnerEmail],
-                  subject: `Your G-Credits are empty — MusiClaw`,
-                  html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#ff6b35;font-size:24px;margin:0 0 16px;">G-Credits Empty!</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your agent <strong>@${agent.handle}</strong> has used all its G-Credits. Top up to continue generating beats on MusiClaw's centralized Suno API.</p><a href="https://musiclaw.app" style="display:inline-block;background:linear-gradient(135deg,#ff6b35,#e11d48);color:#fff;padding:14px 28px;border-radius:12px;text-decoration:none;font-weight:700;margin-top:16px;">Top Up G-Credits</a><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`
+                  to: [agent.owner_email.trim().toLowerCase()],
+                  subject: `Low Suno credits for @${agent.handle} — ${cl} remaining`,
+                  html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#f59e0b;font-size:24px;margin:0 0 16px;">⚠️ Low Suno Credits</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your agent <strong>@${agent.handle}</strong> has <strong>${cl} Suno credits</strong> remaining out of ${ml} monthly. When credits run out, beat generation will fail until your Suno plan renews.</p><p style="color:rgba(255,255,255,0.4);font-size:12px;margin-top:16px;">Plan: ${pt.toUpperCase()} · Cookie last checked: just now</p><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`,
                 }),
-              });
-              console.log(`Low-credits email sent to ${creditOwnerEmail} for agent @${agent.handle}`);
-            } catch (emailErr) {
-              console.error("Low-credits email error:", (emailErr as Error).message);
+              }).catch(() => {});
             }
           }
         }
+      } catch (e: any) {
+        console.warn(`Cookie life check failed for @${agent.handle}: ${e.message}`);
       }
 
       const selfHostedPayload = {
@@ -780,18 +773,11 @@ serve(async (req) => {
           || fetchErr.message?.includes("DNS") || fetchErr.message?.includes("NetworkError");
         console.warn(`Self-hosted Suno fetch error for @${agent.handle}: ${fetchErr.name}: ${fetchErr.message}`);
 
-        // Refund G-Credit
-        if (gcreditDeducted) {
-          await supabase.rpc("add_owner_gcredits", { p_email: agent.owner_email?.trim().toLowerCase(), p_amount: 1 });
-          console.log(`G-Credit refunded to @${agent.handle} (fetch error)`);
-        }
-
         if (isTimeout) {
           return new Response(
             JSON.stringify({
               error: "Self-hosted Suno API did not respond within 120 seconds.",
               error_type: "TIMEOUT",
-              gcredit_refunded: gcreditDeducted,
               possible_causes: [
                 "The Suno API server may be cold-starting (first request after idle) — try again in 1-2 minutes",
                 "Suno.com may be experiencing high load or downtime",
@@ -808,7 +794,6 @@ serve(async (req) => {
             JSON.stringify({
               error: "Could not reach the self-hosted Suno API server.",
               error_type: "NETWORK_ERROR",
-              gcredit_refunded: gcreditDeducted,
               detail: fetchErr.message,
               possible_causes: [
                 "The Suno API server may be down or restarting",
@@ -824,7 +809,6 @@ serve(async (req) => {
           JSON.stringify({
             error: "Failed to connect to self-hosted Suno API.",
             error_type: "FETCH_ERROR",
-            gcredit_refunded: gcreditDeducted,
             detail: fetchErr.message,
             action: "Try again. If the error persists, your suno_cookie may need updating via update-agent-settings.",
           }),
@@ -838,12 +822,6 @@ serve(async (req) => {
         const errStr = typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg);
         console.warn(`Self-hosted Suno error for @${agent.handle}: ${selfHostedRes.status} — ${errStr}`);
 
-        // Refund G-Credit if we charged for centralized
-        if (gcreditDeducted) {
-          await supabase.rpc("add_owner_gcredits", { p_email: agent.owner_email?.trim().toLowerCase(), p_amount: 1 });
-          console.log(`G-Credit refunded to @${agent.handle} (generation failed)`);
-        }
-
         // ─── ERROR CLASSIFICATION ────────────────────────────────────
         // 1. Browser automation timeout (Playwright/Puppeteer locator timeout)
         const isBrowserTimeout = errStr.includes("TimeoutError") && (
@@ -855,7 +833,6 @@ serve(async (req) => {
             JSON.stringify({
               error: "Suno's website took too long to respond to the generation request.",
               error_type: "SUNO_UI_TIMEOUT",
-              gcredit_refunded: gcreditDeducted,
               suno_error: errStr,
               possible_causes: [
                 "Suno.com may be experiencing high load or temporary issues",
@@ -881,7 +858,6 @@ serve(async (req) => {
             JSON.stringify({
               error: "Your Suno cookie has expired or is invalid. The session is no longer active.",
               error_type: "COOKIE_EXPIRED",
-              gcredit_refunded: gcreditDeducted,
               action: "Log into suno.com, open DevTools → Application → Cookies, copy a fresh cookie, and call update-agent-settings with the new suno_cookie.",
               action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie",
             }),
@@ -898,7 +874,6 @@ serve(async (req) => {
             JSON.stringify({
               error: "Suno rejected the generation due to content policy.",
               error_type: "CONTENT_POLICY",
-              gcredit_refunded: gcreditDeducted,
               suno_error: errStr,
               action: "Change your title and/or style tags to avoid restricted content (artist names, copyrighted references, etc.) and try again.",
             }),
@@ -914,7 +889,6 @@ serve(async (req) => {
             JSON.stringify({
               error: "Suno's servers are rate-limiting requests. Too many generations in a short period.",
               error_type: "SUNO_RATE_LIMIT",
-              gcredit_refunded: gcreditDeducted,
               action: "Wait 5-10 minutes before trying again.",
             }),
             { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
@@ -928,7 +902,6 @@ serve(async (req) => {
             error_type: "SUNO_API_ERROR",
             suno_status: selfHostedRes.status,
             suno_error: errStr,
-            gcredit_refunded: gcreditDeducted,
             action: "If this persists, try updating your suno_cookie via update-agent-settings. The cookie may need refreshing.",
           }),
           { status: selfHostedRes.status >= 400 ? selfHostedRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }
@@ -954,14 +927,6 @@ serve(async (req) => {
       }
       clipData = clips;
 
-      // Log G-Credit usage if centralized
-      if (gcreditDeducted) {
-        await supabase.from("gcredit_usage").insert({
-          agent_id: agent.id,
-          action: "generate",
-          credits_spent: 1,
-        });
-      }
     }
 
     // ─── CREATE BEAT RECORDS ───────────────────────────────────────────
@@ -1056,8 +1021,8 @@ serve(async (req) => {
         success: true,
         task_id: clipIds[0] || null,
         generation_source: "selfhosted",
-        ...(useCentralized ? { used_centralized: true, g_credits_note: "G-Credits are shared across all your agents" } : { used_centralized: false }),
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
+        cookie_health: cookieHealth,
         genre_normalized: finalGenre !== genre ? `"${genre}" → "${finalGenre}"${finalGenre !== normalizedGenre ? " (style-inferred)" : ""}` : undefined,
         beats: beatRecords.map((b) => ({
           id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre,
@@ -1068,43 +1033,15 @@ serve(async (req) => {
           const completedCount = beatRecords.filter((b: any) => b.status === "complete").length;
           const total = beatRecords.length;
           if (completedCount === total) {
-            return useCentralized
-              ? `${total} beat(s) generated and ready on MusiClaw (1 G-Credit used). Audio is live!`
-              : `${total} beat(s) generated and ready on MusiClaw (free, self-hosted). Audio is live!`;
+            return `${total} beat(s) generated and ready on MusiClaw. Audio is live!`;
           }
-          return useCentralized
-            ? "Generating via MusiClaw's centralized Suno API (1 G-Credit used). Use poll-suno to check status."
-            : "Generating via your self-hosted Suno instance (free). Use poll-suno to check status.";
+          return "Generating via your self-hosted Suno instance. Use poll-suno to check status.";
         })(),
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
     );
   } catch (err: any) {
     console.error("Generate error:", err.name, err.message);
-
-    // Best-effort G-Credit refund on unexpected errors
-    // (gcreditDeducted is in scope from the try block)
-    try {
-      // @ts-ignore — gcreditDeducted may be in scope if the error happened after deduction
-      if (typeof gcreditDeducted !== "undefined" && gcreditDeducted) {
-        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        const sb = createClient(supabaseUrl, supabaseKey);
-        // Try to find the agent to get owner_email
-        const tokenHeader = req.headers.get("authorization")?.replace("Bearer ", "");
-        if (tokenHeader) {
-          const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(tokenHeader));
-          const hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
-          const { data: ag } = await sb.from("agents").select("owner_email").eq("api_token_hash", hash).single();
-          if (ag?.owner_email) {
-            await sb.rpc("add_owner_gcredits", { p_email: ag.owner_email.trim().toLowerCase(), p_amount: 1 });
-            console.log(`G-Credit refunded (catch block) for owner ${ag.owner_email}`);
-          }
-        }
-      }
-    } catch (refundErr) {
-      console.error("G-Credit refund in catch block failed:", (refundErr as Error).message);
-    }
 
     return new Response(
       JSON.stringify({
