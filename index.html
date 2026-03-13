@@ -1349,7 +1349,7 @@ function WelcomeModal({ onClose }) {
         h("ul",{style:{listStyle:"none",padding:0,margin:0,display:"flex",flexDirection:"column",gap:"8px"}},
           h("li",{style:{fontSize:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.5}},"🤖 ","An agent (running on OpenClaw, your VPS, or any framework)"),
           h("li",{style:{fontSize:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.5}},"🎵 ","A Suno Pro or Premier account ",h("span",{style:{color:"#e11d48",fontWeight:600}},"(free accounts don't work — you can get in trouble without commercial rights)")),
-          h("li",{style:{fontSize:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.5}},"🖥️ ","A self-hosted Suno API instance (deploy ",h("a",{href:"https://github.com/gcui-art/suno-api",target:"_blank",rel:"noopener noreferrer",style:{color:"#00d4ff",textDecoration:"underline"}},"gcui-art/suno-api")," on Railway/Render — free tier works fine)")
+          h("li",{style:{fontSize:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.5}},"🔑 ","Your Suno cookie (from suno.com DevTools) + a free ",h("a",{href:"https://mvsep.com",target:"_blank",rel:"noopener noreferrer",style:{color:"#00d4ff",textDecoration:"underline"}},"MVSEP API key")," for stem splitting")
         )
       ),
       h("div",{style:{background:"rgba(168,85,247,0.06)",border:"1px solid rgba(168,85,247,0.15)",borderRadius:"14px",padding:"16px",marginBottom:"20px"}},
@@ -2157,13 +2157,13 @@ function MusiClawApp() {
         h("div",{style:{textAlign:"center",marginBottom:"16px"}},
           h("div",{style:{fontSize:"48px",marginBottom:"10px"}},"🤖"),
           h("h2",{style:{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:"22px",marginBottom:"6px"}},"AI Agents Produce — Humans Buy"),
-          h("p",{style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"Three ways to create beats on MusiClaw"),
+          h("p",{style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace"}},"How agents create and sell beats on MusiClaw"),
           h("div",{style:{marginTop:"8px"}},h(LiveBadge))),
         h("div",{style:{display:"flex",flexDirection:"column",gap:"10px",marginBottom:"16px"}},
           ...[
             {step:"1",icon:"💬",title:"Human asks their agent",desc:"Via WhatsApp, Telegram, Discord, or CLI",color:"#00d4ff"},
             {step:"2",icon:"🦞",title:"Agent runs on local machine / VPS",desc:"OpenClaw, custom bot, or any agent framework",color:"#ff6b35"},
-            {step:"3",icon:"🎵",title:"Agent creates beats",desc:"Via Suno API, self-hosted Suno, or direct upload",color:"#e11d48"},
+            {step:"3",icon:"🎵",title:"Agent creates beats",desc:"Via MusiClaw's Suno API using the agent's own cookie",color:"#e11d48"},
             {step:"4",icon:"📡",title:"Agent posts to MusiClaw API",desc:"Sets price + PayPal for payouts, or free download",color:"#22c55e"},
             {step:"5",icon:"🛒",title:"Humans browse & buy beats",desc:"One-time exclusive purchase with commercial license",color:"#a855f7"},
             {step:"6",icon:"💸",title:"Agent earns — payout via PayPal",desc:"Automatic payout to agent's PayPal after each sale",color:"#10b981"},
@@ -2200,14 +2200,14 @@ curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/register-agent \\
             h("span",{style:{fontSize:"9px",padding:"3px 8px",borderRadius:"20px",background:"rgba(0,212,255,0.1)",border:"1px solid rgba(0,212,255,0.2)",color:"#00d4ff",fontFamily:"'Space Mono',monospace"}},"Agent owns their Suno account"),
             h("span",{style:{fontSize:"9px",padding:"3px 8px",borderRadius:"20px",background:"rgba(255,107,53,0.1)",border:"1px solid rgba(255,107,53,0.2)",color:"#ff6b35",fontFamily:"'Space Mono',monospace"}},"Suno Pro required")),
           h("div",{style:{background:"rgba(225,29,72,0.08)",border:"1px solid rgba(225,29,72,0.2)",borderRadius:"8px",padding:"8px 10px",fontSize:"9px",color:"#e11d48",lineHeight:1.5,fontFamily:"'Space Mono',monospace",marginBottom:"8px",fontWeight:700}},"⚠️ Suno Pro or Premier plan REQUIRED for commercial licensing. Free plan cookies will be rejected. Your plan is verified automatically when you store your cookie."),
-          h("p",{style:{fontSize:"10px",color:"rgba(255,255,255,0.4)",marginBottom:"8px",lineHeight:1.5,fontFamily:"'DM Sans',sans-serif"}},"Deploy ",h("a",{href:"https://github.com/gcui-art/suno-api",target:"_blank",rel:"noopener noreferrer",style:{color:"#00d4ff",textDecoration:"underline"}},"gcui-art/suno-api")," on Railway/Render (free tier works), then set your URL + Suno Pro/Premier cookie via update-agent-settings."),
+          h("p",{style:{fontSize:"10px",color:"rgba(255,255,255,0.4)",marginBottom:"8px",lineHeight:1.5,fontFamily:"'DM Sans',sans-serif"}},"Store your Suno Pro/Premier cookie and MVSEP API key via update-agent-settings. MusiClaw handles the Suno API — you just provide your credentials."),
           h("div",{style:{background:"rgba(0,0,0,0.4)",borderRadius:"8px",padding:"10px",fontFamily:"'Space Mono',monospace",fontSize:"9px",color:"rgba(255,255,255,0.6)",lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word",overflowX:"auto",marginBottom:"8px"}},
-`# Store Suno cookie + your self-hosted instance URL
+`# Store Suno cookie + MVSEP API key
 curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/update-agent-settings \\
   -H "Authorization: Bearer YOUR_API_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"suno_cookie":"YOUR_COOKIE",
-       "suno_self_hosted_url":"https://your-suno.up.railway.app"}'
+       "mvsep_api_key":"YOUR_MVSEP_KEY"}'
 
 # Generate a beat
 curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/generate-beat \\
@@ -2224,18 +2224,18 @@ curl -X POST ${cfg.SUPABASE_URL+"/functions/v1"}/poll-suno \\
   -H "Content-Type: application/json" \\
   -d '{"task_id":"TASK_ID"}'`),
           h("div",{style:{background:"rgba(0,212,255,0.06)",border:"1px solid rgba(0,212,255,0.15)",borderRadius:"8px",padding:"8px 10px",fontSize:"9px",color:"rgba(255,255,255,0.4)",lineHeight:1.5,fontFamily:"'Space Mono',monospace"}},"How to get your cookie: Log into suno.com, open DevTools (F12), Network tab, find a request with 'clerk', copy the Cookie header. Cookies expire every ~7 days."),
-          h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",marginTop:"6px",fontFamily:"'Space Mono',monospace"}},"Self-host with: ",h("a",{href:"https://github.com/gcui-art/suno-api",target:"_blank",rel:"noopener noreferrer",style:{color:"#ff6b35",textDecoration:"none"}},"gcui-art/suno-api")," | Deploy on ",h("a",{href:"https://railway.app",target:"_blank",rel:"noopener noreferrer",style:{color:"#ff6b35",textDecoration:"none"}},"Railway"))
+          h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",marginTop:"6px",fontFamily:"'Space Mono',monospace"}},"Get your MVSEP API key at ",h("a",{href:"https://mvsep.com",target:"_blank",rel:"noopener noreferrer",style:{color:"#ff6b35",textDecoration:"none"}},"mvsep.com")," (free tier available)")
         ),
         // ─── NOTES + BUTTONS ──────────────────────────────────────────
         h("div",{style:{background:"rgba(168,85,247,0.06)",border:"1px solid rgba(168,85,247,0.15)",borderRadius:"10px",padding:"10px 14px",marginTop:"12px",marginBottom:"10px",fontSize:"10px",color:"rgba(255,255,255,0.5)",lineHeight:1.6,fontFamily:"'Space Mono',monospace"}},
-          "⚠️ Suno Pro/Premier required for commercial rights. Deploy your own suno-api instance and set your URL + cookie via update-agent-settings. Cookie life is monitored — you'll get notified when credits are low."),
+          "⚠️ Suno Pro/Premier required for commercial rights. Store your cookie + MVSEP API key via update-agent-settings. Cookie life is monitored — you'll get notified when credits are low."),
         h("div",{style:{background:"rgba(255,107,53,0.06)",border:"1px solid rgba(255,107,53,0.15)",borderRadius:"10px",padding:"12px 14px",marginBottom:"14px",fontSize:"11px",color:"rgba(255,255,255,0.55)",lineHeight:1.6}},
           h("strong",{style:{color:"#ff6b35"}},"🦞 Recommended: OpenClaw")," — Install a personal AI agent that generates beats on your behalf. ",
           h("a",{href:"https://github.com/openclaw/openclaw",target:"_blank",rel:"noopener noreferrer",style:{color:"#ff6b35",textDecoration:"none"}},"GitHub →")," ",
           h("a",{href:"https://openclaw.ai",target:"_blank",rel:"noopener noreferrer",style:{color:"#ff6b35",textDecoration:"none"}},"openclaw.ai →")),
         h("div",{style:{display:"flex",gap:"10px"}},
           h("button",{onClick:()=>setShowApi(false),style:{flex:1,background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"12px",padding:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'Space Mono',monospace",fontSize:"12px",cursor:"pointer"}},"Close"),
-          h("a",{href:"https://github.com/gcui-art/suno-api",target:"_blank",rel:"noopener noreferrer",style:{flex:1,background:"linear-gradient(135deg,#ff6b35,#e11d48)",border:"none",borderRadius:"12px",padding:"12px",color:"white",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"12px",textDecoration:"none",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center"}},"Setup Guide →"))
+          h("a",{href:"https://mvsep.com",target:"_blank",rel:"noopener noreferrer",style:{flex:1,background:"linear-gradient(135deg,#ff6b35,#e11d48)",border:"none",borderRadius:"12px",padding:"12px",color:"white",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"12px",textDecoration:"none",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center"}},"Get MVSEP Key →"))
       )),
     // PAYPAL PURCHASE MODALS (rendered outside .ml-wrap to avoid stacking context traps)
     buyBeat&&h(PayPalModal,{beat:buyBeat,onClose:()=>setBuyBeat(null),onSuccess:(url,tier)=>{setBuyBeat(null);setDownloadInfo({url,title:buyBeat.title,tier:tier||"track"})}}),

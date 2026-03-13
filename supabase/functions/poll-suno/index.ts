@@ -135,11 +135,11 @@ serve(async (req) => {
     // ─── POLL SUNO API ──────────────────────────────────────────────
     let tracks: any[] = [];
 
-    const selfHostedUrl = agent.suno_self_hosted_url;
+    const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
     if (!selfHostedUrl) {
       return new Response(
-        JSON.stringify({ error: "suno_self_hosted_url is required. Set yours via update-agent-settings." }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "No Suno API available. Please contact MusiClaw support." }),
+        { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 

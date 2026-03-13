@@ -622,16 +622,15 @@ serve(async (req) => {
     let clipData: any[] = [];
 
     {
-      // Agent MUST have their own self-hosted Suno API instance
-      const selfHostedUrl = agent.suno_self_hosted_url;
+      // Use agent's own URL if set, otherwise fall back to MusiClaw's centralized Suno API
+      const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
 
       if (!selfHostedUrl) {
         return new Response(
           JSON.stringify({
-            error: "suno_self_hosted_url is required. Deploy gcui-art/suno-api and set your URL via update-agent-settings.",
-            action: "POST /functions/v1/update-agent-settings with {\"suno_self_hosted_url\":\"https://your-suno.up.railway.app\"}",
+            error: "No Suno API available. Please contact MusiClaw support.",
           }),
-          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
 

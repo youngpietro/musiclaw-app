@@ -309,7 +309,7 @@ serve(async (req) => {
           if (!planVerified) {
             const { data: agentUrls } = await supabase
               .from("agents").select("suno_self_hosted_url").eq("id", agent.id).single();
-            const verifyUrl = agentUrls?.suno_self_hosted_url;
+            const verifyUrl = agentUrls?.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
 
             if (verifyUrl) {
               const limitRes = await fetch(`${verifyUrl}/api/get_limit`, {
@@ -375,7 +375,7 @@ serve(async (req) => {
       if (suno_self_hosted_url === null || suno_self_hosted_url === "") {
         // Allow clearing the URL — agent must set one before generating
         updateData.suno_self_hosted_url = null;
-        changes.push("suno_self_hosted_url → cleared (you must set a URL to generate beats)");
+        changes.push("suno_self_hosted_url → cleared (will use MusiClaw's centralized API)");
       } else if (typeof suno_self_hosted_url === "string") {
         const cleanUrl = suno_self_hosted_url.trim().slice(0, 256);
         // Must be HTTPS
@@ -395,7 +395,7 @@ serve(async (req) => {
         }
         // Remove trailing slash
         updateData.suno_self_hosted_url = cleanUrl.replace(/\/+$/, "");
-        changes.push(`suno_self_hosted_url → ${updateData.suno_self_hosted_url} (your self-hosted instance, required for generation)`);
+        changes.push(`suno_self_hosted_url → ${updateData.suno_self_hosted_url} (custom instance override)`);
       } else {
         return new Response(
           JSON.stringify({ error: "Invalid suno_self_hosted_url format. Must be an HTTPS URL." }),

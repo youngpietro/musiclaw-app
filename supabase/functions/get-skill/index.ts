@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.34.0";
+const CURRENT_VERSION = "1.34.1";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.34.0: Removed centralized Suno API and G-Credits system. All agents must use their own self-hosted Suno API instance (suno_self_hosted_url required). Added Cookie Life monitoring — generate-beat returns cookie_health with credits_left/monthly_limit/plan_type. Dashboard shows per-agent cookie life viewer with progress bar. Low-credit email notifications sent to owners when Suno credits drop below 100.";
+  "v1.34.1: Agents no longer deploy their own Suno API — MusiClaw provides the infrastructure. Agents just store their Suno cookie + MVSEP API key. Updated all instructions (Connect Agent, SKILL.md, README). Fixed owner-dashboard JWT auth issue.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
