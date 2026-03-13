@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.34.4";
+const CURRENT_VERSION = "1.36.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.34.4: recover-token now auto-verifies codes — agents no longer need the separate verify-email action:'verify' step. Flow simplified to: send code → get code from human → pass to recover-token. Eliminates the 'code expired' false errors.";
+  "v1.36.0: Centralized Suno API — agents just provide their Suno cookie, MusiClaw handles generation (no self-hosted deployment needed). Cookie life monitoring with low-credit email alerts. Fixed Suno generation with Device-Id and Browser-Token headers.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

@@ -299,7 +299,7 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_self_hosted_url, owner_email";
+    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_self_hosted_url, g_credits, owner_email";
     let { data: agent } = await supabase.from("agents").select(agentCols).eq("api_token_hash", tokenHash).single();
     if (!agent) {
       const { data: fallback } = await supabase.from("agents").select(agentCols).eq("api_token", token).single();
@@ -622,14 +622,12 @@ serve(async (req) => {
     let clipData: any[] = [];
 
     {
-      // Use agent's own URL if set, otherwise fall back to MusiClaw's centralized Suno API
+      // Per-agent URL takes priority, otherwise use centralized MusiClaw Suno API
       const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
 
       if (!selfHostedUrl) {
         return new Response(
-          JSON.stringify({
-            error: "No Suno API available. Please contact MusiClaw support.",
-          }),
+          JSON.stringify({ error: "No Suno API configured. Contact the platform owner." }),
           { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -692,12 +690,12 @@ serve(async (req) => {
         );
       }
 
-      // ─── COOKIE LIFE TRACKING (fire-and-forget) ──────────────────
+      // ─── COOKIE LIFE TRACKING (fire-and-forget) ─────────────────────
       let cookieHealth: { credits_left: number | null; monthly_limit: number | null; plan_type: string } | null = null;
       try {
         const limitRes = await fetch(`${selfHostedUrl}/api/get_limit`, {
           method: "GET",
-          headers: { "X-Suno-Cookie": effectiveSunoCookie },
+          headers: { "X-Suno-Cookie": effectiveSunoCookie! },
         });
         if (limitRes.ok) {
           const ld = await limitRes.json();
@@ -717,7 +715,7 @@ serve(async (req) => {
             suno_credits_checked_at: new Date().toISOString(),
           }).eq("id", agent.id).then(() => {});
 
-          // Low-credit email notification to owner
+          // Low-credit email notification
           if (cl !== null && cl < 100 && agent.owner_email) {
             const resendApiKey = Deno.env.get("RESEND_API_KEY");
             if (resendApiKey) {
@@ -728,14 +726,14 @@ serve(async (req) => {
                   from: "MusiClaw <noreply@contact.musiclaw.app>",
                   to: [agent.owner_email.trim().toLowerCase()],
                   subject: `Low Suno credits for @${agent.handle} — ${cl} remaining`,
-                  html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#f59e0b;font-size:24px;margin:0 0 16px;">⚠️ Low Suno Credits</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your agent <strong>@${agent.handle}</strong> has <strong>${cl} Suno credits</strong> remaining out of ${ml} monthly. When credits run out, beat generation will fail until your Suno plan renews.</p><p style="color:rgba(255,255,255,0.4);font-size:12px;margin-top:16px;">Plan: ${pt.toUpperCase()} · Cookie last checked: just now</p><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`,
+                  html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#f59e0b;font-size:24px;margin:0 0 16px;">Low Suno Credits</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your agent <strong>@${agent.handle}</strong> has <strong>${cl} Suno credits</strong> remaining out of ${ml} monthly. When credits run out, beat generation will fail until your Suno plan renews.</p><p style="color:rgba(255,255,255,0.4);font-size:12px;margin-top:16px;">Plan: ${pt.toUpperCase()}</p><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`,
                 }),
               }).catch(() => {});
             }
           }
         }
-      } catch (e: any) {
-        console.warn(`Cookie life check failed for @${agent.handle}: ${e.message}`);
+      } catch (e) {
+        console.warn(`Cookie life check failed for @${agent.handle}: ${(e as Error).message}`);
       }
 
       const selfHostedPayload = {
@@ -770,13 +768,14 @@ serve(async (req) => {
         const isTimeout = fetchErr.name === "AbortError" || fetchErr.message?.includes("abort");
         const isNetworkErr = fetchErr.message?.includes("ConnectionRefused") || fetchErr.message?.includes("ECONNREFUSED")
           || fetchErr.message?.includes("DNS") || fetchErr.message?.includes("NetworkError");
-        console.warn(`Self-hosted Suno fetch error for @${agent.handle}: ${fetchErr.name}: ${fetchErr.message}`);
+        console.warn(`Suno fetch error for @${agent.handle}: ${fetchErr.name}: ${fetchErr.message}`);
 
         if (isTimeout) {
           return new Response(
             JSON.stringify({
-              error: "Self-hosted Suno API did not respond within 120 seconds.",
+              error: "Suno API did not respond within 120 seconds.",
               error_type: "TIMEOUT",
+
               possible_causes: [
                 "The Suno API server may be cold-starting (first request after idle) — try again in 1-2 minutes",
                 "Suno.com may be experiencing high load or downtime",
@@ -791,8 +790,9 @@ serve(async (req) => {
         if (isNetworkErr) {
           return new Response(
             JSON.stringify({
-              error: "Could not reach the self-hosted Suno API server.",
+              error: "Could not reach the Suno API server.",
               error_type: "NETWORK_ERROR",
+
               detail: fetchErr.message,
               possible_causes: [
                 "The Suno API server may be down or restarting",
@@ -806,7 +806,7 @@ serve(async (req) => {
 
         return new Response(
           JSON.stringify({
-            error: "Failed to connect to self-hosted Suno API.",
+            error: "Failed to connect to Suno API.",
             error_type: "FETCH_ERROR",
             detail: fetchErr.message,
             action: "Try again. If the error persists, your suno_cookie may need updating via update-agent-settings.",
@@ -819,7 +819,7 @@ serve(async (req) => {
         const errMsg = selfHostedData?.detail || selfHostedData?.error || selfHostedData?.message
           || (typeof selfHostedData === "string" ? selfHostedData : "Unknown error");
         const errStr = typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg);
-        console.warn(`Self-hosted Suno error for @${agent.handle}: ${selfHostedRes.status} — ${errStr}`);
+        console.warn(`Suno error for @${agent.handle}: ${selfHostedRes.status} — ${errStr}`);
 
         // ─── ERROR CLASSIFICATION ────────────────────────────────────
         // 1. Browser automation timeout (Playwright/Puppeteer locator timeout)
@@ -832,6 +832,7 @@ serve(async (req) => {
             JSON.stringify({
               error: "Suno's website took too long to respond to the generation request.",
               error_type: "SUNO_UI_TIMEOUT",
+
               suno_error: errStr,
               possible_causes: [
                 "Suno.com may be experiencing high load or temporary issues",
@@ -857,6 +858,7 @@ serve(async (req) => {
             JSON.stringify({
               error: "Your Suno cookie has expired or is invalid. The session is no longer active.",
               error_type: "COOKIE_EXPIRED",
+
               action: "Log into suno.com, open DevTools → Application → Cookies, copy a fresh cookie, and call update-agent-settings with the new suno_cookie.",
               action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie",
             }),
@@ -873,6 +875,7 @@ serve(async (req) => {
             JSON.stringify({
               error: "Suno rejected the generation due to content policy.",
               error_type: "CONTENT_POLICY",
+
               suno_error: errStr,
               action: "Change your title and/or style tags to avoid restricted content (artist names, copyrighted references, etc.) and try again.",
             }),
@@ -888,6 +891,7 @@ serve(async (req) => {
             JSON.stringify({
               error: "Suno's servers are rate-limiting requests. Too many generations in a short period.",
               error_type: "SUNO_RATE_LIMIT",
+
               action: "Wait 5-10 minutes before trying again.",
             }),
             { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
@@ -897,7 +901,7 @@ serve(async (req) => {
         // 5. Generic / unclassified error
         return new Response(
           JSON.stringify({
-            error: "Self-hosted Suno API returned an error.",
+            error: "Suno API returned an error.",
             error_type: "SUNO_API_ERROR",
             suno_status: selfHostedRes.status,
             suno_error: errStr,
@@ -1019,9 +1023,9 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         task_id: clipIds[0] || null,
-        generation_source: "selfhosted",
-        agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
+        generation_source: agent.suno_self_hosted_url ? "selfhosted" : "centralized",
         cookie_health: cookieHealth,
+        agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
         genre_normalized: finalGenre !== genre ? `"${genre}" → "${finalGenre}"${finalGenre !== normalizedGenre ? " (style-inferred)" : ""}` : undefined,
         beats: beatRecords.map((b) => ({
           id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre,
@@ -1034,7 +1038,7 @@ serve(async (req) => {
           if (completedCount === total) {
             return `${total} beat(s) generated and ready on MusiClaw. Audio is live!`;
           }
-          return "Generating via your self-hosted Suno instance. Use poll-suno to check status.";
+          return "Generating your beat now. Use poll-suno to check status.";
         })(),
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
