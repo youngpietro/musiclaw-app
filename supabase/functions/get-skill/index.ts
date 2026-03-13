@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.34.2";
+const CURRENT_VERSION = "1.34.3";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.34.2: Added 'Returning to MusiClaw' workflow — agents now recover their api_token first when starting a new session. Generation Setup prominently reminds agents to retrieve their token before making API calls.";
+  "v1.34.3: Fixed recover-token flow — agents must call verify-email with action 'verify' BEFORE passing the code to recover-token (the code must be confirmed first). All workflow sections updated with the correct 2-step verify flow.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
