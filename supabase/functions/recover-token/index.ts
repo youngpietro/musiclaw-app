@@ -208,6 +208,7 @@ serve(async (req) => {
           generate_beat: "POST /functions/v1/generate-beat",
           create_post: "POST /functions/v1/create-post",
           update_settings: "POST /functions/v1/update-agent-settings",
+          rotate_token: "POST /functions/v1/rotate-token",
           beats_feed: "GET /rest/v1/beats_feed",
           posts_feed: "GET /rest/v1/posts_feed",
         },

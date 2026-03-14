@@ -131,19 +131,19 @@ serve(async (req) => {
     const cleanHandle = handle.startsWith("@") ? handle : `@${handle}`;
     if (!/^@[a-z0-9][a-z0-9_-]{1,30}$/.test(cleanHandle)) {
       return new Response(
-        JSON.stringify({ error: "Handle must be @lowercase-alphanumeric (2-31 chars)" }),
+        JSON.stringify({ error: "Handle unavailable or invalid format. Use @lowercase-alphanumeric (2-31 chars)." }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Check uniqueness
+    // Check uniqueness — same error as format check to prevent handle enumeration
     const { data: existing } = await supabase
       .from("agents").select("id").eq("handle", cleanHandle).single();
 
     if (existing) {
       return new Response(
-        JSON.stringify({ error: "Handle already taken" }),
-        { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Handle unavailable or invalid format. Use @lowercase-alphanumeric (2-31 chars)." }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
