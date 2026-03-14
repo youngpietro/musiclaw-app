@@ -1058,7 +1058,7 @@ function PostCard({ post }) {
 
 // ─── GENRE DROPDOWN (foldable button) ────────────────────────────────────────
 
-function GenreDropdown({ genreTree, genres, selectedGenre, selectedSubGenre, onSelect, items, accentColor }) {
+function GenreDropdown({ genreTree, genres, selectedGenre, selectedSubGenre, onSelect, items, accentColor, totalCount, genreCounts }) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(new Set());
   const ref = useRef(null);
@@ -1095,10 +1095,10 @@ function GenreDropdown({ genreTree, genres, selectedGenre, selectedSubGenre, onS
         style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", borderRadius: "8px", border: "none", cursor: "pointer", width: "100%", background: !selectedGenre ? `${ac}15` : "transparent", textAlign: "left" }
       },
         h("span", { style: { fontFamily: "'Space Mono',monospace", fontSize: "12px", color: !selectedGenre ? ac : "rgba(255,255,255,0.5)" } }, "🎵 All Genres"),
-        items && h("span", { style: { fontSize: "10px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace" } }, items.length)
+        h("span", { style: { fontSize: "10px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace" } }, totalCount != null ? totalCount : (items ? items.length : 0))
       ),
       ...tree.map(g => {
-        const c = items ? items.filter(b => genreKey(b) === g.id).length : 0;
+        const c = genreCounts ? (genreCounts[g.id] || 0) : (items ? items.filter(b => genreKey(b) === g.id).length : 0);
         const isExp = expanded.has(g.id);
         const hasKids = g.children && g.children.length > 0;
         const isActiveParent = selectedGenre === g.id && !selectedSubGenre;
@@ -1118,7 +1118,7 @@ function GenreDropdown({ genreTree, genres, selectedGenre, selectedSubGenre, onS
           ),
           isExp && hasKids && h("div", { style: { paddingLeft: "21px", display: "flex", flexDirection: "column", gap: "1px", borderLeft: `1px solid ${g.color}22`, marginLeft: "8px", marginBottom: "4px" } },
             ...g.children.map(sg => {
-              const sc = items ? items.filter(b => subGenreKey(b) === sg.id).length : 0;
+              const sc = genreCounts ? (genreCounts["sub:"+sg.id] || 0) : (items ? items.filter(b => subGenreKey(b) === sg.id).length : 0);
               const isActiveSub = selectedSubGenre === sg.id;
               return h("button", {
                 key: sg.id,
@@ -1720,16 +1720,37 @@ function MusiClawApp() {
   const [soldCount, setSoldCount] = useState(0);
   const [totalBeatsCount, setTotalBeatsCount] = useState(0);
   const [totalPlays, setTotalPlays] = useState(0);
+  const [beatsGenreCounts, setBeatsGenreCounts] = useState({});
+  const [soldGenreCounts, setSoldGenreCounts] = useState({});
   useEffect(() => {
     if (!IS_LIVE) return;
     supabase.from("purchases").select("id", { count:"exact", head:true }).eq("paypal_status","completed").then(({ count }) => { if (count!=null) setSoldCount(count); });
     supabase.from("beats_feed").select("id", { count:"exact", head:true }).then(({ count }) => { if (count!=null) setTotalBeatsCount(count); });
     supabase.from("beats").select("plays_count").eq("status","complete").then(({ data }) => { if (data) setTotalPlays(data.reduce((s,b) => s+(b.plays_count||0), 0)); });
+    // Fetch accurate genre counts (lightweight — only genre + sub_genre columns)
+    supabase.from("beats_feed").select("genre,sub_genre").then(({ data }) => {
+      if (!data) return;
+      const gc = {};
+      data.forEach(b => { gc[b.genre] = (gc[b.genre]||0) + 1; if (b.sub_genre) gc["sub:"+b.sub_genre] = (gc["sub:"+b.sub_genre]||0) + 1; });
+      setBeatsGenreCounts(gc);
+    });
+    supabase.from("beats_sold").select("genre,sub_genre").then(({ data }) => {
+      if (!data) return;
+      const gc = {};
+      data.forEach(b => { gc[b.genre] = (gc[b.genre]||0) + 1; if (b.sub_genre) gc["sub:"+b.sub_genre] = (gc["sub:"+b.sub_genre]||0) + 1; });
+      setSoldGenreCounts(gc);
+    });
   }, []);
   // Refresh beats count when beats array changes (new beats arrive via realtime)
   useEffect(() => {
     if (!IS_LIVE || beats.length === 0) return;
     supabase.from("beats_feed").select("id", { count:"exact", head:true }).then(({ count }) => { if (count!=null) setTotalBeatsCount(count); });
+    supabase.from("beats_feed").select("genre,sub_genre").then(({ data }) => {
+      if (!data) return;
+      const gc = {};
+      data.forEach(b => { gc[b.genre] = (gc[b.genre]||0) + 1; if (b.sub_genre) gc["sub:"+b.sub_genre] = (gc["sub:"+b.sub_genre]||0) + 1; });
+      setBeatsGenreCounts(gc);
+    });
   }, [beats.length]);
   const stats = useMemo(() => ({
     agents: agents.length,
@@ -1859,7 +1880,7 @@ function MusiClawApp() {
             h("span",{style:{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",fontSize:"14px",opacity:0.4}},"🔍")),
           isBeats&&h("div",{style:{background:"linear-gradient(135deg,rgba(34,197,94,0.08),rgba(34,197,94,0.03))",border:"1px solid rgba(34,197,94,0.2)",borderRadius:"14px",padding:"14px 20px",marginBottom:"4px",animation:"fadeInUp 0.5s ease both"}},h("p",{style:{fontSize:"13px",color:"rgba(255,255,255,0.7)",fontFamily:"'DM Sans',sans-serif",margin:0,lineHeight:1.6}},h("span",{style:{fontSize:"15px"}},"🎧 "),h("strong",{style:{color:"#22c55e"}},"Commercial License Included")," — Every AI-generated beat comes with a commercial license. YOU (human) are free to use these beats for your music projects.")),
           isBeats&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease 0.05s both",position:"relative",zIndex:10}},
-            h(GenreDropdown,{genreTree,genres,selectedGenre:catalogGenre,selectedSubGenre:catalogSubGenre,onSelect:(g,sg)=>{setCatalogGenre(g);setCatalogSubGenre(sg)},items:beats,accentColor:"#e11d48"})),
+            h(GenreDropdown,{genreTree,genres,selectedGenre:catalogGenre,selectedSubGenre:catalogSubGenre,onSelect:(g,sg)=>{setCatalogGenre(g);setCatalogSubGenre(sg)},items:beats,accentColor:"#e11d48",totalCount:totalBeatsCount||beats.length,genreCounts:Object.keys(beatsGenreCounts).length?beatsGenreCounts:null})),
           isBeats&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"12px",alignItems:"center",animation:"fadeInUp 0.5s ease 0.08s both",padding:"8px 0"}},
             h("div",{style:{display:"flex",alignItems:"center",gap:"6px"}},
               h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.4)"}},"Price:"),
@@ -1900,7 +1921,7 @@ function MusiClawApp() {
           isSamples&&!samplesLoading&&filteredSamples.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},sampleSubSection==="purchased"?"⬇":"🎛️"),sampleSubSection==="purchased"?"No purchased samples yet. Buy a sample to see it here with a download button.":sampleSubSection!=="all"?"No "+sampleSubSection+" samples available yet.":"No samples available yet. Stems from split beats will appear here."),
           // ─── BEATS SOLD section ────────────────────────────────────
           isSold&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease both",marginBottom:"4px",position:"relative",zIndex:10}},
-            h(GenreDropdown,{genreTree,genres,selectedGenre:catalogGenre,selectedSubGenre:catalogSubGenre,onSelect:(g,sg)=>{setCatalogGenre(g);setCatalogSubGenre(sg)},items:soldBeats,accentColor:"#e11d48"}),
+            h(GenreDropdown,{genreTree,genres,selectedGenre:catalogGenre,selectedSubGenre:catalogSubGenre,onSelect:(g,sg)=>{setCatalogGenre(g);setCatalogSubGenre(sg)},items:soldBeats,accentColor:"#e11d48",totalCount:soldBeats.length,genreCounts:Object.keys(soldGenreCounts).length?soldGenreCounts:null}),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.35)",marginLeft:"auto",whiteSpace:"nowrap"}},"Sold: "+filteredSoldBeats.length)),
           isSold&&soldLoading&&h(Loader),
           isSold&&!soldLoading&&filteredSoldBeats.length>0&&filteredSoldBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat,peaks:playingId===beat.id?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
