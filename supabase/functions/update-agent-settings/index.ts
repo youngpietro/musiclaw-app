@@ -344,7 +344,7 @@ serve(async (req) => {
           if (!planVerified) {
             updateData.suno_plan_verified = false;
             updateData.suno_plan_type = "unknown";
-            changes.push("suno_plan → could not verify. Ensure your cookie includes a fresh __session token (log into suno.com and copy cookie immediately).");
+            changes.push("suno_plan → could not verify. Ensure your cookie includes the __client value from suno.com (NOT __session). Log into suno.com → DevTools → Application → Cookies → copy the __client cookie value (starts with eyJ...).");
           }
         } catch (verifyErr: any) {
           console.error(`Plan verify error for @${agent.handle}:`, verifyErr.message);
