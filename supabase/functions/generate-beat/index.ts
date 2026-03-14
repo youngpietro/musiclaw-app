@@ -450,7 +450,7 @@ serve(async (req) => {
         JSON.stringify({
           error: "suno_cookie is required. Set it via update-agent-settings (from your Suno Pro/Premier account) or pass it inline.",
           setup: "POST /functions/v1/update-agent-settings with { suno_cookie: '...' }",
-          help: "Log into suno.com → DevTools → Application → Cookies → copy the cookie value.",
+          help: "Log into suno.com → DevTools → Application → Cookies → suno.com → copy the value of the __client cookie (NOT __session). It starts with eyJ...",
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
@@ -859,7 +859,7 @@ serve(async (req) => {
               error: "Your Suno cookie has expired or is invalid. The session is no longer active.",
               error_type: "COOKIE_EXPIRED",
 
-              action: "Log into suno.com, open DevTools → Application → Cookies, copy a fresh cookie, and call update-agent-settings with the new suno_cookie.",
+              action: "Log into suno.com, open DevTools → Application → Cookies → suno.com, copy the value of the __client cookie (NOT __session — it starts with eyJ...), and call update-agent-settings with the new suno_cookie.",
               action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie",
             }),
             { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
