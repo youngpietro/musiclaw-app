@@ -299,37 +299,58 @@ function useAgents() {
 }
 
 const BEATS_PAGE_SIZE = 50;
-function useBeats() {
-  const [beats, setBeats] = useState([]);
+function useBeats(genreFilter, subGenreFilter) {
+  const [allBeats, setAllBeats] = useState([]);
+  const [filteredGenreBeats, setFilteredGenreBeats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  // Initial load (no filter — first page)
   useEffect(() => {
     if (!IS_LIVE) { setLoading(false); return; }
     supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => {
-      if (data) { setBeats(data); setHasMore(data.length >= BEATS_PAGE_SIZE); }
+      if (data) { setAllBeats(data); setHasMore(data.length >= BEATS_PAGE_SIZE); }
       setLoading(false);
     });
     const sub = supabase.channel("beats").on("postgres_changes", { event:"*", schema:"public", table:"beats" }, () => {
       supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => {
-        if (data?.length) { setBeats(prev => { const existingIds = new Set(prev.slice(BEATS_PAGE_SIZE).map(b=>b.id)); const merged = [...data, ...prev.slice(BEATS_PAGE_SIZE).filter(b=>!data.find(d=>d.id===b.id))]; return merged; }); }
+        if (data?.length) { setAllBeats(prev => { const merged = [...data, ...prev.slice(BEATS_PAGE_SIZE).filter(b=>!data.find(d=>d.id===b.id))]; return merged; }); }
       });
+      // Also refresh genre-filtered view if active
+      if (genreFilter) {
+        let q = supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).eq("genre", genreFilter);
+        if (subGenreFilter) q = q.eq("sub_genre", subGenreFilter);
+        q.then(({ data }) => { if (data) setFilteredGenreBeats(data); });
+      }
     }).subscribe();
     return () => { supabase.removeChannel(sub); };
   }, []);
+  // When genre filter changes, fetch all beats for that genre from DB
+  useEffect(() => {
+    if (!IS_LIVE) return;
+    if (!genreFilter) { setFilteredGenreBeats(null); return; }
+    setLoading(true);
+    let q = supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).eq("genre", genreFilter);
+    if (subGenreFilter) q = q.eq("sub_genre", subGenreFilter);
+    q.then(({ data }) => {
+      if (data) setFilteredGenreBeats(data);
+      setLoading(false);
+    });
+  }, [genreFilter, subGenreFilter]);
+  const beats = filteredGenreBeats !== null ? filteredGenreBeats : allBeats;
   const loadMore = useCallback(async () => {
-    if (!IS_LIVE || loadingMore || !hasMore) return;
+    if (!IS_LIVE || loadingMore || !hasMore || genreFilter) return;
     setLoadingMore(true);
-    const offset = beats.length;
+    const offset = allBeats.length;
     const { data } = await supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).range(offset, offset + BEATS_PAGE_SIZE - 1);
-    if (data) { setBeats(prev => [...prev, ...data]); setHasMore(data.length >= BEATS_PAGE_SIZE); }
+    if (data) { setAllBeats(prev => [...prev, ...data]); setHasMore(data.length >= BEATS_PAGE_SIZE); }
     else setHasMore(false);
     setLoadingMore(false);
-  }, [beats.length, loadingMore, hasMore]);
+  }, [allBeats.length, loadingMore, hasMore, genreFilter]);
   const recordPlay = useCallback(async (beatId) => {
     if (IS_LIVE) await supabase.rpc("record_play", { p_beat_id: beatId });
   }, []);
-  return { beats, loading, loadingMore, hasMore, loadMore, recordPlay };
+  return { beats, loading, loadingMore, hasMore: genreFilter ? false : hasMore, loadMore, recordPlay };
 }
 
 function useGenres() {
@@ -351,32 +372,45 @@ function useGenres() {
   return { genres, genreTree };
 }
 
-function useSoldBeats() {
-  const [soldBeats, setSoldBeats] = useState([]);
+function useSoldBeats(genreFilter, subGenreFilter) {
+  const [allSoldBeats, setAllSoldBeats] = useState([]);
+  const [filteredGenreSold, setFilteredGenreSold] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   useEffect(() => {
     if (!IS_LIVE) { setLoading(false); return; }
     supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => {
-      if (data) { setSoldBeats(data); setHasMore(data.length >= BEATS_PAGE_SIZE); }
+      if (data) { setAllSoldBeats(data); setHasMore(data.length >= BEATS_PAGE_SIZE); }
       setLoading(false);
     });
     const sub = supabase.channel("sold_beats").on("postgres_changes", { event:"*", schema:"public", table:"beats" }, () => {
-      supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => data?.length >= 0 && setSoldBeats(prev => { const merged = [...(data||[]), ...prev.slice(BEATS_PAGE_SIZE)]; return merged; }));
+      supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => data?.length >= 0 && setAllSoldBeats(prev => { const merged = [...(data||[]), ...prev.slice(BEATS_PAGE_SIZE)]; return merged; }));
     }).subscribe();
     return () => { supabase.removeChannel(sub); };
   }, []);
+  useEffect(() => {
+    if (!IS_LIVE) return;
+    if (!genreFilter) { setFilteredGenreSold(null); return; }
+    setLoading(true);
+    let q = supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).eq("genre", genreFilter);
+    if (subGenreFilter) q = q.eq("sub_genre", subGenreFilter);
+    q.then(({ data }) => {
+      if (data) setFilteredGenreSold(data);
+      setLoading(false);
+    });
+  }, [genreFilter, subGenreFilter]);
+  const soldBeats = filteredGenreSold !== null ? filteredGenreSold : allSoldBeats;
   const loadMore = useCallback(async () => {
-    if (!IS_LIVE || loadingMore || !hasMore) return;
+    if (!IS_LIVE || loadingMore || !hasMore || genreFilter) return;
     setLoadingMore(true);
-    const offset = soldBeats.length;
+    const offset = allSoldBeats.length;
     const { data } = await supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).range(offset, offset + BEATS_PAGE_SIZE - 1);
-    if (data) { setSoldBeats(prev => [...prev, ...data]); setHasMore(data.length >= BEATS_PAGE_SIZE); }
+    if (data) { setAllSoldBeats(prev => [...prev, ...data]); setHasMore(data.length >= BEATS_PAGE_SIZE); }
     else setHasMore(false);
     setLoadingMore(false);
-  }, [soldBeats.length, loadingMore, hasMore]);
-  return { soldBeats, loading, loadingMore, hasMore, loadMore };
+  }, [allSoldBeats.length, loadingMore, hasMore, genreFilter]);
+  return { soldBeats, loading, loadingMore, hasMore: genreFilter ? false : hasMore, loadMore };
 }
 
 // ─── DEVICE ID (persistent per browser) ─────────────────────────────────────
@@ -1588,13 +1622,13 @@ function MusiClawApp() {
   const [expandedSales,setExpandedSales]=useState(new Set());
 
   const { agents, loading: agentsLoading } = useAgents();
-  const { beats, loading: beatsLoading, loadingMore: beatsLoadingMore, hasMore: beatsHasMore, loadMore: beatsLoadMore, recordPlay } = useBeats();
+  const { beats, loading: beatsLoading, loadingMore: beatsLoadingMore, hasMore: beatsHasMore, loadMore: beatsLoadMore, recordPlay } = useBeats(catalogGenre, catalogSubGenre);
   const { posts, loading: postsLoading } = usePosts();
   const auth = useAuth();
   const { credits, setCredits, refresh: refreshCredits } = useCredits(auth.user);
   const { samples, loading: samplesLoading, removeSample } = useSamples();
   const { purchaseMap, addPurchased } = usePurchasedSamples(auth.user);
-  const { soldBeats, loading: soldLoading, loadingMore: soldLoadingMore, hasMore: soldHasMore, loadMore: soldLoadMore } = useSoldBeats();
+  const { soldBeats, loading: soldLoading, loadingMore: soldLoadingMore, hasMore: soldHasMore, loadMore: soldLoadMore } = useSoldBeats(catalogGenre, catalogSubGenre);
   const { genres, genreTree } = useGenres();
   const { likedIds, likeBeat } = useDeviceLikes();
 
