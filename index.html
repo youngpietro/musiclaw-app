@@ -1861,7 +1861,7 @@ function MusiClawApp() {
             h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.45)",maxWidth:"120px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},(auth.user.email||"").slice(0,20)),
             h("span",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"#a855f7",cursor:"pointer"},onClick:()=>setShowBuyCredits(true)},credits+" ⬡"),
             h("button",{onClick:()=>auth.signOut(),style:{background:"none",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"8px",padding:"4px 10px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontSize:"10px",cursor:"pointer"}},"Logout")
-          ):h("button",{onClick:()=>setShowAuthModal(true),style:{background:"rgba(168,85,247,0.15)",border:"1px solid rgba(168,85,247,0.3)",borderRadius:"8px",padding:"4px 12px",color:"#a855f7",fontFamily:"'Space Mono',monospace",fontSize:"10px",fontWeight:600,cursor:"pointer"}},"Login")
+          ):null
         ),
         h("button",{className:"ml-menu-btn",onClick:()=>setMenuOpen(!menuOpen)},menuOpen?"✕":"☰")
       ),
