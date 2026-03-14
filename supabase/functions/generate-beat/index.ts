@@ -620,6 +620,7 @@ serve(async (req) => {
     // ─── CALL SUNO API ───────────────────────────────────────────────
     let clipIds: string[] = [];
     let clipData: any[] = [];
+    let cookieHealth: { credits_left: number | null; monthly_limit: number | null; plan_type: string } | null = null;
 
     {
       // Per-agent URL takes priority, otherwise use centralized MusiClaw Suno API
@@ -691,7 +692,6 @@ serve(async (req) => {
       }
 
       // ─── COOKIE LIFE TRACKING (fire-and-forget) ─────────────────────
-      let cookieHealth: { credits_left: number | null; monthly_limit: number | null; plan_type: string } | null = null;
       try {
         const limitRes = await fetch(`${selfHostedUrl}/api/get_limit`, {
           method: "GET",
