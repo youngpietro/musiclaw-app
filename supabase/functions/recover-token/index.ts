@@ -85,11 +85,43 @@ serve(async (req) => {
       );
     }
 
+    // ─── VERIFY PAYPAL EMAIL FIRST (before revealing anything) ────────
+    // This MUST happen before showing email_hint or verification status
+    // to prevent information leakage to attackers who don't know the PayPal.
+    let paypalMigrated = false;
+
+    if (agent.paypal_email) {
+      // Must match existing PayPal — reject immediately if wrong
+      if (agent.paypal_email.toLowerCase() !== cleanEmail) {
+        return new Response(
+          JSON.stringify({ error: "Recovery failed. Check your handle and PayPal email." }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+    } else {
+      // No PayPal on file — only allow setting PayPal email if it matches the
+      // verified owner email, OR if agent has no owner_email (legacy fallback).
+      const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+      if (!EMAIL_REGEX.test(cleanEmail)) {
+        return new Response(
+          JSON.stringify({ error: "Invalid paypal_email format" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      if (agent.owner_email && agent.owner_email.toLowerCase() !== cleanEmail) {
+        return new Response(
+          JSON.stringify({ error: "Recovery failed. Check your handle and PayPal email." }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      // Will set PayPal after verification succeeds (below)
+      paypalMigrated = true;
+    }
+
     // ─── MANDATORY EMAIL VERIFICATION (ALL agents) ───────────────────
-    // ALL agents require a verified 6-digit code for token recovery.
-    // - Agents WITH owner_email → verify against owner_email
+    // PayPal matched — now require owner email verification.
+    // - Agents WITH owner_email → verify against owner_email ONLY
     // - Legacy agents (no owner_email) → verify against paypal_email
-    // This prevents token theft via guessed handle + PayPal email.
     const verificationEmail = agent.owner_email || agent.paypal_email;
 
     // Mask the email for the hint: "j***@gmail.com"
@@ -100,7 +132,6 @@ serve(async (req) => {
     }
 
     if (!verification_code || typeof verification_code !== "string" || verification_code.length !== 6) {
-      // If agent has no email at all (should not happen post-mandatory registration, but safeguard)
       if (!verificationEmail) {
         return new Response(
           JSON.stringify({
@@ -112,9 +143,10 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({
-          error: "Email verification required for token recovery. Call verify-email with action 'send' first, then pass the 6-digit verification_code here.",
+          error: "Email verification required for token recovery. Send a verification code to your OWNER email (shown in the hint), then pass the 6-digit verification_code here.",
           requires_verification: true,
           email_hint: maskEmail(verificationEmail),
+          verify_instruction: "Call verify-email with action 'send' and your owner email. The code must be verified for the OWNER email, not the PayPal email.",
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
@@ -140,48 +172,17 @@ serve(async (req) => {
 
     if (!emailVerification) {
       return new Response(
-        JSON.stringify({ error: "Invalid or expired verification code. Request a new code via verify-email." }),
+        JSON.stringify({
+          error: "Invalid or expired verification code. The code must be verified for the OWNER email (hint: " + maskEmail(verificationEmail) + "), not any other email.",
+          email_hint: maskEmail(verificationEmail),
+        }),
         { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // ─── VERIFY PAYPAL EMAIL ──────────────────────────────────────────
-    // Case 1: Agent has PayPal on file → must match exactly
-    // Case 2: Agent has NO PayPal (pre-mandatory registration) → accept the
-    //         provided email and SET it on the agent (one-time migration)
-    let paypalMigrated = false;
-
-    if (agent.paypal_email) {
-      // Must match existing PayPal
-      if (agent.paypal_email.toLowerCase() !== cleanEmail) {
-        return new Response(
-          JSON.stringify({ error: "Recovery failed. Check your handle and PayPal email." }),
-          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-    } else {
-      // No PayPal on file — only allow setting PayPal email if it matches the
-      // verified owner email, OR if agent has no owner_email (legacy fallback).
-      // This prevents an attacker from claiming an agent's PayPal earnings.
-      const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-      if (!EMAIL_REGEX.test(cleanEmail)) {
-        return new Response(
-          JSON.stringify({ error: "Invalid paypal_email format" }),
-          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-      // Security: For agents WITH owner_email, the PayPal email must match owner_email
-      // to prevent PayPal diversion attacks via token recovery
-      if (agent.owner_email && agent.owner_email.toLowerCase() !== cleanEmail) {
-        return new Response(
-          JSON.stringify({
-            error: "PayPal email must match your registered owner email for first-time setup. Use update-agent-settings after recovery to set a different PayPal email.",
-          }),
-          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
+    // ─── SET PAYPAL (if migrating) ────────────────────────────────────
+    if (paypalMigrated) {
       await supabase.from("agents").update({ paypal_email: cleanEmail }).eq("id", agent.id);
-      paypalMigrated = true;
     }
 
     // ─── SUCCESS — return token + agent info ─────────────────────────
