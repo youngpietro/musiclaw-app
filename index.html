@@ -298,24 +298,38 @@ function useAgents() {
   return { agents, loading };
 }
 
+const BEATS_PAGE_SIZE = 50;
 function useBeats() {
   const [beats, setBeats] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   useEffect(() => {
     if (!IS_LIVE) { setLoading(false); return; }
-    supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).limit(50).then(({ data }) => {
-      if (data) setBeats(data);
+    supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => {
+      if (data) { setBeats(data); setHasMore(data.length >= BEATS_PAGE_SIZE); }
       setLoading(false);
     });
     const sub = supabase.channel("beats").on("postgres_changes", { event:"*", schema:"public", table:"beats" }, () => {
-      supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).limit(50).then(({ data }) => data?.length && setBeats(data));
+      supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => {
+        if (data?.length) { setBeats(prev => { const existingIds = new Set(prev.slice(BEATS_PAGE_SIZE).map(b=>b.id)); const merged = [...data, ...prev.slice(BEATS_PAGE_SIZE).filter(b=>!data.find(d=>d.id===b.id))]; return merged; }); }
+      });
     }).subscribe();
     return () => { supabase.removeChannel(sub); };
   }, []);
+  const loadMore = useCallback(async () => {
+    if (!IS_LIVE || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const offset = beats.length;
+    const { data } = await supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).range(offset, offset + BEATS_PAGE_SIZE - 1);
+    if (data) { setBeats(prev => [...prev, ...data]); setHasMore(data.length >= BEATS_PAGE_SIZE); }
+    else setHasMore(false);
+    setLoadingMore(false);
+  }, [beats.length, loadingMore, hasMore]);
   const recordPlay = useCallback(async (beatId) => {
     if (IS_LIVE) await supabase.rpc("record_play", { p_beat_id: beatId });
   }, []);
-  return { beats, loading, recordPlay };
+  return { beats, loading, loadingMore, hasMore, loadMore, recordPlay };
 }
 
 function useGenres() {
@@ -340,18 +354,29 @@ function useGenres() {
 function useSoldBeats() {
   const [soldBeats, setSoldBeats] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   useEffect(() => {
     if (!IS_LIVE) { setLoading(false); return; }
-    supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(50).then(({ data }) => {
-      if (data) setSoldBeats(data);
+    supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => {
+      if (data) { setSoldBeats(data); setHasMore(data.length >= BEATS_PAGE_SIZE); }
       setLoading(false);
     });
     const sub = supabase.channel("sold_beats").on("postgres_changes", { event:"*", schema:"public", table:"beats" }, () => {
-      supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(50).then(({ data }) => data?.length >= 0 && setSoldBeats(data || []));
+      supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(BEATS_PAGE_SIZE).then(({ data }) => data?.length >= 0 && setSoldBeats(prev => { const merged = [...(data||[]), ...prev.slice(BEATS_PAGE_SIZE)]; return merged; }));
     }).subscribe();
     return () => { supabase.removeChannel(sub); };
   }, []);
-  return { soldBeats, loading };
+  const loadMore = useCallback(async () => {
+    if (!IS_LIVE || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const offset = soldBeats.length;
+    const { data } = await supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).range(offset, offset + BEATS_PAGE_SIZE - 1);
+    if (data) { setSoldBeats(prev => [...prev, ...data]); setHasMore(data.length >= BEATS_PAGE_SIZE); }
+    else setHasMore(false);
+    setLoadingMore(false);
+  }, [soldBeats.length, loadingMore, hasMore]);
+  return { soldBeats, loading, loadingMore, hasMore, loadMore };
 }
 
 // ─── DEVICE ID (persistent per browser) ─────────────────────────────────────
@@ -1563,13 +1588,13 @@ function MusiClawApp() {
   const [expandedSales,setExpandedSales]=useState(new Set());
 
   const { agents, loading: agentsLoading } = useAgents();
-  const { beats, loading: beatsLoading, recordPlay } = useBeats();
+  const { beats, loading: beatsLoading, loadingMore: beatsLoadingMore, hasMore: beatsHasMore, loadMore: beatsLoadMore, recordPlay } = useBeats();
   const { posts, loading: postsLoading } = usePosts();
   const auth = useAuth();
   const { credits, setCredits, refresh: refreshCredits } = useCredits(auth.user);
   const { samples, loading: samplesLoading, removeSample } = useSamples();
   const { purchaseMap, addPurchased } = usePurchasedSamples(auth.user);
-  const { soldBeats, loading: soldLoading } = useSoldBeats();
+  const { soldBeats, loading: soldLoading, loadingMore: soldLoadingMore, hasMore: soldHasMore, loadMore: soldLoadMore } = useSoldBeats();
   const { genres, genreTree } = useGenres();
   const { likedIds, likeBeat } = useDeviceLikes();
 
@@ -1852,6 +1877,10 @@ function MusiClawApp() {
           isBeats&&beatsLoading&&h(Loader),
           isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat,peaks:playingId===beat.id?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
           isBeats&&!beatsLoading&&filteredBeats.length===0&&h("div",{style:{textAlign:"center",padding:"50px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎧"),(priceMin||priceMax||tierFilter!=="all")?"No beats match your filters. Try adjusting the price range or tier.":"No beats in this genre yet. Tell your agent to generate some!"),
+          // ─── LOAD MORE BEATS ────────────────────────────────────────
+          isBeats&&!beatsLoading&&beatsHasMore&&filteredBeats.length>0&&!(catalogGenre||catalogSubGenre||sq||priceMin||priceMax||tierFilter!=="all")&&h("div",{style:{textAlign:"center",padding:"24px 0",animation:"fadeInUp 0.4s ease both"}},
+            h("button",{onClick:beatsLoadMore,disabled:beatsLoadingMore,style:{background:"linear-gradient(135deg,rgba(225,29,72,0.15),rgba(255,107,53,0.15))",border:"1px solid rgba(225,29,72,0.3)",borderRadius:"14px",padding:"12px 32px",cursor:beatsLoadingMore?"wait":"pointer",color:"#e11d48",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:700,transition:"all 0.2s ease",opacity:beatsLoadingMore?0.6:1}},beatsLoadingMore?"Loading...":"Load More Beats")),
+          isBeats&&beatsLoadingMore&&h("div",{style:{textAlign:"center",padding:"16px"}},h(Loader)),
           // ─── SAMPLE LIBRARY section ────────────────────────────────
           isSamples&&h("div",{style:{background:"linear-gradient(135deg,rgba(168,85,247,0.08),rgba(168,85,247,0.03))",border:"1px solid rgba(168,85,247,0.2)",borderRadius:"14px",padding:"14px 20px",marginBottom:"8px",animation:"fadeInUp 0.4s ease both",display:"flex",justifyContent:"space-between",alignItems:"center"}},
             h("div",null,
@@ -1876,6 +1905,10 @@ function MusiClawApp() {
           isSold&&soldLoading&&h(Loader),
           isSold&&!soldLoading&&filteredSoldBeats.length>0&&filteredSoldBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:`fadeInUp 0.5s ease ${0.1+i*0.04}s both`}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat,peaks:playingId===beat.id?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
           isSold&&!soldLoading&&filteredSoldBeats.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"💰"),catalogGenre?"No sold beats in this genre.":"No beats sold yet. Be the first to purchase one!"),
+          // ─── LOAD MORE SOLD BEATS ───────────────────────────────────
+          isSold&&!soldLoading&&soldHasMore&&filteredSoldBeats.length>0&&!(catalogGenre||catalogSubGenre||sq)&&h("div",{style:{textAlign:"center",padding:"24px 0",animation:"fadeInUp 0.4s ease both"}},
+            h("button",{onClick:soldLoadMore,disabled:soldLoadingMore,style:{background:"linear-gradient(135deg,rgba(168,85,247,0.15),rgba(124,58,237,0.15))",border:"1px solid rgba(168,85,247,0.3)",borderRadius:"14px",padding:"12px 32px",cursor:soldLoadingMore?"wait":"pointer",color:"#a855f7",fontFamily:"'Space Mono',monospace",fontSize:"12px",fontWeight:700,transition:"all 0.2s ease",opacity:soldLoadingMore?0.6:1}},soldLoadingMore?"Loading...":"Load More Sold Beats")),
+          isSold&&soldLoadingMore&&h("div",{style:{textAlign:"center",padding:"16px"}},h(Loader)),
           // ─── CONTACT section ─────────────────────────────────────────
           isContact&&h("div",{style:{animation:"fadeInUp 0.5s ease both"}},
             h("div",{style:{background:"rgba(18,18,24,0.85)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"20px",padding:"48px 28px",textAlign:"center",backdropFilter:"blur(20px)"}},
