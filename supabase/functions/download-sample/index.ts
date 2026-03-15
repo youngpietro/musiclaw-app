@@ -166,21 +166,13 @@ serve(async (req) => {
       .eq("id", sample.beat_id)
       .single();
 
-    // ─── RESOLVE AUDIO URL (storage preferred, legacy fallback) ─────
+    // ─── RESOLVE AUDIO URL (R2 preferred, legacy fallback) ──────────
+    const { r2PublicUrl } = await import("../_shared/r2.ts");
+    const R2_PUBLIC = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.musiclaw.app";
     let audioUrl: string | null = null;
 
     if (sample.storage_migrated && sample.beat_id && sample.stem_type) {
-      const storagePath = `beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`;
-      const { data: signedUrlData, error: signErr } = await supabase
-        .storage
-        .from("audio")
-        .createSignedUrl(storagePath, 3600);
-      if (!signErr && signedUrlData?.signedUrl) {
-        audioUrl = signedUrlData.signedUrl;
-      } else {
-        console.error(`Signed URL error for sample ${sampleId}:`, signErr?.message);
-        audioUrl = sample.audio_url; // fallback
-      }
+      audioUrl = r2PublicUrl(`beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`);
     } else {
       audioUrl = sample.audio_url;
     }
@@ -192,8 +184,8 @@ serve(async (req) => {
       );
     }
 
-    // SSRF check (storage URLs are safe; only check legacy URLs)
-    if (!audioUrl.includes("supabase") && !isAllowedAudioUrl(audioUrl)) {
+    // SSRF check (R2 URLs are safe; only check legacy URLs)
+    if (!audioUrl.includes(R2_PUBLIC) && !isAllowedAudioUrl(audioUrl)) {
       console.error(`SSRF blocked: ${audioUrl}`);
       return new Response(
         JSON.stringify({ error: "Audio URL security check failed" }),

@@ -123,30 +123,13 @@ serve(async (req) => {
       }).then(() => {});
     }
 
-    // ─── SERVE FROM SUPABASE STORAGE (preferred) OR LEGACY CDN ──────
+    // ─── SERVE FROM R2 (preferred) OR LEGACY CDN ───────────────────
     let streamLocation: string;
 
     if (beat.storage_migrated) {
-      // Generate signed URL from private storage bucket (1 hour expiry)
-      const { data: signedUrlData, error: signErr } = await supabase
-        .storage
-        .from("audio")
-        .createSignedUrl(`beats/${beatId}/track.mp3`, 3600);
-
-      if (signErr || !signedUrlData?.signedUrl) {
-        console.error(`Signed URL error for beat ${beatId}:`, signErr?.message);
-        // Fallback to legacy stream_url if signed URL fails
-        if (beat.stream_url) {
-          streamLocation = beat.stream_url;
-        } else {
-          return new Response(
-            JSON.stringify({ error: "Audio temporarily unavailable" }),
-            { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-      } else {
-        streamLocation = signedUrlData.signedUrl;
-      }
+      // R2 public URL — zero network calls, just string concatenation
+      const { r2PublicUrl } = await import("../_shared/r2.ts");
+      streamLocation = r2PublicUrl(`beats/${beatId}/track.mp3`);
     } else if (beat.stream_url) {
       streamLocation = beat.stream_url;
     } else {

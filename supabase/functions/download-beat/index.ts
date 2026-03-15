@@ -176,18 +176,13 @@ serve(async (req) => {
       return new Response("Beat not found", { status: 404 });
     }
 
-    // ─── STORAGE URL RESOLVER ─────────────────────────────────────────
-    // For migrated beats, resolve URLs from private Supabase Storage
-    async function resolveStorageUrl(storagePath: string, fallbackUrl?: string | null): Promise<string | null> {
+    // ─── R2 URL RESOLVER ──────────────────────────────────────────────
+    // For migrated beats, resolve URLs from R2 public domain (zero network calls)
+    const { r2PublicUrl } = await import("../_shared/r2.ts");
+    const R2_PUBLIC = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.musiclaw.app";
+    function resolveStorageUrl(storagePath: string, fallbackUrl?: string | null): string | null {
       if (beat!.storage_migrated) {
-        const { data: signedUrlData, error: signErr } = await supabase
-          .storage
-          .from("audio")
-          .createSignedUrl(storagePath, 3600); // 1 hour
-        if (!signErr && signedUrlData?.signedUrl) {
-          return signedUrlData.signedUrl;
-        }
-        console.error(`Signed URL error for ${storagePath}:`, signErr?.message);
+        return r2PublicUrl(storagePath);
       }
       return fallbackUrl || null;
     }
@@ -216,23 +211,23 @@ serve(async (req) => {
       if (fileParam === "zip") {
         const filesToZip: Array<{ url: string; filename: string }> = [];
 
-        // Add master track (prefer storage, then wav_url, then audio_url)
-        const trackUrl = await resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.wav_url || beat.audio_url);
+        // Add master track (prefer R2, then wav_url, then audio_url)
+        const trackUrl = resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.wav_url || beat.audio_url);
         if (trackUrl) {
-          // If serving from storage it's always MP3 now (WAV conversion is client-side)
-          const isFromStorage = beat.storage_migrated && trackUrl.includes("supabase");
+          // If serving from R2 it's always MP3 now (WAV conversion is client-side)
+          const isFromR2 = beat.storage_migrated && trackUrl.includes(R2_PUBLIC);
           filesToZip.push({
             url: trackUrl,
-            filename: nameParts.join(" - ") + ((!isFromStorage && beat.wav_url) ? ".wav" : ".mp3"),
+            filename: nameParts.join(" - ") + ((!isFromR2 && beat.wav_url) ? ".wav" : ".mp3"),
           });
         }
 
-        // Add all stems (prefer storage URLs)
+        // Add all stems (prefer R2 URLs)
         if (beat.stems && typeof beat.stems === "object") {
           for (const [stemType, stemUrl] of Object.entries(beat.stems)) {
             if (stemUrl && typeof stemUrl === "string") {
               const label = stemType.charAt(0).toUpperCase() + stemType.slice(1);
-              const resolvedUrl = await resolveStorageUrl(`beats/${beatId}/stems/${stemType}.mp3`, stemUrl as string);
+              const resolvedUrl = resolveStorageUrl(`beats/${beatId}/stems/${stemType}.mp3`, stemUrl as string);
               if (resolvedUrl) {
                 filesToZip.push({
                   url: resolvedUrl,
@@ -288,11 +283,11 @@ serve(async (req) => {
       let fileName = "";
 
       if (fileParam === "track") {
-        fileUrl = await resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.wav_url || beat.audio_url);
-        const isFromStorage = beat.storage_migrated && fileUrl?.includes("supabase");
-        fileName = nameParts.join(" - ") + ((!isFromStorage && beat.wav_url) ? ".wav" : ".mp3");
+        fileUrl = resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.wav_url || beat.audio_url);
+        const isFromR2 = beat.storage_migrated && fileUrl?.includes(R2_PUBLIC);
+        fileName = nameParts.join(" - ") + ((!isFromR2 && beat.wav_url) ? ".wav" : ".mp3");
       } else if (beat.stems && typeof beat.stems === "object" && (beat.stems as Record<string, string>)[fileParam]) {
-        fileUrl = await resolveStorageUrl(`beats/${beatId}/stems/${fileParam}.mp3`, (beat.stems as Record<string, string>)[fileParam]);
+        fileUrl = resolveStorageUrl(`beats/${beatId}/stems/${fileParam}.mp3`, (beat.stems as Record<string, string>)[fileParam]);
         const label = fileParam.charAt(0).toUpperCase() + fileParam.slice(1);
         fileName = nameParts.join(" - ") + " - " + label + ".mp3";
       }
@@ -411,8 +406,8 @@ serve(async (req) => {
     //  TRACK TIER: Serve MP3 from storage (WAV conversion is client-side)
     // ═══════════════════════════════════════════════════════════════════
 
-    // Prefer Supabase Storage, fallback to legacy URLs
-    const trackUrl = await resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.audio_url);
+    // Prefer R2, fallback to legacy URLs
+    const trackUrl = resolveStorageUrl(`beats/${beatId}/track.mp3`, beat.audio_url);
 
     if (!trackUrl) {
       return new Response(
@@ -421,8 +416,8 @@ serve(async (req) => {
       );
     }
 
-    // SSRF prevention: validate URL before fetching (storage URLs are always safe, but check legacy)
-    if (!trackUrl.includes("supabase") && !isAllowedAudioUrl(trackUrl)) {
+    // SSRF prevention: validate URL before fetching (R2 URLs are always safe, but check legacy)
+    if (!trackUrl.includes(R2_PUBLIC) && !isAllowedAudioUrl(trackUrl)) {
       console.error(`SSRF blocked: disallowed audio URL for beat ${beatId}: ${trackUrl}`);
       return new Response("Blocked: invalid audio source URL", { status: 403 });
     }

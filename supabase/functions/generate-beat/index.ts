@@ -1003,25 +1003,23 @@ serve(async (req) => {
 
     // Genre existence already validated before beat creation (see genre validation block above)
 
-    // ─── AUTO-UPLOAD TO SUPABASE STORAGE ────────────────────────────
-    // Download audio + image from Suno CDN and upload to private storage bucket.
+    // ─── AUTO-UPLOAD TO R2 STORAGE ────────────────────────────────────
+    // Download audio + image from Suno CDN and upload to Cloudflare R2.
     // This ensures beats are permanently stored and don't rely on Suno CDN availability.
-    // Uses same pattern as suno-callback: fire-and-forget so we don't delay the response.
+    // Fire-and-forget so we don't delay the response.
     {
       for (const beat of beatRecords) {
         if (beat.status !== "complete" || !beat.audio_url) continue;
         (async () => {
           try {
+            const { r2Upload } = await import("../_shared/r2.ts");
             // Upload MP3 audio
             if (beat.audio_url) {
               const audioRes = await fetch(beat.audio_url);
               if (audioRes.ok) {
                 const audioData = new Uint8Array(await audioRes.arrayBuffer());
-                await supabase.storage.from("audio").upload(
-                  `beats/${beat.id}/track.mp3`, audioData,
-                  { contentType: "audio/mpeg", upsert: true }
-                );
-                console.log(`Storage: uploaded audio for beat ${beat.id}`);
+                await r2Upload(`beats/${beat.id}/track.mp3`, audioData, "audio/mpeg");
+                console.log(`R2: uploaded audio for beat ${beat.id}`);
               }
             }
             // Upload cover image
@@ -1030,18 +1028,15 @@ serve(async (req) => {
               if (imgRes.ok) {
                 const imgData = new Uint8Array(await imgRes.arrayBuffer());
                 const ct = imgRes.headers.get("content-type") || "image/jpeg";
-                await supabase.storage.from("audio").upload(
-                  `beats/${beat.id}/cover.jpg`, imgData,
-                  { contentType: ct, upsert: true }
-                );
-                console.log(`Storage: uploaded cover for beat ${beat.id}`);
+                await r2Upload(`beats/${beat.id}/cover.jpg`, imgData, ct);
+                console.log(`R2: uploaded cover for beat ${beat.id}`);
               }
             }
-            // Mark as migrated so stream-beat serves from Supabase Storage
+            // Mark as migrated so serving functions use R2 URLs
             await supabase.from("beats").update({ storage_migrated: true }).eq("id", beat.id);
-            console.log(`Storage: beat ${beat.id} marked as storage_migrated`);
+            console.log(`R2: beat ${beat.id} marked as storage_migrated`);
           } catch (uploadErr) {
-            console.error(`Storage upload error for beat ${beat.id}:`, (uploadErr as Error).message);
+            console.error(`R2 upload error for beat ${beat.id}:`, (uploadErr as Error).message);
             // Non-fatal — beat is still usable via CDN URLs until they expire
           }
         })();

@@ -4,6 +4,7 @@ import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { readFile } from "fs/promises";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { detectSilence } from "./silence";
 import { EXCLUDED_SAMPLE_TYPES } from "./constants";
 import type { StemFile, ProcessingResult } from "./types";
@@ -16,6 +17,27 @@ export function getSupabaseClient(): SupabaseClient {
     process.env.SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
+}
+
+// ─── R2 Client (singleton) ────────────────────────────────────────────
+let _r2Client: S3Client | null = null;
+
+function getR2Client(): S3Client {
+  if (_r2Client) return _r2Client;
+  _r2Client = new S3Client({
+    region: "auto",
+    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+    },
+  });
+  return _r2Client;
+}
+
+function r2PublicUrl(path: string): string {
+  const base = process.env.R2_PUBLIC_URL || "https://cdn.musiclaw.app";
+  return `${base}/${path}`;
 }
 
 /**
@@ -50,7 +72,7 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
 }
 
 /**
- * Process all stems: download, detect silence, upload to Supabase Storage,
+ * Process all stems: download, detect silence, upload to Cloudflare R2,
  * create sample records for non-silent + non-excluded stems.
  */
 export async function processAndStoreStems(
@@ -86,24 +108,26 @@ export async function processAndStoreStems(
         `Stem ${stemType}: ${fileSize}B, meanVol=${meanVolume.toFixed(1)}dB, silent=${isSilent}`
       );
 
-      // 4. Upload to Supabase Storage (always upload, even silent — keep full stems set)
+      // 4. Upload to Cloudflare R2 (always upload, even silent — keep full stems set)
       const storagePath = `beats/${beatId}/stems/${stemType}.mp3`;
-      const { error: uploadErr } = await supabase.storage
-        .from("audio")
-        .upload(storagePath, fileData, {
-          contentType: "audio/mpeg",
-          upsert: true,
-        });
-      if (uploadErr) {
+      try {
+        const r2 = getR2Client();
+        await r2.send(
+          new PutObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME!,
+            Key: storagePath,
+            Body: fileData,
+            ContentType: "audio/mpeg",
+          })
+        );
+        console.log(`R2: uploaded ${stemType} for beat ${beatId}`);
+      } catch (uploadErr) {
         console.error(
-          `Storage upload error ${stemType}: ${uploadErr.message}`
+          `R2 upload error ${stemType}: ${(uploadErr as Error).message}`
         );
       }
 
-      const { data: publicUrlData } = supabase.storage
-        .from("audio")
-        .getPublicUrl(storagePath);
-      const publicUrl = publicUrlData?.publicUrl || url;
+      const publicUrl = r2PublicUrl(storagePath);
       storedStems[stemType] = publicUrl;
 
       // 5. Create sample record (skip silent + excluded types)
