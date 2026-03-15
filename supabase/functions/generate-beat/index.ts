@@ -435,7 +435,7 @@ serve(async (req) => {
     let effectiveSunoCookie = inlineSunoCookie || null;
     if (!effectiveSunoCookie) {
       const { data: agentFull } = await supabase
-        .from("agents").select("suno_cookie, suno_self_hosted_url").eq("id", agent.id).single();
+        .from("agents").select("suno_cookie, suno_self_hosted_url, suno_cookie_expires_at").eq("id", agent.id).single();
       if (agentFull?.suno_cookie) {
         effectiveSunoCookie = agentFull.suno_cookie;
       }
@@ -620,7 +620,7 @@ serve(async (req) => {
     // ─── CALL SUNO API ───────────────────────────────────────────────
     let clipIds: string[] = [];
     let clipData: any[] = [];
-    let cookieHealth: { credits_left: number | null; monthly_limit: number | null; plan_type: string } | null = null;
+    let cookieHealth: { credits_left: number | null; monthly_limit: number | null; plan_type: string; cookie_expires_at?: string | null; cookie_days_remaining?: number | null } | null = null;
 
     {
       // Per-agent URL takes priority, otherwise use centralized MusiClaw Suno API
@@ -708,6 +708,18 @@ serve(async (req) => {
           }
           cookieHealth = { credits_left: cl, monthly_limit: ml, plan_type: pt };
 
+          // Add cookie expiry info from stored agent data (best-effort)
+          try {
+            const { data: expiryData } = await supabase
+              .from("agents").select("suno_cookie_expires_at").eq("id", agent.id).single();
+            if (expiryData?.suno_cookie_expires_at) {
+              cookieHealth.cookie_expires_at = expiryData.suno_cookie_expires_at;
+              cookieHealth.cookie_days_remaining = Math.floor(
+                (new Date(expiryData.suno_cookie_expires_at).getTime() - Date.now()) / 86400000
+              );
+            }
+          } catch (_) { /* silent */ }
+
           // Store on agents table (fire-and-forget)
           supabase.from("agents").update({
             suno_credits_left: cl,
@@ -727,6 +739,23 @@ serve(async (req) => {
                   to: [agent.owner_email.trim().toLowerCase()],
                   subject: `Low Suno credits for @${agent.handle} — ${cl} remaining`,
                   html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#f59e0b;font-size:24px;margin:0 0 16px;">Low Suno Credits</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your agent <strong>@${agent.handle}</strong> has <strong>${cl} Suno credits</strong> remaining out of ${ml} monthly. When credits run out, beat generation will fail until your Suno plan renews.</p><p style="color:rgba(255,255,255,0.4);font-size:12px;margin-top:16px;">Plan: ${pt.toUpperCase()}</p><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`,
+                }),
+              }).catch(() => {});
+            }
+          }
+
+          // Cookie expiry warning email (within 7 days)
+          if (cookieHealth?.cookie_days_remaining !== null && cookieHealth?.cookie_days_remaining !== undefined && cookieHealth.cookie_days_remaining <= 7 && cookieHealth.cookie_days_remaining >= 0 && agent.owner_email) {
+            const resendApiKey = Deno.env.get("RESEND_API_KEY");
+            if (resendApiKey) {
+              fetch("https://api.resend.com/emails", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  from: "MusiClaw <noreply@contact.musiclaw.app>",
+                  to: [agent.owner_email.trim().toLowerCase()],
+                  subject: `Suno cookie expiring soon for @${agent.handle} — ${cookieHealth.cookie_days_remaining} days left`,
+                  html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#f59e0b;font-size:24px;margin:0 0 16px;">Cookie Expiring Soon</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your Suno cookie for agent <strong>@${agent.handle}</strong> expires in <strong>${cookieHealth.cookie_days_remaining} day${cookieHealth.cookie_days_remaining === 1 ? '' : 's'}</strong>. When it expires, beat generation will fail.</p><p style="color:rgba(255,255,255,0.7);line-height:1.6;">To refresh it: log into <a href="https://suno.com" style="color:#f59e0b;">suno.com</a> → DevTools (F12) → Application → Cookies → copy the <code>__client</code> cookie value → update via your agent.</p><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`,
                 }),
               }).catch(() => {});
             }
