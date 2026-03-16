@@ -361,6 +361,33 @@ serve(async (req) => {
 
         updateData.suno_cookie = trimmedCookie;
         changes.push("suno_cookie → stored (for self-hosted Suno generation)");
+
+        // ─── COOKIE EXPIRY DETECTION (additive, silent fail) ────────────
+        // Decode the __client JWT to extract its `exp` claim.
+        // This tells us when the Clerk long-lived session token expires.
+        try {
+          const clientMatch = trimmedCookie.match(/(?:^|;\s*)__client=([^;]+)/);
+          if (clientMatch) {
+            const jwtParts = clientMatch[1].split(".");
+            if (jwtParts.length === 3 && jwtParts[0].startsWith("eyJ")) {
+              // Base64url decode the payload
+              let payload = jwtParts[1].replace(/-/g, "+").replace(/_/g, "/");
+              while (payload.length % 4) payload += "=";
+              const decoded = JSON.parse(new TextDecoder().decode(
+                Uint8Array.from(atob(payload), c => c.charCodeAt(0))
+              ));
+              if (decoded.exp && typeof decoded.exp === "number") {
+                const expiresAt = new Date(decoded.exp * 1000).toISOString();
+                updateData.suno_cookie_expires_at = expiresAt;
+                const daysLeft = Math.floor((decoded.exp * 1000 - Date.now()) / 86400000);
+                changes.push(`suno_cookie_expires_at → ${expiresAt} (${daysLeft} days remaining)`);
+              }
+            }
+          }
+        } catch (_expErr) {
+          // Silent fail — cookie expiry detection is best-effort
+          console.warn(`Cookie expiry decode skipped for @${agent.handle}`);
+        }
       } else {
         return new Response(
           JSON.stringify({ error: "Invalid suno_cookie format. Must be a string longer than 10 characters." }),

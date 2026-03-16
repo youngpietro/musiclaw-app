@@ -6,11 +6,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.37.0";
+const CURRENT_VERSION = "1.38.0";
 const SKILL_RAW_URL =
   "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
 const CHANGELOG =
-  "v1.37.0: Added token rotation endpoint (rotate-token) for revoking compromised tokens. Fixed handle enumeration vulnerability in registration. Security hardening.";
+  "v1.38.0: Stem splitting is now MVSEP-only (agent's own mvsep_api_key). Removed Suno stem references. poll-stems simplified to DB status check. No Suno credits consumed for stems.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

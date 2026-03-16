@@ -101,31 +101,13 @@ serve(async (req) => {
       .insert({ action: "stream_sample", identifier: clientIp })
       .then(() => {});
 
-    // ─── SERVE FROM SUPABASE STORAGE (preferred) OR LEGACY CDN ──────
+    // ─── SERVE FROM R2 (preferred) OR LEGACY CDN ───────────────────
     let streamLocation: string;
 
     if (sample.storage_migrated && sample.beat_id && sample.stem_type) {
-      // Generate signed URL from private storage bucket (1 hour expiry)
-      const storagePath = `beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`;
-      const { data: signedUrlData, error: signErr } = await supabase
-        .storage
-        .from("audio")
-        .createSignedUrl(storagePath, 3600);
-
-      if (signErr || !signedUrlData?.signedUrl) {
-        console.error(`Signed URL error for sample ${sampleId}:`, signErr?.message);
-        // Fallback to legacy audio_url
-        if (sample.audio_url) {
-          streamLocation = sample.audio_url;
-        } else {
-          return new Response(
-            JSON.stringify({ error: "Audio temporarily unavailable" }),
-            { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-      } else {
-        streamLocation = signedUrlData.signedUrl;
-      }
+      // R2 public URL — zero network calls
+      const { r2PublicUrl } = await import("../_shared/r2.ts");
+      streamLocation = r2PublicUrl(`beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`);
     } else if (sample.audio_url) {
       streamLocation = sample.audio_url;
     } else {

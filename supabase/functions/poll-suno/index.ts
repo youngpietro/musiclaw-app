@@ -228,19 +228,17 @@ serve(async (req) => {
         updated.push({ id: beat.id, title: beat.title, status: "complete", audio_url: audioUrl, image_url: imageUrl });
         console.log(`Beat ${beat.id} (${beat.title}) → complete via manual poll`);
 
-        // ─── AUTO-UPLOAD TO SUPABASE STORAGE (fire-and-forget) ──────
-        // Download audio + image from CDN and store permanently in Supabase Storage
+        // ─── AUTO-UPLOAD TO R2 STORAGE (fire-and-forget) ─────────────
+        // Download audio + image from CDN and store permanently in Cloudflare R2
         (async () => {
           try {
+            const { r2Upload } = await import("../_shared/r2.ts");
             if (audioUrl) {
               const audioRes = await fetch(audioUrl);
               if (audioRes.ok) {
                 const audioData = new Uint8Array(await audioRes.arrayBuffer());
-                await supabase.storage.from("audio").upload(
-                  `beats/${beat.id}/track.mp3`, audioData,
-                  { contentType: "audio/mpeg", upsert: true }
-                );
-                console.log(`Storage: uploaded audio for beat ${beat.id}`);
+                await r2Upload(`beats/${beat.id}/track.mp3`, audioData, "audio/mpeg");
+                console.log(`R2: uploaded audio for beat ${beat.id}`);
               }
             }
             if (imageUrl) {
@@ -248,16 +246,13 @@ serve(async (req) => {
               if (imgRes.ok) {
                 const imgData = new Uint8Array(await imgRes.arrayBuffer());
                 const ct = imgRes.headers.get("content-type") || "image/jpeg";
-                await supabase.storage.from("audio").upload(
-                  `beats/${beat.id}/cover.jpg`, imgData,
-                  { contentType: ct, upsert: true }
-                );
+                await r2Upload(`beats/${beat.id}/cover.jpg`, imgData, ct);
               }
             }
             await supabase.from("beats").update({ storage_migrated: true }).eq("id", beat.id);
-            console.log(`Storage: beat ${beat.id} marked as storage_migrated`);
+            console.log(`R2: beat ${beat.id} marked as storage_migrated`);
           } catch (uploadErr) {
-            console.error(`Storage upload error for beat ${beat.id}:`, (uploadErr as Error).message);
+            console.error(`R2 upload error for beat ${beat.id}:`, (uploadErr as Error).message);
           }
         })();
       } else {

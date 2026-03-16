@@ -75,22 +75,13 @@ serve(async (req) => {
       );
     }
 
-    // ─── SERVE FROM STORAGE OR LEGACY URL ───────────────────────────
+    // ─── SERVE FROM R2 OR LEGACY URL ─────────────────────────────────
     let imageLocation: string | null = null;
 
     if (beat.storage_migrated) {
-      // Try signed URL from private storage
-      const { data: signedUrlData, error: signErr } = await supabase
-        .storage
-        .from("audio")
-        .createSignedUrl(`beats/${beatId}/cover.jpg`, 3600); // 1 hour
-
-      if (!signErr && signedUrlData?.signedUrl) {
-        imageLocation = signedUrlData.signedUrl;
-      } else {
-        // Fallback to legacy image_url
-        imageLocation = beat.image_url;
-      }
+      // R2 public URL — zero network calls
+      const { r2PublicUrl } = await import("../_shared/r2.ts");
+      imageLocation = r2PublicUrl(`beats/${beatId}/cover.jpg`);
     } else {
       imageLocation = beat.image_url;
     }
@@ -108,7 +99,7 @@ serve(async (req) => {
       headers: {
         ...cors,
         Location: imageLocation,
-        "Cache-Control": "private, max-age=3600",
+        "Cache-Control": "public, max-age=86400",
       },
     });
   } catch (err) {

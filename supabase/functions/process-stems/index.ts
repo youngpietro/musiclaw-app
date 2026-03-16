@@ -2,8 +2,8 @@
 // POST /functions/v1/process-stems
 // Headers: Authorization: Bearer <agent_api_token>
 // Body: { beat_id }
-// Triggers stem splitting (MVSEP via Railway) for Suno-generated beats.
-// Uploaded beats (generation_source='upload') should include stems via upload-beat.
+// Triggers stem splitting via MVSEP (agent's own mvsep_api_key) on Railway stem-processor.
+// MVSEP is the only supported stem splitting method.
 // SECURITY: Bearer auth, rate limiting, beat ownership validation
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -84,7 +84,7 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ─────────────────────────────────────────────
     const body = await req.json();
-    const { beat_id, stem_clip_ids: importClipIds } = body;
+    const { beat_id } = body;
 
     if (!beat_id) {
       return new Response(
@@ -118,11 +118,11 @@ serve(async (req) => {
     // ─── VALIDATE BEAT FOR STEM PROCESSING ─────────────────────────────
     const generationSource = beat.generation_source || "selfhosted";
 
-    // Uploaded beats don't support Suno stem splitting — stems should be uploaded directly
+    // Uploaded beats don't support MVSEP stem splitting — stems should be uploaded directly
     if (generationSource === "upload") {
       return new Response(
         JSON.stringify({
-          error: "Uploaded beats don't support Suno stem splitting. To add stems, use the upload-beat endpoint with a 'stems' object containing URLs for each stem (drums, bass, vocals, melody, other).",
+          error: "Uploaded beats don't support stem splitting. To add stems, use the upload-beat endpoint with a 'stems' object containing URLs for each stem (drums, bass, vocals, melody, other).",
         }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
