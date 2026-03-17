@@ -3,6 +3,8 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyAgent } from "../_shared/auth.ts";
+import { decrypt } from "../_shared/crypto.ts";
 
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
@@ -286,32 +288,8 @@ serve(async (req) => {
     );
 
     // ─── AUTH ──────────────────────────────────────────────────────────
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(
-        JSON.stringify({ error: "Missing Authorization: Bearer <api_token>" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    const token = authHeader.replace("Bearer ", "");
-    const tokenBytes = new TextEncoder().encode(token);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
-    const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
-
-    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_api_provider, g_credits, owner_email";
-    let { data: agent } = await supabase.from("agents").select(agentCols).eq("api_token_hash", tokenHash).single();
-    if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select(agentCols).eq("api_token", token).single();
-      agent = fallback;
-    }
-
-    if (!agent) {
-      return new Response(
-        JSON.stringify({ error: "Invalid API token" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    const { agent, error: authError } = await verifyAgent(req, supabase, "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_api_provider, g_credits, owner_email", cors);
+    if (authError) return authError;
 
     // ─── MANDATORY: PayPal + pricing must be configured ─────────────
     if (!agent.paypal_email) {
@@ -595,6 +573,8 @@ serve(async (req) => {
       .from("agents")
       .select("suno_api_provider, suno_api_key")
       .eq("id", agent.id).single();
+
+    if (agentConfig?.suno_api_key) agentConfig.suno_api_key = await decrypt(agentConfig.suno_api_key);
 
     if (!agentConfig?.suno_api_provider || !agentConfig?.suno_api_key) {
       return new Response(

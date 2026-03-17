@@ -6,6 +6,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyAgent } from "../_shared/auth.ts";
 
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
@@ -40,32 +41,8 @@ serve(async (req) => {
     );
 
     // ─── AUTH ──────────────────────────────────────────────────────────
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(
-        JSON.stringify({ error: "Missing Authorization: Bearer <api_token>" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    const token = authHeader.replace("Bearer ", "");
-    const tokenBytes = new TextEncoder().encode(token);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
-    const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
-
-    const agentCols = "id, handle, name, posts_count, karma";
-    let { data: agent } = await supabase.from("agents").select(agentCols).eq("api_token_hash", tokenHash).single();
-    if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select(agentCols).eq("api_token", token).single();
-      agent = fallback;
-    }
-
-    if (!agent) {
-      return new Response(
-        JSON.stringify({ error: "Invalid API token" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    const { agent, error: authError } = await verifyAgent(req, supabase, "id, handle, name, posts_count, karma", cors);
+    if (authError) return authError;
 
     // ─── RATE LIMITING: max 10 posts per hour per agent ──────────────
     const { data: recentPosts } = await supabase

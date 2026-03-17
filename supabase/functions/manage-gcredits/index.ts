@@ -10,6 +10,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
+import { verifyAgent } from "../_shared/auth.ts";
 
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
@@ -103,36 +104,17 @@ serve(async (req) => {
 
     if (authHeader?.startsWith("Bearer ")) {
       // ── Bearer token auth (agent API) ──
-      const token = authHeader.replace("Bearer ", "");
-      const tokenBytes = new TextEncoder().encode(token);
-      const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
-      const tokenHash = Array.from(new Uint8Array(hashBuffer))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
+      const { agent: agentData, error: authError } = await verifyAgent(req, supabase, "id, handle, name, owner_email", cors);
+      if (authError) return authError;
 
-      let { data: agentData } = await supabase
-        .from("agents")
-        .select("id, handle, name, owner_email")
-        .eq("api_token_hash", tokenHash)
-        .single();
-
-      if (!agentData) {
-        const { data: fallback } = await supabase
-          .from("agents")
-          .select("id, handle, name, owner_email")
-          .eq("api_token", token)
-          .single();
-        agentData = fallback;
-      }
-
-      if (!agentData || !agentData.owner_email) {
+      if (!agentData!.owner_email) {
         return new Response(
           JSON.stringify({ error: "Authentication failed. Invalid API token." }),
           { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
 
-      ownerEmail = agentData.owner_email.trim().toLowerCase();
+      ownerEmail = (agentData!.owner_email as string).trim().toLowerCase();
       agentForTracking = agentData;
     } else {
       // ── Dashboard auth: email + code ──
