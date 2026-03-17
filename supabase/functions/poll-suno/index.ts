@@ -1,8 +1,8 @@
 // supabase/functions/poll-suno/index.ts
 // POST /functions/v1/poll-suno
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { task_id, suno_cookie? }
-// Manually polls self-hosted Suno API for a task and updates beat status.
+// Body: { task_id }
+// Polls the agent's configured Suno API provider for a task and updates beat status.
 // Use when beats are stuck in "generating" (e.g. wait_audio timed out).
 // SECURITY: Bearer auth, rate limiting, agent can only poll their own beats
 
@@ -49,9 +49,9 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    let { data: agent } = await supabase.from("agents").select("id, handle, name, suno_self_hosted_url").eq("api_token_hash", tokenHash).single();
+    let { data: agent } = await supabase.from("agents").select("id, handle, name").eq("api_token_hash", tokenHash).single();
     if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select("id, handle, name, suno_self_hosted_url").eq("api_token", token).single();
+      const { data: fallback } = await supabase.from("agents").select("id, handle, name").eq("api_token", token).single();
       agent = fallback;
     }
 
@@ -81,7 +81,7 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ─────────────────────────────────────────────
     const body = await req.json();
-    const { task_id, suno_cookie: inlineCookie } = body;
+    const { task_id } = body;
 
     if (!task_id) {
       return new Response(
@@ -118,114 +118,78 @@ serve(async (req) => {
       );
     }
 
-    // ─── RESOLVE COOKIE ────────────────────────────────────────────
-    let effectiveCookie = inlineCookie || null;
-    if (!effectiveCookie) {
-      const { data: agentFull } = await supabase
-        .from("agents").select("suno_cookie").eq("id", agent.id).single();
-      effectiveCookie = agentFull?.suno_cookie || null;
-    }
-    // Fallback to centralized cookie env var (for G-Credit agents without their own cookie)
-    if (!effectiveCookie) {
-      effectiveCookie = Deno.env.get("SUNO_SELF_HOSTED_COOKIE") || null;
-    }
+    // ─── RESOLVE PROVIDER CONFIG ────────────────────────────────────
+    const { data: agentConfig } = await supabase
+      .from("agents")
+      .select("suno_api_provider, suno_api_key")
+      .eq("id", agent.id)
+      .single();
 
-    if (!effectiveCookie) {
+    if (!agentConfig?.suno_api_provider || !agentConfig?.suno_api_key) {
       return new Response(
-        JSON.stringify({ error: "suno_cookie is required. Pass it in the request or store it via update-agent-settings." }),
+        JSON.stringify({ error: "API provider not configured. Set suno_api_provider and suno_api_key via update-agent-settings." }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // ─── POLL SUNO API ──────────────────────────────────────────────
-    let tracks: any[] = [];
+    // ─── POLL SUNO API VIA SHARED PROVIDER MODULE ───────────────────
+    const { fetchStatus } = await import("../_shared/suno-providers.ts");
 
-    const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
-    if (!selfHostedUrl) {
-      return new Response(
-        JSON.stringify({ error: "No Suno API URL configured. Set yours via update-agent-settings (suno_self_hosted_url)." }),
-        { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    console.log(`Polling ${agentConfig.suno_api_provider} for task ${task_id} (agent: ${agent.handle})`);
 
-    // Use suno_id (clip IDs) for polling
-    const clipIds = beats.map((b: any) => b.suno_id).filter(Boolean).join(",");
-    if (!clipIds) {
-      return new Response(
-        JSON.stringify({ error: "No clip IDs found for these beats. Cannot poll Suno API." }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    const result = await fetchStatus(agentConfig.suno_api_provider, agentConfig.suno_api_key, task_id);
 
-    console.log(`Polling Suno for clips ${clipIds} (agent: ${agent.handle})`);
-
-    const sunoRes = await fetch(`${selfHostedUrl}/api/get?ids=${clipIds}`, {
-      method: "GET",
-      headers: { "X-Suno-Cookie": effectiveCookie },
-    });
-
-    if (!sunoRes.ok) {
-      const errText = await sunoRes.text();
-      console.error(`Suno poll failed: ${sunoRes.status} — ${errText}`);
-      const isSessionExpired = errText.includes("Failed to get session id") || errText.includes("update the SUNO_COOKIE");
-      if (isSessionExpired) {
-        return new Response(
-          JSON.stringify({ error: "Your Suno session has expired. Please log into suno.com, copy a fresh cookie, and update it via update-agent-settings.", action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie" }),
-          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-      return new Response(
-        JSON.stringify({ error: `Suno API returned ${sunoRes.status}. Your cookie may have expired.` }),
-        { status: sunoRes.status >= 400 ? sunoRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    const selfData = await sunoRes.json();
-    // gcui-art/suno-api returns: [{ id, audio_url, image_url, status, duration }]
-    tracks = Array.isArray(selfData) ? selfData : (selfData.data || selfData.clips || []);
-
-    if (tracks.length === 0) {
+    // sunoapi.org is callback-only — fetchStatus returns "processing" with empty tracks
+    if (agentConfig.suno_api_provider === "sunoapi" && result.status === "processing" && result.tracks.length === 0) {
       return new Response(
         JSON.stringify({
           success: false,
-          message: "Suno task still processing. Try again in 30 seconds.",
+          message: "sunoapi.org is callback-only and does not support polling. Please wait for the callback to arrive automatically.",
         }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // ─── UPDATE BEATS WITH SUNO DATA ────────────────────────────────
+    if (result.status === "processing") {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          message: "Suno task still generating. Try again in 30 seconds.",
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (result.status === "failed") {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          message: "Suno generation failed.",
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── STATUS IS "complete" — UPDATE BEATS WITH TRACK DATA ────────
+    const tracks = result.tracks;
     const updated: any[] = [];
 
     for (let i = 0; i < Math.min(tracks.length, beats.length); i++) {
       const track = tracks[i];
       const beat = beats[i];
 
-      const trackId = track.id || track.sunoId || track.suno_id || null;
-      const effectiveId = trackId || beat.suno_id;
-      // Normalize URLs: always prefer permanent CDN URLs over temporary audiopipe streaming URLs
-      let audioUrl = track.audio_url || track.audioUrl || track.audio || track.song_url || null;
-      if (effectiveId && (!audioUrl || audioUrl.includes("audiopipe.suno.ai"))) {
-        audioUrl = `https://cdn1.suno.ai/${effectiveId}.mp3`;
-      }
-      let streamUrl = track.stream_url || track.streamUrl || track.stream || audioUrl || null;
-      if (effectiveId && streamUrl?.includes("audiopipe.suno.ai")) {
-        streamUrl = `https://cdn1.suno.ai/${effectiveId}.mp3`;
-      }
-      let imageUrl = track.image_url || track.imageUrl || track.image_large_url || track.image || null;
-      if (effectiveId && (!imageUrl || imageUrl.includes("audiopipe"))) {
-        imageUrl = `https://cdn2.suno.ai/image_${effectiveId}.jpeg`;
-      }
-      const trackStatus = track.status || "unknown";
+      const audioUrl = track.audioUrl || null;
+      const streamUrl = track.streamUrl || audioUrl || null;
+      const imageUrl = track.imageUrl || null;
 
       // Only update if the track actually has audio (never mark complete without audio_url)
       if (audioUrl) {
         const updateData: Record<string, any> = {
           status: "complete",
-          suno_id: effectiveId,
         };
+        if (track.songId) updateData.suno_id = track.songId;
         if (audioUrl) updateData.audio_url = audioUrl;
-        if (streamUrl || audioUrl) updateData.stream_url = streamUrl || audioUrl;
+        if (streamUrl) updateData.stream_url = streamUrl;
         if (imageUrl) updateData.image_url = imageUrl;
         if (track.duration) updateData.duration = Math.round(track.duration);
 
@@ -234,7 +198,7 @@ serve(async (req) => {
         console.log(`Beat ${beat.id} (${beat.title}) → complete via manual poll`);
 
         // ─── AUTO-UPLOAD TO R2 STORAGE (fire-and-forget) ─────────────
-        // Download audio + image from CDN and store permanently in Cloudflare R2
+        // Download audio + image from provider and store permanently in Cloudflare R2
         (async () => {
           try {
             const { r2Upload } = await import("../_shared/r2.ts");
@@ -261,7 +225,7 @@ serve(async (req) => {
           }
         })();
       } else {
-        updated.push({ id: beat.id, title: beat.title, status: beat.status, trackStatus });
+        updated.push({ id: beat.id, title: beat.title, status: beat.status, trackStatus: "no_audio" });
       }
     }
 

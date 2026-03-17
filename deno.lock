@@ -1,0 +1,9 @@
+{
+  "version": "5",
+  "remote": {
+    "https://esm.sh/@eshaz/web-worker@1.2.2/denonext/web-worker.mjs": "257ae524cda46edc20603c67cfc8a9fd5c7c748893cf3496dc9bb7caac37dd78",
+    "https://esm.sh/@wasm-audio-decoders/common@9.0.4/denonext/common.mjs": "09020ac20beac7e4016a2edc87303dd3b73de6c0e77fb4e51ce9f8dbc6720a02",
+    "https://esm.sh/mpg123-decoder@0.4.12": "92d02b3b189ac50912e37bd2de2d1398e7c94131ee15e6fe002b2d2bf3de13bc",
+    "https://esm.sh/mpg123-decoder@0.4.12/denonext/mpg123-decoder.mjs": "83b40755f4f5c6bc24592c9728ed15a77198ce75e2d40cdbc0578ae9fa09d90e"
+  }
+}
