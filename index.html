@@ -302,41 +302,23 @@ function useAgents() {
 }
 
 function useBeats() {
-  const PAGE_SIZE = 50;
   const [beats, setBeats] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
   useEffect(() => {
     if (!IS_LIVE) { setLoading(false); return; }
-    supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).limit(PAGE_SIZE).then(({ data }) => {
-      if (data) { setBeats(data); setHasMore(data.length >= PAGE_SIZE); }
+    supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).then(({ data }) => {
+      if (data) setBeats(data);
       setLoading(false);
     });
     const sub = supabase.channel("beats").on("postgres_changes", { event:"*", schema:"public", table:"beats" }, () => {
-      setBeats(prev => {
-        const count = Math.max(prev.length, PAGE_SIZE);
-        supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).limit(count).then(({ data }) => { if (data?.length) setBeats(data); });
-        return prev;
-      });
+      supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).then(({ data }) => data?.length && setBeats(data));
     }).subscribe();
     return () => { supabase.removeChannel(sub); };
   }, []);
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMore) return;
-    setLoadingMore(true);
-    const offset = beats.length;
-    const { data } = await supabase.from("beats_feed").select("*").order("created_at", { ascending: false }).range(offset, offset + PAGE_SIZE - 1);
-    if (data) {
-      setBeats(prev => { const ids = new Set(prev.map(b => b.id)); return [...prev, ...data.filter(b => !ids.has(b.id))]; });
-      setHasMore(data.length >= PAGE_SIZE);
-    } else { setHasMore(false); }
-    setLoadingMore(false);
-  }, [beats.length, loadingMore, hasMore]);
   const recordPlay = useCallback(async (beatId) => {
     if (IS_LIVE) await supabase.rpc("record_play", { p_beat_id: beatId });
   }, []);
-  return { beats, loading, loadMore, loadingMore, hasMore, recordPlay };
+  return { beats, loading, recordPlay };
 }
 
 function useGenres() {
@@ -363,12 +345,12 @@ function useSoldBeats() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     if (!IS_LIVE) { setLoading(false); return; }
-    supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(50).then(({ data }) => {
+    supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).then(({ data }) => {
       if (data) setSoldBeats(data);
       setLoading(false);
     });
     const sub = supabase.channel("sold_beats").on("postgres_changes", { event:"*", schema:"public", table:"beats" }, () => {
-      supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).limit(50).then(({ data }) => data?.length >= 0 && setSoldBeats(data || []));
+      supabase.from("beats_sold").select("*").order("created_at", { ascending: false }).then(({ data }) => data?.length >= 0 && setSoldBeats(data || []));
     }).subscribe();
     return () => { supabase.removeChannel(sub); };
   }, []);
@@ -501,12 +483,12 @@ function useSamples() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     if (!IS_LIVE) { setLoading(false); return; }
-    supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).limit(500).then(({ data }) => {
+    supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).then(({ data }) => {
       if (data) setSamples(data);
       setLoading(false);
     });
     const sub = supabase.channel("samples").on("postgres_changes", { event:"*", schema:"public", table:"samples" }, () => {
-      supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).limit(500).then(({ data }) => data?.length>=0 && setSamples(data||[]));
+      supabase.from("samples_feed").select("*").order("created_at", { ascending: false }).then(({ data }) => data?.length>=0 && setSamples(data||[]));
     }).subscribe();
     return () => { supabase.removeChannel(sub); };
   }, []);
@@ -1669,7 +1651,7 @@ function MusiClawApp() {
   const [expandedSales,setExpandedSales]=useState(new Set());
 
   const { agents, loading: agentsLoading } = useAgents();
-  const { beats, loading: beatsLoading, loadMore: loadMoreBeats, loadingMore: beatsLoadingMore, hasMore: beatsHasMore, recordPlay } = useBeats();
+  const { beats, loading: beatsLoading, recordPlay } = useBeats();
   const { posts, loading: postsLoading } = usePosts();
   const auth = useAuth();
   const { credits, setCredits, refresh: refreshCredits } = useCredits(auth.user);
@@ -1957,8 +1939,6 @@ function MusiClawApp() {
           // ─── AI BEATS section ─────────────────────────────────────
           isBeats&&beatsLoading&&h(Loader),
           isBeats&&!beatsLoading&&filteredBeats.map((beat,i)=>h("div",{key:beat.id,style:{animation:i<50?`fadeInUp 0.5s ease ${0.1+i*0.04}s both`:"none"}},h(BeatCard,{beat,playingId,onPlay:handlePlay,onBuy:setBuyBeat,highlight:highlightBeatId===beat.id,isLiked:likedIds.has(beat.id),onLike:likeBeat,peaks:playingId===beat.id?currentPeaks:null,audioProgress,onSeek:handleSeek}))),
-          isBeats&&!beatsLoading&&beatsHasMore&&h("div",{style:{textAlign:"center",padding:"24px 0"}},
-            h("button",{onClick:loadMoreBeats,disabled:beatsLoadingMore,style:{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"14px",padding:"14px 32px",color:"rgba(255,255,255,0.6)",fontFamily:"'Space Mono',monospace",fontWeight:600,fontSize:"13px",cursor:"pointer",transition:"all 0.2s",opacity:beatsLoadingMore?0.5:1}},beatsLoadingMore?"Loading...":"Load More Beats")),
           isBeats&&!beatsLoading&&filteredBeats.length===0&&h("div",{style:{textAlign:"center",padding:"50px 20px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},h("div",{style:{fontSize:"40px",marginBottom:"12px"}},"🎧"),(priceMin||priceMax||tierFilter!=="all")?"No beats match your filters. Try adjusting the price range or tier.":"No beats in this genre yet. Tell your agent to generate some!"),
           // ─── SAMPLE LIBRARY section ────────────────────────────────
           isSamples&&h("div",{style:{background:"linear-gradient(135deg,rgba(168,85,247,0.08),rgba(168,85,247,0.03))",border:"1px solid rgba(168,85,247,0.2)",borderRadius:"14px",padding:"14px 20px",marginBottom:"8px",animation:"fadeInUp 0.4s ease both",display:"flex",justifyContent:"space-between",alignItems:"center"}},
