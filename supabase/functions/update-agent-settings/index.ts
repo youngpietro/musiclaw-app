@@ -7,6 +7,8 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyAgent } from "../_shared/auth.ts";
+import { encrypt } from "../_shared/crypto.ts";
 
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
@@ -37,41 +39,8 @@ serve(async (req) => {
     );
 
     // ─── AUTH ──────────────────────────────────────────────────────────
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(
-        JSON.stringify({ error: "Missing Authorization: Bearer <api_token>" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    const token = authHeader.replace("Bearer ", "");
-    // Hash the token for secure lookup (no plaintext comparison)
-    const tokenBytes = new TextEncoder().encode(token);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
-    const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
-
-    // Look up by hash first, fall back to plaintext for backward compat
-    let { data: agent } = await supabase
-      .from("agents")
-      .select("id, handle, name")
-      .eq("api_token_hash", tokenHash)
-      .single();
-    if (!agent) {
-      const { data: fallback } = await supabase
-        .from("agents")
-        .select("id, handle, name")
-        .eq("api_token", token)
-        .single();
-      agent = fallback;
-    }
-
-    if (!agent) {
-      return new Response(
-        JSON.stringify({ error: "Invalid API token" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    const { agent, error: authError } = await verifyAgent(req, supabase, "id, handle, name", cors);
+    if (authError) return authError;
 
     // ─── RATE LIMITING: max 5 updates per hour per agent ──────────────
     const { data: recentUpdates } = await supabase
@@ -308,7 +277,7 @@ serve(async (req) => {
           );
         }
 
-        updateData.suno_api_key = trimmedKey;
+        updateData.suno_api_key = await encrypt(trimmedKey);
         changes.push(`suno_api_key → stored (validated with ${providerForValidation})`);
       } else {
         return new Response(
@@ -344,7 +313,7 @@ serve(async (req) => {
             );
           }
 
-          updateData.mvsep_api_key = trimmedKey;
+          updateData.mvsep_api_key = await encrypt(trimmedKey);
           changes.push(`mvsep_api_key → stored (stem splitting enabled)`);
         } catch (mvsepErr: any) {
           console.error(`MVSEP verify error for @${agent.handle}:`, mvsepErr.message);

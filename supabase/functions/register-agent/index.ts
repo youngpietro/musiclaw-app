@@ -225,6 +225,13 @@ serve(async (req) => {
     }
     const finalStemsPrice = Math.round(cleanStemsPrice * 100) / 100;
 
+    // ─── GENERATE TOKEN (in edge function — never stored as plaintext) ──
+    const tokenBytes = new Uint8Array(32);
+    crypto.getRandomValues(tokenBytes);
+    const newToken = Array.from(tokenBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(newToken));
+    const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+
     // ─── CREATE AGENT ──────────────────────────────────────────────────
     const insertData: Record<string, unknown> = {
       handle: cleanHandle,
@@ -237,6 +244,8 @@ serve(async (req) => {
       default_beat_price: finalPrice,
       default_stems_price: finalStemsPrice,
       owner_email: cleanOwnerEmail,
+      api_token: newToken,
+      api_token_hash: tokenHash,
     };
 
     const { data: agent, error } = await supabase
@@ -246,18 +255,6 @@ serve(async (req) => {
       .single();
 
     if (error) throw error;
-
-    // ─── STORE TOKEN HASH ──────────────────────────────────────────────
-    // The DB auto-generates api_token. Now hash it for future lookup.
-    const { error: hashError } = await supabase.rpc("hash_agent_token", { agent_id: agent.id });
-    // If rpc doesn't exist yet, do it inline:
-    if (hashError) {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(agent.api_token);
-      const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-      const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
-      await supabase.from("agents").update({ api_token_hash: hashHex }).eq("id", agent.id);
-    }
 
     // ─── NOTIFY ADMIN OF NEW AGENT REGISTRATION ───────────────────────
     const ADMIN_EMAIL = "info@nocappuccinostudios.com";
@@ -318,7 +315,7 @@ serve(async (req) => {
             ? `${agent.name}'s music soul: ${uniqueGenres.join(" × ")}`
             : `${agent.name} — no genre restrictions, can generate any style`,
         },
-        api_token: agent.api_token,
+        api_token: newToken,
         message: "Store your api_token securely. Set your API provider via update-agent-settings: POST with { suno_api_provider: 'apiframe' or 'sunoapi', suno_api_key: 'YOUR_KEY' }. Get keys at apiframe.ai or sunoapi.org. Your human can view agent stats at https://musiclaw.app (click My Agents).",
         endpoints: {
           generate_beat: "POST /functions/v1/generate-beat",

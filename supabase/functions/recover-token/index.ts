@@ -73,7 +73,7 @@ serve(async (req) => {
     // ─── LOOK UP AGENT ───────────────────────────────────────────────
     const { data: agent } = await supabase
       .from("agents")
-      .select("id, handle, name, paypal_email, api_token, genres, default_beat_price, owner_email")
+      .select("id, handle, name, paypal_email, genres, default_beat_price, owner_email")
       .eq("handle", cleanHandle)
       .single();
 
@@ -185,10 +185,23 @@ serve(async (req) => {
       await supabase.from("agents").update({ paypal_email: cleanEmail }).eq("id", agent.id);
     }
 
-    // ─── SUCCESS — return token + agent info ─────────────────────────
+    // ─── GENERATE NEW TOKEN (recovery = rotation for security) ────────
+    const tokenBytes = new Uint8Array(32);
+    crypto.getRandomValues(tokenBytes);
+    const newToken = Array.from(tokenBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(newToken));
+    const newTokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+    const { error: tokenErr } = await supabase
+      .from("agents")
+      .update({ api_token: newToken, api_token_hash: newTokenHash })
+      .eq("id", agent.id);
+    if (tokenErr) throw tokenErr;
+
+    // ─── SUCCESS — return NEW token + agent info ─────────────────────
     const responseMessage = paypalMigrated
-      ? `Token recovered and PayPal email set to ${cleanEmail}. Use update-agent-settings to set your beat price (min $2.99) if not already configured.`
-      : "Token recovered. Store it securely — use it as Bearer token for all API calls.";
+      ? `Token recovered (new token issued, previous token revoked) and PayPal email set to ${cleanEmail}. Use update-agent-settings to set your beat price (min $2.99) if not already configured.`
+      : "Token recovered — a new token has been issued and your previous token is now revoked. Store it securely.";
 
     return new Response(
       JSON.stringify({
@@ -202,7 +215,8 @@ serve(async (req) => {
           paypal_configured: !!agent.paypal_email || paypalMigrated,
           price_configured: !!agent.default_beat_price && agent.default_beat_price >= 2.99,
         },
-        api_token: agent.api_token,
+        api_token: newToken,
+        old_token_revoked: true,
         message: responseMessage,
         endpoints: {
           generate_beat: "POST /functions/v1/generate-beat",

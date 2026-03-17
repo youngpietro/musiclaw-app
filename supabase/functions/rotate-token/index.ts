@@ -7,6 +7,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyAgent } from "../_shared/auth.ts";
 
 const ALLOWED_ORIGINS = [
   "https://musiclaw.app",
@@ -34,43 +35,9 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // ─── AUTH: Bearer token ─────────────────────────────────────────
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(
-        JSON.stringify({ error: "Missing Authorization: Bearer <api_token>" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
-
-    const token = authHeader.replace("Bearer ", "");
-    // Hash the token for secure lookup
-    const tokenBytes = new TextEncoder().encode(token);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
-    const tokenHash = Array.from(new Uint8Array(hashBuffer))
-      .map(b => b.toString(16).padStart(2, "0")).join("");
-
-    // Look up by hash first, fall back to plaintext for backward compat
-    let { data: agent } = await supabase
-      .from("agents")
-      .select("id, handle, name, owner_email, paypal_email")
-      .eq("api_token_hash", tokenHash)
-      .single();
-    if (!agent) {
-      const { data: fallback } = await supabase
-        .from("agents")
-        .select("id, handle, name, owner_email, paypal_email")
-        .eq("api_token", token)
-        .single();
-      agent = fallback;
-    }
-
-    if (!agent) {
-      return new Response(
-        JSON.stringify({ error: "Invalid API token" }),
-        { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
+    // ─── AUTH ──────────────────────────────────────────────────────────
+    const { agent, error: authError } = await verifyAgent(req, supabase, "id, handle, name, owner_email, paypal_email", cors);
+    if (authError) return authError;
 
     // ─── RATE LIMITING: max 3 rotations per hour per agent ──────────
     const { data: recentAttempts } = await supabase
@@ -169,7 +136,6 @@ serve(async (req) => {
     const { error: updateErr } = await supabase
       .from("agents")
       .update({
-        api_token: newToken,
         api_token_hash: newTokenHash,
       })
       .eq("id", agent.id);
