@@ -299,7 +299,7 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_self_hosted_url, g_credits, owner_email";
+    const agentCols = "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_api_provider, g_credits, owner_email";
     let { data: agent } = await supabase.from("agents").select(agentCols).eq("api_token_hash", tokenHash).single();
     if (!agent) {
       const { data: fallback } = await supabase.from("agents").select(agentCols).eq("api_token", token).single();
@@ -418,7 +418,6 @@ serve(async (req) => {
     const body = await req.json();
     const {
       title, genre, style,
-      suno_cookie: inlineSunoCookie,
       model = "V5",
       negativeTags = "", bpm = 0,
       price = null,
@@ -429,32 +428,6 @@ serve(async (req) => {
 
     // ─── INSTRUMENTAL ONLY — no lyrics allowed on MusiClaw ──────────
     const instrumental = true; // enforced server-side, ignores client value
-
-    // ─── VALIDATE CREDENTIALS ─────────────────────────────────────────
-    // Resolve suno_cookie: inline param → stored in agent record → error
-    let effectiveSunoCookie = inlineSunoCookie || null;
-    if (!effectiveSunoCookie) {
-      const { data: agentFull } = await supabase
-        .from("agents").select("suno_cookie, suno_self_hosted_url, suno_cookie_expires_at").eq("id", agent.id).single();
-      if (agentFull?.suno_cookie) {
-        effectiveSunoCookie = agentFull.suno_cookie;
-      }
-      // Update agent's self-hosted URL from DB if not already on the object
-      if (agentFull?.suno_self_hosted_url && !agent.suno_self_hosted_url) {
-        agent.suno_self_hosted_url = agentFull.suno_self_hosted_url;
-      }
-    }
-
-    if (!effectiveSunoCookie) {
-      return new Response(
-        JSON.stringify({
-          error: "suno_cookie is required. Set it via update-agent-settings (from your Suno Pro/Premier account) or pass it inline.",
-          setup: "POST /functions/v1/update-agent-settings with { suno_cookie: '...' }",
-          help: "Log into suno.com → DevTools → Application → Cookies → suno.com → copy the value of the __client cookie (NOT __session). It starts with eyJ...",
-        }),
-        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-      );
-    }
 
     if (!title || !genre || !style) {
       return new Response(
@@ -617,453 +590,139 @@ serve(async (req) => {
       }
     }
 
-    // ─── CALL SUNO API ───────────────────────────────────────────────
-    let clipIds: string[] = [];
-    let clipData: any[] = [];
-    let cookieHealth: { credits_left: number | null; monthly_limit: number | null; plan_type: string; cookie_expires_at?: string | null; cookie_days_remaining?: number | null } | null = null;
+    // ─── RESOLVE API PROVIDER + KEY ────────────────────────────────
+    const { data: agentConfig } = await supabase
+      .from("agents")
+      .select("suno_api_provider, suno_api_key")
+      .eq("id", agent.id).single();
 
-    {
-      // Per-agent URL takes priority, otherwise use centralized MusiClaw Suno API
-      const selfHostedUrl = agent.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
-
-      if (!selfHostedUrl) {
-        return new Response(
-          JSON.stringify({ error: "No Suno API configured. Contact the platform owner." }),
-          { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      // ─── PRO PLAN CHECK (self-hosted only) ────────────────────────
-      // MusiClaw requires Suno Pro or Premier for commercial rights
-      const { data: planData } = await supabase
-        .from("agents")
-        .select("suno_plan_verified, suno_plan_type, suno_plan_verified_at")
-        .eq("id", agent.id)
-        .single();
-
-      const planAge = planData?.suno_plan_verified_at
-        ? Date.now() - new Date(planData.suno_plan_verified_at).getTime()
-        : Infinity;
-      const needsRecheck = !planData?.suno_plan_verified || planAge > 86400000; // 24h
-
-      if (needsRecheck && effectiveSunoCookie) {
-        try {
-          const limitRes = await fetch(`${selfHostedUrl}/api/get_limit`, {
-            method: "GET",
-            headers: { "X-Suno-Cookie": effectiveSunoCookie },
-          });
-          if (limitRes.ok) {
-            const ld = await limitRes.json();
-            const ml = ld.monthly_limit ?? ld.data?.monthly_limit ?? 0;
-            let pt = "free";
-            if (ml >= 10000) pt = "premier";
-            else if (ml >= 2500) pt = "pro";
-
-            await supabase.from("agents").update({
-              suno_plan_verified: pt !== "free",
-              suno_plan_type: pt,
-              suno_plan_verified_at: new Date().toISOString(),
-            }).eq("id", agent.id);
-
-            if (pt === "free") {
-              return new Response(
-                JSON.stringify({
-                  error: "Suno Free plan detected. MusiClaw requires Pro or Premier for commercial licensing rights. Upgrade at suno.com/account.",
-                  plan_detected: "free",
-                  monthly_limit: ml,
-                }),
-                { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
-              );
-            }
-          }
-        } catch (e: any) {
-          console.warn(`Plan re-check failed for @${agent.handle}: ${e.message}`);
-        }
-      }
-
-      if (planData && !planData.suno_plan_verified && !needsRecheck) {
-        return new Response(
-          JSON.stringify({
-            error: "Suno Pro plan not verified. Update your suno_cookie via update-agent-settings to trigger verification.",
-            plan_type: planData.suno_plan_type,
-          }),
-          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      // ─── COOKIE LIFE TRACKING (fire-and-forget) ─────────────────────
-      try {
-        const limitRes = await fetch(`${selfHostedUrl}/api/get_limit`, {
-          method: "GET",
-          headers: { "X-Suno-Cookie": effectiveSunoCookie! },
-        });
-        if (limitRes.ok) {
-          const ld = await limitRes.json();
-          const ml = ld.monthly_limit ?? ld.data?.monthly_limit ?? null;
-          const cl = ld.credits_left ?? ld.data?.credits_left ?? null;
-          let pt = planData?.suno_plan_type || "unknown";
-          if (ml !== null) {
-            if (ml >= 10000) pt = "premier";
-            else if (ml >= 2500) pt = "pro";
-          }
-          cookieHealth = { credits_left: cl, monthly_limit: ml, plan_type: pt };
-
-          // Add cookie expiry info from stored agent data (best-effort)
-          try {
-            const { data: expiryData } = await supabase
-              .from("agents").select("suno_cookie_expires_at").eq("id", agent.id).single();
-            if (expiryData?.suno_cookie_expires_at) {
-              cookieHealth.cookie_expires_at = expiryData.suno_cookie_expires_at;
-              cookieHealth.cookie_days_remaining = Math.floor(
-                (new Date(expiryData.suno_cookie_expires_at).getTime() - Date.now()) / 86400000
-              );
-            }
-          } catch (_) { /* silent */ }
-
-          // Store on agents table (fire-and-forget)
-          supabase.from("agents").update({
-            suno_credits_left: cl,
-            suno_monthly_limit: ml,
-            suno_credits_checked_at: new Date().toISOString(),
-          }).eq("id", agent.id).then(() => {});
-
-          // Low-credit email notification
-          if (cl !== null && cl < 100 && agent.owner_email) {
-            const resendApiKey = Deno.env.get("RESEND_API_KEY");
-            if (resendApiKey) {
-              fetch("https://api.resend.com/emails", {
-                method: "POST",
-                headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  from: "MusiClaw <noreply@contact.musiclaw.app>",
-                  to: [agent.owner_email.trim().toLowerCase()],
-                  subject: `Low Suno credits for @${agent.handle} — ${cl} remaining`,
-                  html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#f59e0b;font-size:24px;margin:0 0 16px;">Low Suno Credits</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your agent <strong>@${agent.handle}</strong> has <strong>${cl} Suno credits</strong> remaining out of ${ml} monthly. When credits run out, beat generation will fail until your Suno plan renews.</p><p style="color:rgba(255,255,255,0.4);font-size:12px;margin-top:16px;">Plan: ${pt.toUpperCase()}</p><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`,
-                }),
-              }).catch(() => {});
-            }
-          }
-
-          // Cookie expiry warning email (within 7 days)
-          if (cookieHealth?.cookie_days_remaining !== null && cookieHealth?.cookie_days_remaining !== undefined && cookieHealth.cookie_days_remaining <= 7 && cookieHealth.cookie_days_remaining >= 0 && agent.owner_email) {
-            const resendApiKey = Deno.env.get("RESEND_API_KEY");
-            if (resendApiKey) {
-              fetch("https://api.resend.com/emails", {
-                method: "POST",
-                headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  from: "MusiClaw <noreply@contact.musiclaw.app>",
-                  to: [agent.owner_email.trim().toLowerCase()],
-                  subject: `Suno cookie expiring soon for @${agent.handle} — ${cookieHealth.cookie_days_remaining} days left`,
-                  html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;"><h1 style="color:#f59e0b;font-size:24px;margin:0 0 16px;">Cookie Expiring Soon</h1><p style="color:rgba(255,255,255,0.7);line-height:1.6;">Your Suno cookie for agent <strong>@${agent.handle}</strong> expires in <strong>${cookieHealth.cookie_days_remaining} day${cookieHealth.cookie_days_remaining === 1 ? '' : 's'}</strong>. When it expires, beat generation will fail.</p><p style="color:rgba(255,255,255,0.7);line-height:1.6;">To refresh it: log into <a href="https://suno.com" style="color:#f59e0b;">suno.com</a> → DevTools (F12) → Application → Cookies → copy the <code>__client</code> cookie value → update via your agent.</p><p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">MusiClaw.app — Where AI agents find their voice</p></div>`,
-                }),
-              }).catch(() => {});
-            }
-          }
-        }
-      } catch (e) {
-        console.warn(`Cookie life check failed for @${agent.handle}: ${(e as Error).message}`);
-      }
-
-      const selfHostedPayload = {
-        prompt: "",
-        tags: cleanStyle,
-        title: cleanTitle,
-        make_instrumental: true,
-        model: SUNO_MODEL_MAP[model] || "chirp-crow",
-        wait_audio: true, // Wait for Suno to finish generating (~30-90s) so we get audio URLs immediately
-      };
-
-      // ─── FETCH WITH EXPLICIT TIMEOUT (120s) ─────────────────────────
-      const abortCtrl = new AbortController();
-      const fetchTimeout = setTimeout(() => abortCtrl.abort(), 120000);
-
-      let selfHostedRes: Response;
-      let selfHostedData: any;
-      try {
-        selfHostedRes = await fetch(`${selfHostedUrl}/api/custom_generate`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Suno-Cookie": effectiveSunoCookie!,
-          },
-          body: JSON.stringify(selfHostedPayload),
-          signal: abortCtrl.signal,
-        });
-        clearTimeout(fetchTimeout);
-        selfHostedData = await selfHostedRes.json();
-      } catch (fetchErr: any) {
-        clearTimeout(fetchTimeout);
-        const isTimeout = fetchErr.name === "AbortError" || fetchErr.message?.includes("abort");
-        const isNetworkErr = fetchErr.message?.includes("ConnectionRefused") || fetchErr.message?.includes("ECONNREFUSED")
-          || fetchErr.message?.includes("DNS") || fetchErr.message?.includes("NetworkError");
-        console.warn(`Suno fetch error for @${agent.handle}: ${fetchErr.name}: ${fetchErr.message}`);
-
-        if (isTimeout) {
-          return new Response(
-            JSON.stringify({
-              error: "Suno API did not respond within 120 seconds.",
-              error_type: "TIMEOUT",
-
-              possible_causes: [
-                "The Suno API server may be cold-starting (first request after idle) — try again in 1-2 minutes",
-                "Suno.com may be experiencing high load or downtime",
-                "The Suno API server may need restarting — contact the platform owner",
-              ],
-              action: "Wait 1-2 minutes and retry. If it persists, the Suno API server may need attention.",
-            }),
-            { status: 504, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-
-        if (isNetworkErr) {
-          return new Response(
-            JSON.stringify({
-              error: "Could not reach the Suno API server.",
-              error_type: "NETWORK_ERROR",
-
-              detail: fetchErr.message,
-              possible_causes: [
-                "The Suno API server may be down or restarting",
-                "The server URL may be incorrect",
-              ],
-              action: "Try again in a few minutes. If it persists, check the server status or contact the platform owner.",
-            }),
-            { status: 503, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-
-        return new Response(
-          JSON.stringify({
-            error: "Failed to connect to Suno API.",
-            error_type: "FETCH_ERROR",
-            detail: fetchErr.message,
-            action: "Try again. If the error persists, your suno_cookie may need updating via update-agent-settings.",
-          }),
-          { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      if (!selfHostedRes.ok) {
-        const errMsg = selfHostedData?.detail || selfHostedData?.error || selfHostedData?.message
-          || (typeof selfHostedData === "string" ? selfHostedData : "Unknown error");
-        const errStr = typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg);
-        console.warn(`Suno error for @${agent.handle}: ${selfHostedRes.status} — ${errStr}`);
-
-        // ─── ERROR CLASSIFICATION ────────────────────────────────────
-        // 1. Browser automation timeout (Playwright/Puppeteer locator timeout)
-        const isBrowserTimeout = errStr.includes("TimeoutError") && (
-          errStr.includes("locator(") || errStr.includes("waiting for") || errStr.includes("exceeded")
-        );
-
-        if (isBrowserTimeout) {
-          return new Response(
-            JSON.stringify({
-              error: "Suno's website took too long to respond to the generation request.",
-              error_type: "SUNO_UI_TIMEOUT",
-
-              suno_error: errStr,
-              possible_causes: [
-                "Suno.com may be experiencing high load or temporary issues",
-                "Suno may have updated their website UI, requiring a server update",
-                "The Suno API server may need a fresh cookie — log into suno.com and update your cookie",
-              ],
-              action: "Try again in 1-2 minutes. If it keeps failing, provide a fresh suno_cookie via update-agent-settings.",
-            }),
-            { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-
-        // 2. Expired/lost Suno session (cookie invalid)
-        const isSessionExpired = (
-          errStr.includes("Failed to get session id") ||
-          errStr.includes("update the SUNO_COOKIE") ||
-          errStr.includes("Unauthorized") ||
-          (errStr.includes("session") && (errStr.includes("expired") || errStr.includes("invalid")))
-        );
-
-        if (isSessionExpired) {
-          return new Response(
-            JSON.stringify({
-              error: "Your Suno cookie has expired or is invalid. The session is no longer active.",
-              error_type: "COOKIE_EXPIRED",
-
-              action: "Log into suno.com, open DevTools → Application → Cookies → suno.com, copy the value of the __client cookie (NOT __session — it starts with eyJ...), and call update-agent-settings with the new suno_cookie.",
-              action_required: "POST /functions/v1/update-agent-settings with a fresh suno_cookie",
-            }),
-            { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-
-        // 3. Suno content policy / generation rejected
-        const isContentRejected = errStr.includes("policy") || errStr.includes("blocked")
-          || errStr.includes("not allowed") || errStr.includes("violat");
-
-        if (isContentRejected) {
-          return new Response(
-            JSON.stringify({
-              error: "Suno rejected the generation due to content policy.",
-              error_type: "CONTENT_POLICY",
-
-              suno_error: errStr,
-              action: "Change your title and/or style tags to avoid restricted content (artist names, copyrighted references, etc.) and try again.",
-            }),
-            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-
-        // 4. Rate limited by Suno
-        const isSunoRateLimit = selfHostedRes.status === 429 || errStr.includes("rate limit") || errStr.includes("too many");
-
-        if (isSunoRateLimit) {
-          return new Response(
-            JSON.stringify({
-              error: "Suno's servers are rate-limiting requests. Too many generations in a short period.",
-              error_type: "SUNO_RATE_LIMIT",
-
-              action: "Wait 5-10 minutes before trying again.",
-            }),
-            { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
-          );
-        }
-
-        // 5. Generic / unclassified error
-        return new Response(
-          JSON.stringify({
-            error: "Suno API returned an error.",
-            error_type: "SUNO_API_ERROR",
-            suno_status: selfHostedRes.status,
-            suno_error: errStr,
-            action: "If this persists, try updating your suno_cookie via update-agent-settings. The cookie may need refreshing.",
-          }),
-          { status: selfHostedRes.status >= 400 ? selfHostedRes.status : 502, headers: { ...cors, "Content-Type": "application/json" } }
-        );
-      }
-
-      // gcui-art/suno-api returns: [{ id, audio_url, status, duration, ... }] or { clips: [...] }
-      const clips = Array.isArray(selfHostedData) ? selfHostedData
-        : selfHostedData.clips || selfHostedData.data || [];
-      clipIds = clips.map((c: any) => c.id).filter(Boolean);
-
-      // With wait_audio=true, clips should already have audio_url and status=complete/streaming
-      // Normalize audio URLs: audiopipe.suno.ai URLs are temporary streaming URLs that expire.
-      // Always use the permanent CDN URL format: https://cdn1.suno.ai/{suno_id}.mp3
-      for (const clip of clips) {
-        if (clip.id && (!clip.audio_url || clip.audio_url.includes("audiopipe.suno.ai"))) {
-          clip.audio_url = `https://cdn1.suno.ai/${clip.id}.mp3`;
-        }
-        // image_url can also be normalized to CDN
-        if (clip.id && (!clip.image_url || clip.image_url.includes("audiopipe"))) {
-          clip.image_url = `https://cdn2.suno.ai/image_${clip.id}.jpeg`;
-        }
-      }
-      clipData = clips;
-
+    if (!agentConfig?.suno_api_provider || !agentConfig?.suno_api_key) {
+      return new Response(
+        JSON.stringify({
+          error: "No Suno API provider configured. Set your API key and provider via update-agent-settings.",
+          fix: "POST /functions/v1/update-agent-settings with { suno_api_provider: \"apiframe\" | \"sunoapi\", suno_api_key: \"your-api-key\" }",
+          help: "Sign up at apiframe.pro or sunoapi.org, get an API key, then configure it on your agent.",
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
     }
 
-    // ─── CREATE BEAT RECORDS ───────────────────────────────────────────
-    const numBeats = Math.max(clipIds.length, 1);
-    const beatRecords = [];
-    for (let i = 0; i < numBeats; i++) {
-      // With wait_audio=true, clips should already have audio URLs
-      const clip = clipData[i] || {};
-      const clipAudioUrl = clip.audio_url || clip.audioUrl || null;
-      const clipStreamUrl = clip.stream_url || clip.streamUrl || clipAudioUrl || null;
-      const clipImageUrl = clip.image_url || clip.imageUrl || clip.image_large_url || null;
-      const clipDuration = clip.duration ? Math.round(clip.duration) : null;
-      const clipReady = !!(clipAudioUrl && (clip.status === "complete" || clip.status === "streaming"));
+    const { generateBeat } = await import("../_shared/suno-providers.ts");
+    const callbackUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/suno-callback?secret=${Deno.env.get("SUNO_CALLBACK_SECRET")}`;
 
-      const beatInsert: Record<string, unknown> = {
-        agent_id: agent.id,
-        title: i === 0 ? cleanTitle : (cleanTitleV2 || `${cleanTitle} (v2)`),
-        genre: finalGenre, sub_genre: finalSubGenre, style: cleanStyle, model, bpm: safeBpm,
-        instrumental: true,
-        negative_tags: cleanNegTags,
-        task_id: clipIds[0] || null,
-        status: clipReady ? "complete" : "generating",
-        price: safePrice,
-        stems_price: safeStemsPrice,
-        generation_source: "selfhosted",
-        ...(clipIds[i] ? { suno_id: clipIds[i] } : {}),
-        ...(clipAudioUrl ? { audio_url: clipAudioUrl } : {}),
-        ...(clipStreamUrl ? { stream_url: clipStreamUrl } : {}),
-        ...(clipImageUrl ? { image_url: clipImageUrl } : {}),
-        ...(clipDuration ? { duration: clipDuration } : {}),
-      };
+    let generateResult: { taskId: string; provider: string };
+    try {
+      generateResult = await generateBeat(
+        agentConfig.suno_api_provider,
+        agentConfig.suno_api_key,
+        {
+          title: cleanTitle,
+          style: cleanStyle,
+          negativeTags: cleanNegTags,
+          model,
+          callbackUrl,
+          callbackSecret: Deno.env.get("SUNO_CALLBACK_SECRET")!,
+        }
+      );
+    } catch (providerErr: any) {
+      const errMsg = providerErr.message || "";
+      console.warn(`Provider error for @${agent.handle} (${agentConfig.suno_api_provider}): ${errMsg}`);
 
-      const { data: beat, error } = await supabase.from("beats")
-        .insert(beatInsert).select().single();
+      if (errMsg === "API_KEY_INVALID") {
+        return new Response(
+          JSON.stringify({
+            error: "Your Suno API key is invalid or has been revoked.",
+            error_type: "API_KEY_INVALID",
+            provider: agentConfig.suno_api_provider,
+            action: "Update your API key via POST /functions/v1/update-agent-settings with a valid suno_api_key.",
+          }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
 
-      if (error) throw error;
-      beatRecords.push(beat);
+      if (errMsg === "INSUFFICIENT_CREDITS") {
+        return new Response(
+          JSON.stringify({
+            error: "Insufficient credits on your Suno API provider account. Top up your balance to continue generating.",
+            error_type: "INSUFFICIENT_CREDITS",
+            provider: agentConfig.suno_api_provider,
+            action: `Top up credits at your ${agentConfig.suno_api_provider} dashboard, then try again.`,
+          }),
+          { status: 402, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (errMsg === "PROVIDER_RATE_LIMITED") {
+        return new Response(
+          JSON.stringify({
+            error: "The Suno API provider is rate-limiting your requests. Too many generations in a short period.",
+            error_type: "PROVIDER_RATE_LIMITED",
+            provider: agentConfig.suno_api_provider,
+            action: "Wait 5-10 minutes before trying again.",
+          }),
+          { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Generic provider error
+      return new Response(
+        JSON.stringify({
+          error: "Suno API provider returned an error.",
+          error_type: "PROVIDER_ERROR",
+          provider: agentConfig.suno_api_provider,
+          detail: errMsg.slice(0, 300),
+          action: "Try again. If this persists, check your API key and provider account status.",
+        }),
+        { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
+      );
     }
+
+    // ─── CREATE BEAT RECORD ─────────────────────────────────────────────
+    // Beats always start as "generating" — the suno-callback will update
+    // with audio URLs, create v2 variants, and handle R2 uploads.
+    const beatInsert: Record<string, unknown> = {
+      agent_id: agent.id,
+      title: cleanTitle,
+      genre: finalGenre,
+      sub_genre: finalSubGenre,
+      style: cleanStyle,
+      model,
+      bpm: safeBpm,
+      instrumental: true,
+      negative_tags: cleanNegTags,
+      task_id: generateResult.taskId,
+      status: "generating",
+      price: safePrice,
+      stems_price: safeStemsPrice,
+      generation_source: agentConfig.suno_api_provider,
+    };
+
+    const { data: beat, error: beatError } = await supabase.from("beats")
+      .insert(beatInsert).select().single();
+
+    if (beatError) throw beatError;
 
     // beats_count is now managed by database trigger (trg_sync_agent_beats_count)
     // which fires when beat status changes to 'complete'. No manual increment needed.
 
     // Genre existence already validated before beat creation (see genre validation block above)
 
-    // ─── AUTO-UPLOAD TO R2 STORAGE ────────────────────────────────────
-    // Download audio + image from Suno CDN and upload to Cloudflare R2.
-    // This ensures beats are permanently stored and don't rely on Suno CDN availability.
-    // Fire-and-forget so we don't delay the response.
-    {
-      for (const beat of beatRecords) {
-        if (beat.status !== "complete" || !beat.audio_url) continue;
-        (async () => {
-          try {
-            const { r2Upload } = await import("../_shared/r2.ts");
-            // Upload MP3 audio
-            if (beat.audio_url) {
-              const audioRes = await fetch(beat.audio_url);
-              if (audioRes.ok) {
-                const audioData = new Uint8Array(await audioRes.arrayBuffer());
-                await r2Upload(`beats/${beat.id}/track.mp3`, audioData, "audio/mpeg");
-                console.log(`R2: uploaded audio for beat ${beat.id}`);
-              }
-            }
-            // Upload cover image
-            if (beat.image_url) {
-              const imgRes = await fetch(beat.image_url);
-              if (imgRes.ok) {
-                const imgData = new Uint8Array(await imgRes.arrayBuffer());
-                const ct = imgRes.headers.get("content-type") || "image/jpeg";
-                await r2Upload(`beats/${beat.id}/cover.jpg`, imgData, ct);
-                console.log(`R2: uploaded cover for beat ${beat.id}`);
-              }
-            }
-            // Mark as migrated so serving functions use R2 URLs
-            await supabase.from("beats").update({ storage_migrated: true }).eq("id", beat.id);
-            console.log(`R2: beat ${beat.id} marked as storage_migrated`);
-          } catch (uploadErr) {
-            console.error(`R2 upload error for beat ${beat.id}:`, (uploadErr as Error).message);
-            // Non-fatal — beat is still usable via CDN URLs until they expire
-          }
-        })();
-      }
-    }
-
     return new Response(
       JSON.stringify({
         success: true,
-        task_id: clipIds[0] || null,
-        generation_source: agent.suno_self_hosted_url ? "selfhosted" : "centralized",
-        cookie_health: cookieHealth,
+        task_id: generateResult.taskId,
+        provider: agentConfig.suno_api_provider,
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
         genre_normalized: finalGenre !== genre ? `"${genre}" → "${finalGenre}"${finalGenre !== normalizedGenre ? " (style-inferred)" : ""}` : undefined,
-        beats: beatRecords.map((b) => ({
-          id: b.id, title: b.title, genre: b.genre, sub_genre: b.sub_genre,
-          status: b.status, price: b.price, suno_id: b.suno_id || null,
-          audio_url: b.audio_url || null, duration: b.duration || null,
-        })),
-        message: (() => {
-          const completedCount = beatRecords.filter((b: any) => b.status === "complete").length;
-          const total = beatRecords.length;
-          if (completedCount === total) {
-            return `${total} beat(s) generated and ready on MusiClaw. Audio is live!`;
-          }
-          return "Generating your beat now. Use poll-suno to check status.";
-        })(),
+        beats: [{
+          id: beat.id,
+          title: beat.title,
+          genre: beat.genre,
+          sub_genre: beat.sub_genre,
+          status: beat.status,
+          price: beat.price,
+        }],
+        message: "Generating your beat now. The suno-callback will update the beat when audio is ready.",
       }),
       { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
     );
@@ -1075,7 +734,7 @@ serve(async (req) => {
         error: "Beat generation failed due to an unexpected error.",
         error_type: "INTERNAL_ERROR",
         detail: err.message,
-        action: "Try again. If this persists, check that your suno_cookie is fresh and your agent settings are correct.",
+        action: "Try again. If this persists, check that your API key is valid and your agent settings are correct.",
       }),
       { status: 500, headers: { ...cors, "Content-Type": "application/json" } }
     );

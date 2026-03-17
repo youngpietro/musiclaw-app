@@ -2,8 +2,7 @@
 // POST /functions/v1/process-stems
 // Headers: Authorization: Bearer <agent_api_token>
 // Body: { beat_id }
-// Triggers stem splitting via MVSEP (agent's own mvsep_api_key) on Railway stem-processor.
-// MVSEP is the only supported stem splitting method.
+// Triggers stem splitting via sunoapi.org (if agent uses sunoapi provider) or MVSEP on Railway.
 // SECURITY: Bearer auth, rate limiting, beat ownership validation
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -49,9 +48,9 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest("SHA-256", tokenBytes);
     const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    let { data: agent } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, owner_email, mvsep_api_key").eq("api_token_hash", tokenHash).single();
+    let { data: agent } = await supabase.from("agents").select("id, handle, suno_api_provider, suno_api_key, g_credits, owner_email, mvsep_api_key").eq("api_token_hash", tokenHash).single();
     if (!agent) {
-      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_self_hosted_url, owner_email, mvsep_api_key").eq("api_token", token).single();
+      const { data: fallback } = await supabase.from("agents").select("id, handle, suno_api_provider, suno_api_key, g_credits, owner_email, mvsep_api_key").eq("api_token", token).single();
       agent = fallback;
     }
 
@@ -118,7 +117,7 @@ serve(async (req) => {
     // ─── VALIDATE BEAT FOR STEM PROCESSING ─────────────────────────────
     const generationSource = beat.generation_source || "selfhosted";
 
-    // Uploaded beats don't support MVSEP stem splitting — stems should be uploaded directly
+    // Uploaded beats don't support stem splitting — stems should be uploaded directly
     if (generationSource === "upload") {
       return new Response(
         JSON.stringify({
@@ -158,7 +157,7 @@ serve(async (req) => {
     const results: string[] = [];
 
     // ─── WAV HANDLING ──────────────────────────────────────────────
-    // Self-hosted audio is direct MP3 — WAV is always "complete"
+    // Audio is direct MP3 — WAV is always "complete"
     if (beat.wav_status !== "complete") {
       await supabase.from("beats").update({ wav_status: "complete" }).eq("id", beat.id);
       results.push("WAV: audio is direct — marked complete");
@@ -166,65 +165,99 @@ serve(async (req) => {
       results.push("WAV already complete");
     }
 
-    // ─── STEMS: Dispatch to Railway stem-processor service ────────
+    // ─── STEMS: Decision tree based on provider config ─────────────
     if (beat.stems_status !== "complete") {
-      const mvsepKey = agent.mvsep_api_key || null;
-      if (!mvsepKey) {
+      const useSunoapi = agent.suno_api_provider === "sunoapi" && agent.suno_api_key;
+      const useMvsep = !!agent.mvsep_api_key;
+
+      if (useSunoapi) {
+        // ─── sunoapi.org stem splitting via shared provider module ───
+        try {
+          const { splitStems } = await import("../_shared/suno-providers.ts");
+          const stemsCallbackUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/suno-callback?secret=${Deno.env.get("SUNO_CALLBACK_SECRET")}&type=stems&beat_id=${beat.id}`;
+          await splitStems(agent.suno_api_key, beat.task_id, beat.suno_id, stemsCallbackUrl);
+
+          await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
+          results.push("Stem splitting dispatched via sunoapi.org. Will complete automatically via callback.");
+          console.log(`Beat ${beat.id} dispatched to sunoapi.org for stem splitting`);
+        } catch (stemErr) {
+          const errMsg = (stemErr as Error).message;
+          console.error(`sunoapi stems error for beat ${beat.id}:`, errMsg);
+          if (errMsg === "API_KEY_INVALID") {
+            return new Response(
+              JSON.stringify({ error: "sunoapi.org API key is invalid. Update it via POST /functions/v1/update-agent-settings." }),
+              { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          if (errMsg === "INSUFFICIENT_CREDITS") {
+            return new Response(
+              JSON.stringify({ error: "Insufficient credits on sunoapi.org for stem splitting. Top up your account." }),
+              { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          results.push(`Stem splitting via sunoapi.org failed: ${errMsg}`);
+        }
+      } else if (useMvsep) {
+        // ─── MVSEP via Railway stem-processor (existing path) ────────
+        const stemProcessorUrl = Deno.env.get("STEM_PROCESSOR_URL");
+        const railwaySecret = Deno.env.get("RAILWAY_SERVICE_SECRET");
+
+        if (!stemProcessorUrl || !railwaySecret) {
+          console.error("STEM_PROCESSOR_URL or RAILWAY_SERVICE_SECRET not configured");
+          return new Response(
+            JSON.stringify({ error: "Stem processor not configured" }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const audioUrl = beat.audio_url || `https://cdn1.suno.ai/${beat.suno_id}.mp3`;
+
+        try {
+          const railwayRes = await fetch(`${stemProcessorUrl}/process-stems`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-service-secret": railwaySecret,
+            },
+            body: JSON.stringify({
+              beat_id: beat.id,
+              agent_id: agent.id,
+              mvsep_api_key: agent.mvsep_api_key,
+              audio_url: audioUrl,
+              suno_id: beat.suno_id,
+            }),
+          });
+
+          if (railwayRes.ok) {
+            await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
+            results.push("Stem splitting dispatched (MVSEP BS Roformer SW). Will complete automatically in ~2-5 minutes.");
+            console.log(`Beat ${beat.id} dispatched to stem-processor`);
+          } else {
+            const errBody = await railwayRes.text();
+            console.error(`Railway error: ${railwayRes.status} ${errBody.slice(0, 200)}`);
+            results.push("Stem splitting dispatch failed. Please try again.");
+          }
+        } catch (fetchErr) {
+          console.error("Railway fetch error:", (fetchErr as Error).message);
+          results.push("Stem splitting dispatch failed: network error");
+        }
+      } else {
+        // ─── No stem splitting method available ──────────────────────
         return new Response(
           JSON.stringify({
-            error: "MVSEP API key required for stem splitting. Set yours via POST /functions/v1/update-agent-settings with { mvsep_api_key: \"your-key\" }. Get one at mvsep.com/user-api",
+            error: "No stem splitting method configured. Either set suno_api_provider to 'sunoapi' with a suno_api_key, or set an mvsep_api_key via POST /functions/v1/update-agent-settings.",
             beat_id: beat.id,
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-
-      // Dispatch to Railway stem-processor (fire-and-forget)
-      const stemProcessorUrl = Deno.env.get("STEM_PROCESSOR_URL");
-      const railwaySecret = Deno.env.get("RAILWAY_SERVICE_SECRET");
-
-      if (!stemProcessorUrl || !railwaySecret) {
-        console.error("STEM_PROCESSOR_URL or RAILWAY_SERVICE_SECRET not configured");
-        return new Response(
-          JSON.stringify({ error: "Stem processor not configured" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const audioUrl = beat.audio_url || `https://cdn1.suno.ai/${beat.suno_id}.mp3`;
-
-      try {
-        const railwayRes = await fetch(`${stemProcessorUrl}/process-stems`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-service-secret": railwaySecret,
-          },
-          body: JSON.stringify({
-            beat_id: beat.id,
-            agent_id: agent.id,
-            mvsep_api_key: mvsepKey,
-            audio_url: audioUrl,
-            suno_id: beat.suno_id,
-          }),
-        });
-
-        if (railwayRes.ok) {
-          await supabase.from("beats").update({ stems_status: "processing" }).eq("id", beat.id);
-          results.push("Stem splitting dispatched (MVSEP BS Roformer SW). Will complete automatically in ~2-5 minutes.");
-          console.log(`Beat ${beat.id} dispatched to stem-processor`);
-        } else {
-          const errBody = await railwayRes.text();
-          console.error(`Railway error: ${railwayRes.status} ${errBody.slice(0, 200)}`);
-          results.push("Stem splitting dispatch failed. Please try again.");
-        }
-      } catch (fetchErr) {
-        console.error("Railway fetch error:", (fetchErr as Error).message);
-        results.push("Stem splitting dispatch failed: network error");
-      }
     } else {
       results.push("Stems already complete");
     }
+
+    const stemMethod = agent.suno_api_provider === "sunoapi" && agent.suno_api_key
+      ? "sunoapi.org vocal-removal"
+      : "MVSEP BS Roformer SW";
 
     return new Response(
       JSON.stringify({
@@ -232,8 +265,9 @@ serve(async (req) => {
         beat_id: beat.id,
         beat_title: beat.title,
         generation_source: generationSource,
+        stem_method: stemMethod,
         results,
-        message: "Stem splitting dispatched to processor (MVSEP BS Roformer SW). Completes automatically in ~2-5 minutes.",
+        message: `Stem splitting dispatched (${stemMethod}). Completes automatically via callback.`,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

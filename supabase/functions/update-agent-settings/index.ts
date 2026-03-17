@@ -1,7 +1,7 @@
 // supabase/functions/update-agent-settings/index.ts
 // POST /functions/v1/update-agent-settings
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { owner_email?, paypal_email?, default_beat_price?, default_stems_price?, suno_cookie?, suno_self_hosted_url? }
+// Body: { owner_email?, paypal_email?, default_beat_price?, default_stems_price?, suno_api_provider?, suno_api_key?, mvsep_api_key? }
 // SECURITY: Bearer auth, email validation, rate limiting
 // NOTE: Updates agent settings directly on the agents table (live schema)
 
@@ -95,11 +95,30 @@ serve(async (req) => {
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
-    const { owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url, mvsep_api_key } = body;
+    const { owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url, suno_api_provider, suno_api_key, mvsep_api_key } = body;
 
-    if (!owner_email && !paypal_email && suno_cookie === undefined && suno_self_hosted_url === undefined && mvsep_api_key === undefined && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
+    // ─── DEPRECATION: reject suno_cookie and suno_self_hosted_url ─────
+    if (suno_cookie !== undefined) {
       return new Response(
-        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price, suno_cookie, suno_self_hosted_url, mvsep_api_key" }),
+        JSON.stringify({
+          error: "suno_cookie is deprecated and no longer supported. Use suno_api_provider ('apiframe' or 'sunoapi') and suno_api_key instead. See docs for migration instructions.",
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (suno_self_hosted_url !== undefined) {
+      return new Response(
+        JSON.stringify({
+          error: "suno_self_hosted_url is deprecated and no longer supported. Use suno_api_provider ('apiframe' or 'sunoapi') and suno_api_key instead. See docs for migration instructions.",
+        }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!owner_email && !paypal_email && suno_api_provider === undefined && suno_api_key === undefined && mvsep_api_key === undefined && (default_beat_price === null || default_beat_price === undefined) && (default_stems_price === null || default_stems_price === undefined)) {
+      return new Response(
+        JSON.stringify({ error: "Provide at least one field: owner_email, paypal_email, default_beat_price, default_stems_price, suno_api_provider, suno_api_key, mvsep_api_key" }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
@@ -238,194 +257,62 @@ serve(async (req) => {
       changes.push(`default_stems_price → $${updateData.default_stems_price}`);
     }
 
-    // Validate Suno cookie (for self-hosted generation via gcui-art/suno-api)
+    // Validate Suno API provider and key
     // No email verification needed — not financial data
-    // PRO PLAN VERIFICATION: When cookie is set, verify via /api/get_limit
-    if (suno_cookie !== undefined) {
-      if (suno_cookie === null || suno_cookie === "") {
-        // Allow clearing the cookie
-        updateData.suno_cookie = null;
-        updateData.suno_plan_verified = false;
-        updateData.suno_plan_type = "unknown";
-        changes.push("suno_cookie → cleared");
-      } else if (typeof suno_cookie === "string" && suno_cookie.length > 10) {
-        const trimmedCookie = suno_cookie.trim().slice(0, 4096);
-
-        // ─── PRO PLAN VERIFICATION ─────────────────────────────────
-        // Call Suno's billing API directly with the __session JWT token.
-        // This bypasses the suno-api's Clerk session requirement and works
-        // as long as the cookie is fresh (submitted within ~1hr of browser login).
-        let planVerified = false;
-        try {
-          // Extract __session JWT from the cookie string
-          const sessionMatch = trimmedCookie.match(/(?:^|;\s*)__session=([^;]+)/);
-          if (sessionMatch) {
-            const sessionJwt = sessionMatch[1];
-            const billingRes = await fetch("https://studio-api.prod.suno.com/api/billing/info/", {
-              method: "GET",
-              headers: {
-                "Authorization": `Bearer ${sessionJwt}`,
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-              },
-            });
-
-            if (billingRes.ok) {
-              const billingData = await billingRes.json();
-              // Suno billing API returns monthly_limit (50=free, 2500=pro, 10000=premier)
-              const monthlyLimit = billingData.monthly_limit ?? billingData.total_credits_left ?? 0;
-              const creditsLeft = billingData.credits_left ?? 0;
-
-              let planType = "free";
-              if (monthlyLimit >= 10000) planType = "premier";
-              else if (monthlyLimit >= 2500) planType = "pro";
-
-              if (planType === "free") {
-                return new Response(
-                  JSON.stringify({
-                    error: "Suno Free plan detected. MusiClaw requires a Suno Pro or Premier plan for commercial licensing rights. Upgrade at suno.com/account.",
-                    monthly_limit: monthlyLimit,
-                    credits_left: creditsLeft,
-                    plan_detected: "free",
-                    required: "pro or premier",
-                  }),
-                  { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
-                );
-              }
-
-              updateData.suno_plan_verified = true;
-              updateData.suno_plan_type = planType;
-              updateData.suno_plan_verified_at = new Date().toISOString();
-              updateData.suno_credits_left = creditsLeft;
-              updateData.suno_monthly_limit = monthlyLimit;
-              updateData.suno_credits_checked_at = new Date().toISOString();
-              changes.push(`suno_plan → ${planType} (verified, monthly_limit: ${monthlyLimit}, credits_left: ${creditsLeft})`);
-              planVerified = true;
-            } else {
-              console.warn(`Suno billing API returned ${billingRes.status} for @${agent.handle}`);
-            }
-          }
-
-          // Fallback: try via suno-api's /api/get_limit if direct call failed
-          if (!planVerified) {
-            const { data: agentUrls } = await supabase
-              .from("agents").select("suno_self_hosted_url").eq("id", agent.id).single();
-            const verifyUrl = agentUrls?.suno_self_hosted_url || Deno.env.get("SUNO_SELF_HOSTED_URL");
-
-            if (verifyUrl) {
-              const limitRes = await fetch(`${verifyUrl}/api/get_limit`, {
-                method: "GET",
-                headers: { "X-Suno-Cookie": trimmedCookie },
-              });
-              if (limitRes.ok) {
-                const limitData = await limitRes.json();
-                const monthlyLimit = limitData.monthly_limit ?? 0;
-                const creditsLeft = limitData.credits_left ?? 0;
-                let planType = "free";
-                if (monthlyLimit >= 10000) planType = "premier";
-                else if (monthlyLimit >= 2500) planType = "pro";
-
-                if (planType === "free") {
-                  return new Response(
-                    JSON.stringify({
-                      error: "Suno Free plan detected. MusiClaw requires a Suno Pro or Premier plan for commercial licensing rights. Upgrade at suno.com/account.",
-                      monthly_limit: monthlyLimit,
-                      plan_detected: "free",
-                      required: "pro or premier",
-                    }),
-                    { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
-                  );
-                }
-                updateData.suno_plan_verified = true;
-                updateData.suno_plan_type = planType;
-                updateData.suno_plan_verified_at = new Date().toISOString();
-                updateData.suno_credits_left = creditsLeft;
-                updateData.suno_monthly_limit = monthlyLimit;
-                updateData.suno_credits_checked_at = new Date().toISOString();
-                changes.push(`suno_plan → ${planType} (verified via suno-api, monthly_limit: ${monthlyLimit}, credits_left: ${creditsLeft})`);
-                planVerified = true;
-              }
-            }
-          }
-
-          if (!planVerified) {
-            updateData.suno_plan_verified = false;
-            updateData.suno_plan_type = "unknown";
-            changes.push("suno_plan → could not verify. Ensure your cookie includes the __client value from suno.com (NOT __session). Log into suno.com → DevTools → Application → Cookies → copy the __client cookie value (starts with eyJ...).");
-          }
-        } catch (verifyErr: any) {
-          console.error(`Plan verify error for @${agent.handle}:`, verifyErr.message);
-          updateData.suno_plan_verified = false;
-          updateData.suno_plan_type = "unknown";
-          changes.push("suno_plan → verification error. Cookie stored, will re-verify on generation.");
-        }
-
-        updateData.suno_cookie = trimmedCookie;
-        changes.push("suno_cookie → stored (for self-hosted Suno generation)");
-
-        // ─── COOKIE EXPIRY DETECTION (additive, silent fail) ────────────
-        // Decode the __client JWT to extract its `exp` claim.
-        // This tells us when the Clerk long-lived session token expires.
-        try {
-          const clientMatch = trimmedCookie.match(/(?:^|;\s*)__client=([^;]+)/);
-          if (clientMatch) {
-            const jwtParts = clientMatch[1].split(".");
-            if (jwtParts.length === 3 && jwtParts[0].startsWith("eyJ")) {
-              // Base64url decode the payload
-              let payload = jwtParts[1].replace(/-/g, "+").replace(/_/g, "/");
-              while (payload.length % 4) payload += "=";
-              const decoded = JSON.parse(new TextDecoder().decode(
-                Uint8Array.from(atob(payload), c => c.charCodeAt(0))
-              ));
-              if (decoded.exp && typeof decoded.exp === "number") {
-                const expiresAt = new Date(decoded.exp * 1000).toISOString();
-                updateData.suno_cookie_expires_at = expiresAt;
-                const daysLeft = Math.floor((decoded.exp * 1000 - Date.now()) / 86400000);
-                changes.push(`suno_cookie_expires_at → ${expiresAt} (${daysLeft} days remaining)`);
-              }
-            }
-          }
-        } catch (_expErr) {
-          // Silent fail — cookie expiry detection is best-effort
-          console.warn(`Cookie expiry decode skipped for @${agent.handle}`);
-        }
-      } else {
+    if (suno_api_provider !== undefined) {
+      if (suno_api_provider !== "apiframe" && suno_api_provider !== "sunoapi") {
         return new Response(
-          JSON.stringify({ error: "Invalid suno_cookie format. Must be a string longer than 10 characters." }),
+          JSON.stringify({ error: "suno_api_provider must be 'apiframe' or 'sunoapi'" }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
+      updateData.suno_api_provider = suno_api_provider;
+      changes.push(`suno_api_provider → ${suno_api_provider}`);
     }
 
-    // Validate self-hosted Suno API URL (for decentralized generation)
-    // No email verification needed — not financial data
-    if (suno_self_hosted_url !== undefined) {
-      if (suno_self_hosted_url === null || suno_self_hosted_url === "") {
-        // Allow clearing the URL — agent must set one before generating
-        updateData.suno_self_hosted_url = null;
-        changes.push("suno_self_hosted_url → cleared (will use MusiClaw's centralized API)");
-      } else if (typeof suno_self_hosted_url === "string") {
-        const cleanUrl = suno_self_hosted_url.trim().slice(0, 256);
-        // Must be HTTPS
-        if (!cleanUrl.startsWith("https://")) {
+    if (suno_api_key !== undefined) {
+      if (suno_api_key === null || suno_api_key === "") {
+        // Allow clearing the API key
+        updateData.suno_api_key = null;
+        changes.push("suno_api_key → cleared");
+      } else if (typeof suno_api_key === "string" && suno_api_key.length >= 5) {
+        const trimmedKey = suno_api_key.trim().slice(0, 512);
+
+        // Determine which provider to validate against
+        // Use the provider being set in this request, or fall back to existing agent setting
+        let providerForValidation = suno_api_provider;
+        if (!providerForValidation) {
+          const { data: agentRow } = await supabase
+            .from("agents")
+            .select("suno_api_provider")
+            .eq("id", agent.id)
+            .single();
+          providerForValidation = agentRow?.suno_api_provider;
+        }
+
+        if (!providerForValidation) {
           return new Response(
-            JSON.stringify({ error: "suno_self_hosted_url must use HTTPS" }),
+            JSON.stringify({ error: "Cannot validate suno_api_key without a provider. Set suno_api_provider ('apiframe' or 'sunoapi') in the same request or beforehand." }),
             { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
           );
         }
-        // Block private/internal URLs (SSRF prevention)
-        const urlLower = cleanUrl.toLowerCase();
-        if (urlLower.includes("localhost") || urlLower.includes("127.0.0.1") || urlLower.includes("0.0.0.0") || urlLower.includes("169.254.") || urlLower.includes("10.") || urlLower.includes("192.168.") || urlLower.includes(".internal")) {
+
+        // Validate the key using the shared module
+        const { validateApiKey } = await import("../_shared/suno-providers.ts");
+        const validation = await validateApiKey(providerForValidation, trimmedKey);
+
+        if (!validation.valid) {
           return new Response(
-            JSON.stringify({ error: "suno_self_hosted_url cannot point to private/internal addresses" }),
+            JSON.stringify({ error: validation.error || `Invalid API key for provider '${providerForValidation}'` }),
             { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
           );
         }
-        // Remove trailing slash
-        updateData.suno_self_hosted_url = cleanUrl.replace(/\/+$/, "");
-        changes.push(`suno_self_hosted_url → ${updateData.suno_self_hosted_url} (custom instance override)`);
+
+        updateData.suno_api_key = trimmedKey;
+        changes.push(`suno_api_key → stored (validated with ${providerForValidation})`);
       } else {
         return new Response(
-          JSON.stringify({ error: "Invalid suno_self_hosted_url format. Must be an HTTPS URL." }),
+          JSON.stringify({ error: "Invalid suno_api_key format. Must be a string of at least 5 characters." }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -487,7 +374,7 @@ serve(async (req) => {
         success: true,
         agent: { handle: agent.handle, name: agent.name },
         updated: changes,
-        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}. ` : "") + (suno_cookie !== undefined ? (updateData.suno_cookie ? "Suno cookie stored. " : "Suno cookie cleared. ") : "") + (suno_self_hosted_url !== undefined ? (updateData.suno_self_hosted_url ? `Self-hosted URL set — generations will use your instance (no G-Credits needed). ` : "Self-hosted URL cleared — will use centralized instance (costs G-Credits). ") : "") + (mvsep_api_key !== undefined ? (updateData.mvsep_api_key ? "MVSEP API key stored — stem splitting enabled (BS Roformer SW). " : "MVSEP API key cleared — stem splitting disabled. ") : ""),
+        message: "Settings updated. " + (updateData.owner_email ? `Owner email set to ${updateData.owner_email} — use this to access the My Agents dashboard. ` : "") + (updateData.paypal_email ? "PayPal connected — you'll receive payouts from sales. " : "") + (updateData.default_beat_price ? `New beats will be priced at $${updateData.default_beat_price}. ` : "") + (updateData.suno_api_key !== undefined ? (updateData.suno_api_key ? "Suno API key stored. " : "Suno API key cleared. ") : "") + (updateData.suno_api_provider ? `Suno provider set to ${updateData.suno_api_provider}. ` : "") + (mvsep_api_key !== undefined ? (updateData.mvsep_api_key ? "MVSEP API key stored — stem splitting enabled (BS Roformer SW). " : "MVSEP API key cleared — stem splitting disabled. ") : ""),
       }),
       { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
     );
