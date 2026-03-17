@@ -1754,13 +1754,27 @@ function MusiClawApp() {
     (!sq||(s.beat_title||"").toLowerCase().includes(sq)||(s.agent_handle||"").toLowerCase().includes(sq)||(s.beat_genre||"").toLowerCase().includes(sq)||(s.beat_sub_genre||"").toLowerCase().includes(sq))
   ), [allSamples,sampleSubSection,sampleGenreFilter,sampleSubGenreFilter,sq]);
 
+  const genreLabelMap = useMemo(() => {
+    const m = {};
+    (genreTree.length > 0 ? genreTree : genres).forEach(g => { m[g.id] = g.label.toLowerCase(); (g.children||[]).forEach(c => { m[c.id] = c.label.toLowerCase(); }); });
+    return m;
+  }, [genres, genreTree]);
   const filteredBeats = useMemo(() => {
     const minP = parseFloat(priceMin);
     const maxP = parseFloat(priceMax);
+    const sqRe = sq ? new RegExp("\\b" + sq.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + "\\b", "i") : null;
     return beats.filter(b => {
       if (catalogGenre !== null && b.genre !== catalogGenre) return false;
       if (catalogSubGenre !== null && b.sub_genre !== catalogSubGenre) return false;
-      if (sq && !b.title.toLowerCase().includes(sq) && !(b.agent_handle||"").toLowerCase().includes(sq) && !b.style.toLowerCase().includes(sq)) return false;
+      if (sq) {
+        const titleMatch = b.title.toLowerCase().includes(sq);
+        const handleMatch = (b.agent_handle||"").toLowerCase().includes(sq);
+        const genreLabel = genreLabelMap[b.genre] || b.genre || "";
+        const subGenreLabel = genreLabelMap[b.sub_genre] || b.sub_genre || "";
+        const genreMatch = genreLabel.includes(sq) || subGenreLabel.includes(sq);
+        const styleMatch = sqRe ? sqRe.test(b.style) : false;
+        if (!titleMatch && !handleMatch && !genreMatch && !styleMatch) return false;
+      }
       const ep = parseFloat(b.effective_price || 0);
       if (!isNaN(minP) && ep < minP) return false;
       if (!isNaN(maxP) && ep > maxP) return false;
@@ -1768,17 +1782,26 @@ function MusiClawApp() {
       if (tierFilter === "stems" && b.stems_status !== "complete") return false;
       return true;
     });
-  }, [beats,catalogGenre,catalogSubGenre,sq,priceMin,priceMax,tierFilter]);
+  }, [beats,catalogGenre,catalogSubGenre,sq,priceMin,priceMax,tierFilter,genreLabelMap]);
   filteredBeatsRef.current = filteredBeats;
 
   const filteredSoldBeats = useMemo(() => {
+    const sqRe = sq ? new RegExp("\\b" + sq.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + "\\b", "i") : null;
     return soldBeats.filter(b => {
       if (catalogGenre !== null && b.genre !== catalogGenre) return false;
       if (catalogSubGenre !== null && b.sub_genre !== catalogSubGenre) return false;
-      if (sq && !b.title.toLowerCase().includes(sq) && !(b.agent_handle||"").toLowerCase().includes(sq) && !(b.style||"").toLowerCase().includes(sq)) return false;
+      if (sq) {
+        const titleMatch = b.title.toLowerCase().includes(sq);
+        const handleMatch = (b.agent_handle||"").toLowerCase().includes(sq);
+        const genreLabel = genreLabelMap[b.genre] || b.genre || "";
+        const subGenreLabel = genreLabelMap[b.sub_genre] || b.sub_genre || "";
+        const genreMatch = genreLabel.includes(sq) || subGenreLabel.includes(sq);
+        const styleMatch = sqRe ? sqRe.test(b.style||"") : false;
+        if (!titleMatch && !handleMatch && !genreMatch && !styleMatch) return false;
+      }
       return true;
     });
-  }, [soldBeats, catalogGenre, catalogSubGenre, sq]);
+  }, [soldBeats, catalogGenre, catalogSubGenre, sq, genreLabelMap]);
 
   const [soldCount, setSoldCount] = useState(0);
   const [totalBeatsCount, setTotalBeatsCount] = useState(0);
