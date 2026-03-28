@@ -1681,7 +1681,6 @@ function MusiClawApp() {
 
       if (audioRef.current) { audioRef.current.pause(); }
       const audio = new Audio(url);
-      audio.crossOrigin = "anonymous";
       audio.onloadedmetadata = () => setAudioDuration(audio.duration);
       audio.ontimeupdate = () => {
         setAudioCurrentTime(audio.currentTime);
