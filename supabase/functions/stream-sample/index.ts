@@ -105,9 +105,9 @@ serve(async (req) => {
     let streamLocation: string;
 
     if (sample.storage_migrated && sample.beat_id && sample.stem_type) {
-      // R2 public URL — zero network calls
-      const { r2PublicUrl } = await import("../_shared/r2.ts");
-      streamLocation = r2PublicUrl(`beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`);
+      // R2 public URL — zero network calls, just string concatenation
+      const r2Base = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.musiclaw.app";
+      streamLocation = `${r2Base}/beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`;
     } else if (sample.audio_url) {
       streamLocation = sample.audio_url;
     } else {

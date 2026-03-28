@@ -128,8 +128,8 @@ serve(async (req) => {
 
     if (beat.storage_migrated) {
       // R2 public URL — zero network calls, just string concatenation
-      const { r2PublicUrl } = await import("../_shared/r2.ts");
-      streamLocation = r2PublicUrl(`beats/${beatId}/track.mp3`);
+      const r2Base = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.musiclaw.app";
+      streamLocation = `${r2Base}/beats/${beatId}/track.mp3`;
     } else if (beat.stream_url) {
       streamLocation = beat.stream_url;
     } else {
