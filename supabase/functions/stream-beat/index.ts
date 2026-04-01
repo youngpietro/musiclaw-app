@@ -139,14 +139,35 @@ serve(async (req) => {
       );
     }
 
-    // ─── REDIRECT TO ACTUAL STREAM URL ──────────────────────────────
-    return new Response(null, {
-      status: 302,
-      headers: {
-        ...cors,
-        Location: streamLocation,
-        "Cache-Control": "private, no-store",
-      },
+    // ─── PROXY STREAM WITH CORS HEADERS ─────────────────────────────
+    // Proxy instead of redirect so browser gets CORS headers (R2 has none).
+    // This enables Web Audio API decoding for real waveform visualization.
+    const fetchHeaders: Record<string, string> = {};
+    const rangeHeader = req.headers.get("range");
+    if (rangeHeader) fetchHeaders["Range"] = rangeHeader;
+
+    const upstream = await fetch(streamLocation, { headers: fetchHeaders });
+    if (!upstream.ok && upstream.status !== 206) {
+      return new Response(
+        JSON.stringify({ error: "Stream unavailable" }),
+        { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    const responseHeaders: Record<string, string> = {
+      ...cors,
+      "Content-Type": upstream.headers.get("content-type") || "audio/mpeg",
+      "Cache-Control": "public, max-age=3600",
+      "Accept-Ranges": "bytes",
+    };
+    const cl = upstream.headers.get("content-length");
+    if (cl) responseHeaders["Content-Length"] = cl;
+    const cr = upstream.headers.get("content-range");
+    if (cr) responseHeaders["Content-Range"] = cr;
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: responseHeaders,
     });
   } catch (err) {
     console.error("Stream beat error:", err.message);

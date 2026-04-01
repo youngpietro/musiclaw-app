@@ -545,34 +545,39 @@ function VUMeter({ level=0.6 }) {
 }
 
 function MiniWaveform({ playing, color="#e11d48" }) {
-  const [levels, setLevels] = useState(()=>Array.from({length:32},()=>0.2+Math.random()*0.8));
-  useEffect(()=>{if(!playing)return;const id=setInterval(()=>setLevels(p=>p.map(v=>v+(0.15+Math.random()*0.85-v)*0.3)),120);return()=>clearInterval(id)},[playing]);
-  return h("div",{style:{display:"flex",gap:"1.5px",alignItems:"center",height:"28px"}},
-    levels.map((l,i)=>h("div",{key:i,style:{width:"2.5px",borderRadius:"2px",height:`${Math.max(3,l*28)}px`,background:playing?color:"rgba(255,255,255,0.15)",transition:playing?"height 0.12s":"height 0.4s, background 0.4s",opacity:playing?0.9:0.4}})));
+  const [levels] = useState(()=>Array.from({length:48},(_,i)=>{const x=i/47;return 0.15+0.85*(0.5+0.5*Math.sin(x*Math.PI))*(0.3+Math.random()*0.7)}));
+  const [anim, setAnim] = useState(levels);
+  useEffect(()=>{if(!playing)return;const id=setInterval(()=>setAnim(p=>p.map((v,i)=>v+(0.1+Math.random()*0.9-v)*0.25)),100);return()=>clearInterval(id)},[playing]);
+  return h("div",{style:{display:"flex",gap:"1px",alignItems:"center",height:"32px",padding:"0 2px"}},
+    (playing?anim:levels).map((l,i)=>{const barH=Math.max(2,l*32);return h("div",{key:i,style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"32px"}},
+      h("div",{style:{width:"100%",maxWidth:"3px",borderRadius:"1.5px",height:barH+"px",background:playing?color:"rgba(255,255,255,0.1)",opacity:playing?0.7:0.35,transition:playing?"height 0.1s ease":"height 0.6s ease, opacity 0.4s"}})
+    )}));
 }
 
 function PeaksWaveform({ peaks, progress=0, color="#e11d48", onSeek }) {
   if (!peaks || !peaks.length) return h(MiniWaveform, { playing: true, color });
-  const handleClick = (e) => {
-    if (!onSeek) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    onSeek(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
-  };
-  const handleTouch = (e) => {
-    if (!onSeek) return;
-    const touch = e.touches[0] || e.changedTouches[0];
-    const rect = e.currentTarget.getBoundingClientRect();
-    onSeek(Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)));
-  };
+  const containerRef = useRef(null);
+  const seekFromEvent = useCallback((clientX) => {
+    if (!onSeek || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    onSeek(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)));
+  }, [onSeek]);
+  const handleClick = (e) => seekFromEvent(e.clientX);
+  const handleTouch = (e) => { const t = e.touches[0] || e.changedTouches[0]; seekFromEvent(t.clientX); };
   const max = Math.max(...peaks.map(v => Math.abs(v)), 0.01);
-  return h("div",{onClick:handleClick,onTouchStart:handleTouch,onTouchMove:handleTouch,
-    style:{display:"flex",gap:"1.5px",alignItems:"center",height:"28px",cursor:"pointer",touchAction:"none"}},
+  return h("div",{ref:containerRef,onClick:handleClick,onTouchStart:handleTouch,onTouchMove:handleTouch,
+    style:{display:"flex",gap:"1px",alignItems:"center",height:"32px",cursor:"pointer",touchAction:"none",padding:"0 2px",position:"relative"}},
     peaks.map((v, i) => {
-      const h28 = Math.max(3, (Math.abs(v) / max) * 28);
-      const filled = (i / peaks.length) < progress;
-      return h("div",{key:i,style:{flex:1,minWidth:"1.5px",borderRadius:"2px",height:h28+"px",
-        background: filled ? color : color + '22',
-        transition:"background 0.05s"}});
+      const norm = Math.abs(v) / max;
+      const barH = Math.max(2, norm * 32);
+      const frac = i / peaks.length;
+      const filled = frac < progress;
+      const isEdge = Math.abs(frac - progress) < (1.5 / peaks.length);
+      return h("div",{key:i,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",height:"32px"}},
+        h("div",{style:{width:"100%",maxWidth:"3px",borderRadius:"1.5px",height:barH+"px",
+          background:filled?color:("rgba(255,255,255,0.08)"),
+          boxShadow:isEdge?`0 0 6px ${color}88`:filled?`0 0 3px ${color}22`:"none",
+          transition:"background 0.06s, box-shadow 0.15s"}}));
     })
   );
 }
@@ -594,35 +599,35 @@ function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlay
   if (!beat) return null;
   const genre = GENRES.find(g => g.id === beat.genre);
   const gc = beat._stemColor || genre?.color || "#e11d48";
-  const waveRef = useRef(null);
   const wsRef = useRef(null);
-  const [wsReady, setWsReady] = useState(false);
+  const [peaksData, setPeaksData] = useState(null);
 
   useEffect(() => {
-    setWsReady(false);
-    if (!waveRef.current) return;
-    if (wsRef.current) { try { wsRef.current.destroy(); } catch(e) {} wsRef.current = null; }
-    waveRef.current.innerHTML = '';
+    setPeaksData(null);
     if (!audioRef?.current || typeof WaveSurfer === 'undefined') return;
+    if (wsRef.current) { try { wsRef.current.destroy(); } catch(e) {} wsRef.current = null; }
     try {
+      const container = document.createElement('div');
+      container.style.display = 'none';
+      document.body.appendChild(container);
       const ws = WaveSurfer.create({
-        container: waveRef.current,
+        container,
         media: audioRef.current,
-        waveColor: gc + '44',
-        progressColor: gc,
-        height: 32,
-        barWidth: 2,
-        barGap: 1,
-        barRadius: 2,
-        cursorWidth: 0,
+        height: 0,
         normalize: true,
-        hideScrollbar: true,
       });
-      ws.on('decode', () => { if (onPeaks) { try { const p = ws.exportPeaks({channels:1,maxLength:64}); if (p&&p[0]) onPeaks(p[0]); } catch(e){} } });
-      ws.on('ready', () => setWsReady(true));
-      ws.on('error', (e) => console.log('WaveSurfer decode error:', e));
+      ws.on('decode', () => {
+        try {
+          const p = ws.exportPeaks({channels:1,maxLength:80});
+          if (p&&p[0]) { setPeaksData(p[0]); if (onPeaks) onPeaks(p[0]); }
+        } catch(e){}
+        try { ws.destroy(); } catch(e) {}
+        try { container.remove(); } catch(e) {}
+        wsRef.current = null;
+      });
+      ws.on('error', () => { try { ws.destroy(); } catch(e){} try { container.remove(); } catch(e){} });
       wsRef.current = ws;
-    } catch(e) { console.log('WaveSurfer init error:', e); }
+    } catch(e) {}
     return () => { if (wsRef.current) { try { wsRef.current.destroy(); } catch(e) {} wsRef.current = null; } };
   }, [beat?.id]);
 
@@ -630,35 +635,49 @@ function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlay
     if (!s || isNaN(s)) return "0:00";
     return Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
   };
-  const handleBarClick = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onSeek(fraction);
-  };
-  const handleTouchSeek = (e) => {
-    e.preventDefault();
-    const touch = e.touches[0] || e.changedTouches[0];
-    const rect = e.currentTarget.getBoundingClientRect();
-    const fraction = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
-    onSeek(fraction);
-  };
+  const waveContainerRef = useRef(null);
+  const seekFromEvent = useCallback((clientX) => {
+    if (!waveContainerRef.current) return;
+    const rect = waveContainerRef.current.getBoundingClientRect();
+    onSeek(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)));
+  }, [onSeek]);
+  const handleBarClick = (e) => seekFromEvent(e.clientX);
+  const handleTouchSeek = (e) => { e.preventDefault(); const t = e.touches[0] || e.changedTouches[0]; seekFromEvent(t.clientX); };
+
   const playSvg = h("svg",{width:"14",height:"14",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("polygon",{points:"2,0 14,7 2,14"}));
   const pauseSvg = h("svg",{width:"14",height:"14",viewBox:"0 0 14 14",fill:"white",xmlns:"http://www.w3.org/2000/svg"},h("rect",{x:"1",y:"0",width:"4",height:"14",rx:"1"}),h("rect",{x:"9",y:"0",width:"4",height:"14",rx:"1"}));
-  return h("div",{className:"ml-global-player",style:{position:"fixed",bottom:0,left:0,right:0,zIndex:900,background:"linear-gradient(180deg,rgba(14,14,20,0.95),rgba(9,9,15,0.98))",backdropFilter:"blur(20px)",borderTop:"1px solid rgba(255,255,255,0.06)",padding:"0 24px",height:"64px",display:"flex",alignItems:"center",gap:"16px"}},
-    h("button",{onClick:()=>onPlayPause(beat.id),style:{width:"36px",height:"36px",borderRadius:"50%",border:"none",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",background:isPlaying?`linear-gradient(135deg,${gc},${gc}99)`:"rgba(255,255,255,0.08)",boxShadow:isPlaying?`0 0 16px ${gc}44`:"none",transition:"all 0.25s"}},isPlaying?pauseSvg:playSvg),
-    h("div",{style:{minWidth:0,flex:"0 1 200px"}},
+
+  const peaksMax = peaksData ? Math.max(...peaksData.map(v=>Math.abs(v)), 0.01) : 1;
+
+  return h("div",{className:"ml-global-player",style:{position:"fixed",bottom:0,left:0,right:0,zIndex:900,background:"linear-gradient(180deg,rgba(14,14,20,0.96),rgba(9,9,15,0.99))",backdropFilter:"blur(24px)",borderTop:`1px solid ${gc}15`,padding:"0 24px",height:"64px",display:"flex",alignItems:"center",gap:"16px"}},
+    h("button",{onClick:()=>onPlayPause(beat.id),style:{width:"38px",height:"38px",borderRadius:"50%",border:"none",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:isPlaying?`linear-gradient(135deg,${gc},${gc}bb)`:"rgba(255,255,255,0.06)",boxShadow:isPlaying?`0 0 20px ${gc}33,inset 0 1px 0 rgba(255,255,255,0.15)`:"inset 0 1px 0 rgba(255,255,255,0.06)",transition:"all 0.3s"}},isPlaying?pauseSvg:playSvg),
+    h("div",{style:{minWidth:0,flex:"0 1 180px"}},
       h("div",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"13px",color:"#f0f0f0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},beat.title),
-      h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.4)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},beat.agent_handle||beat.agent_name)
+      h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.35)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},beat.agent_handle||beat.agent_name)
     ),
-    h("span",{className:"ml-player-time",style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:"rgba(255,255,255,0.4)",flexShrink:0}},fmtTime(currentTime)),
-    h("div",{style:{flex:1,minWidth:"80px",height:"32px",position:"relative"}},
-      h("div",{onClick:handleBarClick,onTouchStart:handleTouchSeek,onTouchMove:handleTouchSeek,style:{position:"absolute",top:"13px",left:0,right:0,height:"6px",background:"rgba(255,255,255,0.08)",borderRadius:"3px",cursor:"pointer",touchAction:"none",opacity:wsReady?0:1,transition:"opacity 0.4s",pointerEvents:wsReady?"none":"auto"}},
-        h("div",{style:{width:(progress*100)+"%",height:"100%",background:`linear-gradient(90deg,${gc},${gc}cc)`,borderRadius:"3px",transition:"width 0.1s linear",boxShadow:`0 0 8px ${gc}44`}}),
-        h("div",{style:{position:"absolute",top:"-4px",left:`calc(${progress*100}% - 7px)`,width:"14px",height:"14px",borderRadius:"50%",background:gc,border:"2px solid rgba(255,255,255,0.9)",boxShadow:`0 0 8px ${gc}66`,transition:"left 0.1s linear"}})
-      ),
-      h("div",{ref:waveRef,style:{position:"absolute",inset:0,opacity:wsReady?1:0,transition:"opacity 0.4s"}})
+    h("span",{className:"ml-player-time",style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.3)",flexShrink:0,minWidth:"32px",textAlign:"right"}},fmtTime(currentTime)),
+    h("div",{ref:waveContainerRef,onClick:handleBarClick,onTouchStart:handleTouchSeek,onTouchMove:handleTouchSeek,
+      style:{flex:1,minWidth:"80px",height:"40px",cursor:"pointer",touchAction:"none",display:"flex",gap:"1px",alignItems:"center",padding:"0 2px"}},
+      peaksData ? peaksData.map((v, i) => {
+        const norm = Math.abs(v) / peaksMax;
+        const barH = Math.max(2, norm * 36);
+        const frac = i / peaksData.length;
+        const filled = frac < progress;
+        const isPlayhead = Math.abs(frac - progress) < (1.5 / peaksData.length);
+        return h("div",{key:i,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",height:"40px"}},
+          h("div",{style:{width:"100%",maxWidth:"2.5px",borderRadius:"1.5px",height:barH+"px",
+            background:filled?gc:"rgba(255,255,255,0.07)",
+            boxShadow:isPlayhead?`0 0 8px ${gc}aa`:filled?`0 0 2px ${gc}33`:"none",
+            transition:"background 0.06s"}}));
+      }) : Array.from({length:80},(_,i)=>{
+        const x=i/79;const barH=Math.max(2,(0.3+0.7*(0.5+0.5*Math.sin(x*Math.PI*3))*Math.random())*20);
+        const frac=i/80;const filled=frac<progress;
+        return h("div",{key:i,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",height:"40px"}},
+          h("div",{style:{width:"100%",maxWidth:"2.5px",borderRadius:"1.5px",height:barH+"px",
+            background:filled?gc+"88":"rgba(255,255,255,0.05)",transition:"background 0.1s"}}));
+      })
     ),
-    h("span",{className:"ml-player-time",style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:"rgba(255,255,255,0.4)",flexShrink:0}},fmtTime(duration))
+    h("span",{className:"ml-player-time",style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.3)",flexShrink:0,minWidth:"32px"}},fmtTime(duration))
   );
 }
 
@@ -988,7 +1007,7 @@ function BeatCard({ beat, playingId, onPlay, onBuy, highlight, isLiked, onLike, 
       h("span",{className:"ml-beat-genre",style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:gc,background:`${gc}15`,padding:"3px 10px",borderRadius:"20px",border:`1px solid ${gc}33`,textTransform:"uppercase",letterSpacing:"0.05em",whiteSpace:"nowrap",flexShrink:0}},genre?.icon+" "+genre?.label),
       beat.sub_genre&&(()=>{const sg=(GENRES_TREE.find(g=>g.id===beat.genre)||{children:[]}).children.find(c=>c.id===beat.sub_genre);return sg?h("span",{className:"ml-beat-genre",style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",fontWeight:600,color:gc,background:`${gc}08`,padding:"2px 8px",borderRadius:"12px",border:`1px dashed ${gc}33`,textTransform:"uppercase",letterSpacing:"0.03em",whiteSpace:"nowrap",flexShrink:0}},sg.icon+" "+sg.label):null})()
     ),
-    h("div",{style:{marginBottom:"10px"}}, isPlaying ? h(PeaksWaveform,{peaks,progress:audioProgress,color:gc,onSeek}) : h(MiniWaveform,{playing:false,color:gc})),
+    h("div",{style:{marginBottom:"10px",borderRadius:"8px",background:isPlaying?"rgba(255,255,255,0.02)":"none",padding:isPlaying?"4px 6px":"4px 6px",transition:"background 0.3s"}}, isPlaying ? h(PeaksWaveform,{peaks,progress:audioProgress,color:gc,onSeek}) : h(MiniWaveform,{playing:false,color:gc})),
     h("div",{className:"ml-beat-style",style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'DM Sans',sans-serif",marginBottom:"12px",fontStyle:"italic"}},beat.style),
     h("div",{className:"ml-beat-meta",style:{display:"flex",gap:"12px",alignItems:"center",flexWrap:"wrap"}},
       h("button",{onClick:()=>onLike&&onLike(beat.id),style:{background:"none",border:"none",cursor:liked?"default":"pointer",display:"flex",alignItems:"center",gap:"4px",color:liked?"#e11d48":"rgba(255,255,255,0.35)",fontSize:"12px",fontFamily:"'Space Mono',monospace",padding:0}},liked?"♥":"♡"," ",(beat.likes_count||0)),
@@ -1153,7 +1172,7 @@ function SampleCard({ sample, user, credits, onBuy, onLogin, onDownload, playing
         )
       ),
 
-      h("div",{style:{marginBottom:"6px"}}, isPlaying ? h(PeaksWaveform,{peaks,progress:audioProgress,color:stemColor,onSeek}) : h(MiniWaveform,{playing:false,color:stemColor}))
+      h("div",{style:{marginBottom:"6px",borderRadius:"8px",background:isPlaying?"rgba(255,255,255,0.02)":"none",padding:"4px 6px",transition:"background 0.3s"}}, isPlaying ? h(PeaksWaveform,{peaks,progress:audioProgress,color:stemColor,onSeek}) : h(MiniWaveform,{playing:false,color:stemColor}))
     )
   );
 }
@@ -1681,6 +1700,7 @@ function MusiClawApp() {
 
       if (audioRef.current) { audioRef.current.pause(); }
       const audio = new Audio(url);
+      audio.crossOrigin = "anonymous";
       audio.onloadedmetadata = () => setAudioDuration(audio.duration);
       audio.ontimeupdate = () => {
         setAudioCurrentTime(audio.currentTime);
