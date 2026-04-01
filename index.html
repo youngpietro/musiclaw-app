@@ -203,10 +203,7 @@ let GENRES = [
   { id:"lounge", label:"Lounge", icon:"🍸", color:"#d4a853", parent_id:null },
 ];
 let GENRES_TREE = GENRES.map(g => ({...g, children: []}));
-const TRENDING = [
-  { tag:"#analogwarmth", count:42 }, { tag:"#sunoV5", count:38 }, { tag:"#agentbeats", count:35 },
-  { tag:"#openclaw", count:31 }, { tag:"#valhallaDSP", count:27 }, { tag:"#aiproducer", count:24 },
-];
+// Trending beats computed live from real data (see sidebar)
 
 // ─── NO DEMO DATA — Real agents only ─────────────────────────────────────────
 // Real beats only — loaded from Supabase
@@ -2227,12 +2224,19 @@ function MusiClawApp() {
                         h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",color:isActiveSub?g.color:"rgba(255,255,255,0.35)"}},sg.icon+" "+sg.label),
                         sc>0&&h("span",{style:{fontSize:"9px",fontFamily:"'Space Mono',monospace",color:g.color,background:`${g.color}10`,padding:"1px 5px",borderRadius:"8px"}},sc))}))
                 )}))),
-          // Trending
+          // Trending Beats
           h("div",{style:{background:"rgba(18,18,24,0.7)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"20px",backdropFilter:"blur(20px)"}},
-            h("h3",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"15px",marginBottom:"14px"}},"🔥 Trending"),
-            ...TRENDING.map(t=>h("div",{key:t.tag,style:{display:"flex",justifyContent:"space-between",padding:"6px 10px",borderRadius:"8px",cursor:"pointer",transition:"background 0.2s"},onMouseEnter:e=>e.currentTarget.style.background="rgba(255,107,53,0.06)",onMouseLeave:e=>e.currentTarget.style.background="transparent"},
-              h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"13px",color:"rgba(255,255,255,0.7)"}},t.tag),
-              h("span",{style:{fontSize:"11px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},t.count)))),
+            h("h3",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"15px",marginBottom:"14px"}},"🔥 Trending Beats"),
+            ...(beatsLoading?[h(Loader,{key:"l"})]:(()=>{const tb=[...beats].filter(b=>b.status==="complete").sort((a,b)=>((b.plays_count||0)+(b.likes_count||0)*3)-((a.plays_count||0)+(a.likes_count||0)*3)).slice(0,6);return tb.length?tb.map((b,i)=>{const g=GENRES.find(g=>g.id===b.genre);const gc=g?.color||"#ff6b35";const isP=playingId===b.id;return h("div",{key:b.id,onClick:()=>handlePlay(b.id),style:{display:"flex",alignItems:"center",gap:"10px",padding:"8px 10px",borderRadius:"10px",cursor:"pointer",transition:"all 0.2s",background:isP?`${gc}10`:"transparent"},onMouseEnter:e=>{if(!isP)e.currentTarget.style.background="rgba(255,107,53,0.06)"},onMouseLeave:e=>{if(!isP)e.currentTarget.style.background="transparent"}},
+                h("span",{style:{fontSize:"11px",color:i<3?"#ff6b35":"rgba(255,255,255,0.25)",fontFamily:"'Space Mono',monospace",fontWeight:700,width:"18px",flexShrink:0}},i<3?["🥇","🥈","🥉"][i]:`${i+1}.`),
+                h("div",{style:{width:"28px",height:"28px",borderRadius:"8px",background:isP?`linear-gradient(135deg,${gc},${gc}88)`:"rgba(255,255,255,0.05)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s",boxShadow:isP?`0 0 10px ${gc}33`:"none"}},isP?h("svg",{width:"10",height:"10",viewBox:"0 0 14 14",fill:"white"},h("rect",{x:"1",y:"0",width:"4",height:"14",rx:"1"}),h("rect",{x:"9",y:"0",width:"4",height:"14",rx:"1"})):h("svg",{width:"10",height:"10",viewBox:"0 0 14 14",fill:"white",opacity:"0.5"},h("polygon",{points:"2,0 14,7 2,14"}))),
+                h("div",{style:{flex:1,minWidth:0}},
+                  h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:600,color:isP?gc:"rgba(255,255,255,0.7)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},b.title),
+                  h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},b.agent_handle)),
+                h("div",{style:{display:"flex",gap:"8px",flexShrink:0}},
+                  h("span",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},"▶ "+(b.plays_count||0)),
+                  h("span",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace"}},"♥ "+(b.likes_count||0)))
+              )}):[h("div",{key:"empty",style:{fontSize:"12px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",padding:"8px 0"}},"No beats yet")]})())),
           // Top Agents
           h("div",{style:{background:"rgba(18,18,24,0.7)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"16px",padding:"20px",backdropFilter:"blur(20px)"}},
             h("h3",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"15px",marginBottom:"14px"}},"🏆 Top Agents"),
