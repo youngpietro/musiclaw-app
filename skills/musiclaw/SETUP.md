@@ -1,72 +1,46 @@
-# MusiClaw — OpenClaw Skill Setup
+# MusiClaw — Skill Setup
 
-## How the Suno cookie works (no more pasting keys in chat!)
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Agent stores suno_cookie via update-agent-settings      │
-│  ┌───────────────────────────────────┐                  │
-│  │ suno_cookie: "session=abc..."─────┼──┐               │
-│  │ (from Suno Pro/Premier)           │  │               │
-│  └───────────────────────────────────┘  │               │
-│                                         ▼               │
-│  MusiClaw stores cookie securely per-agent              │
-│                                         │               │
-│  Agent generates ──► suno_cookie sent as header         │
-│  (never in prompt, never logged)                        │
-└─────────────────────────────────────────────────────────┘
-```
-
-## Install (3 steps)
+## Install (2 steps)
 
 ### 1. Copy skill to your agent's workspace
 
 ```bash
-# Into your agent's workspace (per-agent)
+# Per-agent
 cp -r skills/musiclaw <workspace>/skills/musiclaw
 
-# OR into shared skills (all agents on this machine)
+# OR shared (all agents on this machine)
 cp -r skills/musiclaw ~/.openclaw/skills/musiclaw
 ```
 
-### 2. Store your Suno cookie
+### 2. Start a new session
 
-During the first conversation, the agent will ask for your Suno Pro/Premier cookie. It stores it securely via the `update-agent-settings` endpoint.
+The skill loads on session start. Your agent will see **musiclaw** in its available skills and will walk you through first-time setup:
 
-To get your cookie: Log into suno.com → DevTools (F12) → Application → Cookies → copy the cookie value.
+1. **Owner email** — verified via 6-digit code
+2. **PayPal email** — for receiving payouts (80% of each sale)
+3. **Suno API key** — from [apiframe.ai](https://app.apiframe.ai) or [sunoapi.org](https://sunoapi.org) (you pay the provider directly)
+4. **Pricing** — WAV track price ($2.99+) and WAV+Stems price ($9.99+)
 
-**Suno Pro or Premier plan is required** for commercial licensing rights. Free plan cookies will be rejected.
+The agent handles registration, API key storage, and configuration automatically.
 
-### 3. Start a new session
+## Requirements
 
-The skill loads on session start. Your agent will see MusiClaw in its available skills and can immediately start making beats.
-
-## What changed from the legacy approach
-
-| | Legacy (manual) | OpenClaw Skill |
-|---|---|---|
-| **Suno cookie** | Human pastes in chat | Stored securely via update-agent-settings |
-| **Cookie security** | Visible in prompts/logs | Never in conversation |
-| **Loading** | Copy-paste instructions each session | Auto-loaded on session start |
-| **Updates** | Manual re-paste | Edit SKILL.md, auto-reloads (watcher) |
-| **Multi-agent** | Must paste for each agent | Shared via `~/.openclaw/skills` or per-workspace |
-
-## Gating
-
-The skill requires:
-- A registered MusiClaw agent with stored `suno_cookie`
-- `curl` — must be on PATH (used for all API calls)
-
-If either is missing, the agent will guide you through setup.
+- A third-party Suno API key (apiframe.ai or sunoapi.org)
+- `curl` on PATH (used for all API calls)
+- PayPal account for receiving payouts
 
 ## Verify it's working
 
-Start a session and ask your agent:
+Ask your agent:
 
 > "What skills do you have?"
 
-It should list **musiclaw** with the 🦞 emoji. Then:
+It should list **musiclaw**. Then:
 
 > "Make me a beat"
 
-The agent will use the stored Suno cookie automatically without ever asking you for it.
+The agent will generate, poll, and publish — all automatic.
+
+## Optional: Free stem splitting
+
+If you want WAV+Stems without extra cost, get a free MVSEP API key at [mvsep.com/user-api](https://mvsep.com/user-api) and tell your agent to store it. Otherwise, sunoapi.org includes built-in splitting at 50 credits per split.
