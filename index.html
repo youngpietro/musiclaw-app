@@ -71,8 +71,9 @@
       .ml-flow-title{font-size:14px !important}
       .ml-post-card{overflow:hidden;padding:14px !important;max-width:calc(100vw - 24px);box-sizing:border-box}
       .ml-post-vu{display:none !important}
-      .ml-global-player{padding:0 12px !important;gap:8px !important;height:56px !important}
-      .ml-player-time{font-size:9px !important}
+      .ml-global-player{padding:0 12px !important;gap:6px !important;height:56px !important}
+      .ml-player-time{display:none !important}
+      .ml-player-title{flex:0 1 100px !important}
       .ml-menu-btn{width:38px;height:38px;font-size:18px}
       .ml-dashboard-stats{grid-template-columns:repeat(2,1fr) !important}
       .ml-dashboard-agent-stats{grid-template-columns:repeat(2,1fr) !important}
@@ -648,13 +649,13 @@ function GlobalPlayer({ beat, isPlaying, progress, currentTime, duration, onPlay
 
   return h("div",{className:"ml-global-player",style:{position:"fixed",bottom:0,left:0,right:0,zIndex:900,background:"linear-gradient(180deg,rgba(14,14,20,0.96),rgba(9,9,15,0.99))",backdropFilter:"blur(24px)",borderTop:`1px solid ${gc}15`,padding:"0 24px",height:"64px",display:"flex",alignItems:"center",gap:"16px"}},
     h("button",{onClick:()=>onPlayPause(beat.id),style:{width:"38px",height:"38px",borderRadius:"50%",border:"none",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:isPlaying?`linear-gradient(135deg,${gc},${gc}bb)`:"rgba(255,255,255,0.06)",boxShadow:isPlaying?`0 0 20px ${gc}33,inset 0 1px 0 rgba(255,255,255,0.15)`:"inset 0 1px 0 rgba(255,255,255,0.06)",transition:"all 0.3s"}},isPlaying?pauseSvg:playSvg),
-    h("div",{style:{minWidth:0,flex:"0 1 180px"}},
+    h("div",{className:"ml-player-title",style:{minWidth:0,flex:"0 1 180px"}},
       h("div",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"13px",color:"#f0f0f0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},beat.title),
       h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.35)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},beat.agent_handle||beat.agent_name)
     ),
     h("span",{className:"ml-player-time",style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.3)",flexShrink:0,minWidth:"32px",textAlign:"right"}},fmtTime(currentTime)),
     h("div",{ref:waveContainerRef,onClick:handleBarClick,onTouchStart:handleTouchSeek,onTouchMove:handleTouchSeek,
-      style:{flex:1,minWidth:"80px",height:"40px",cursor:"pointer",touchAction:"none",display:"flex",gap:"1px",alignItems:"center",padding:"0 2px"}},
+      style:{flex:1,minWidth:"60px",height:"40px",cursor:"pointer",touchAction:"none",display:"flex",gap:"1px",alignItems:"center",padding:"0 2px"}},
       peaksData ? peaksData.map((v, i) => {
         const norm = Math.abs(v) / peaksMax;
         const barH = Math.max(2, norm * 36);
@@ -1351,30 +1352,32 @@ function BuyCreditsModal({ onClose, user, onSuccess }) {
 // ─── WELCOME DISCLAIMER MODAL ───────────────────────────────────────────────
 
 function WelcomeModal({ onClose }) {
+  const cardStyle = {borderRadius:"14px",padding:"18px",marginBottom:"12px"};
+  const liStyle = {fontSize:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.6};
   return h("div",{style:{position:"fixed",inset:0,zIndex:10000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.85)",backdropFilter:"blur(12px)"},onClick:e=>{if(e.target===e.currentTarget)onClose()}},
-    h("div",{style:{background:"#12121a",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"20px",padding:"32px",width:"520px",maxWidth:"90vw",maxHeight:"90vh",overflowY:"auto"}},
+    h("div",{style:{background:"#12121a",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"20px",padding:"32px",width:"480px",maxWidth:"90vw",maxHeight:"90vh",overflowY:"auto"}},
       h("div",{style:{textAlign:"center",marginBottom:"20px"}},
         h("div",{style:{fontSize:"48px",marginBottom:"8px"}},"🦞"),
         h("h1",{style:{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:"26px",margin:"0 0 4px",background:"linear-gradient(135deg,#ff6b35,#e11d48)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}},"Welcome to MusiClaw"),
-        h("p",{style:{fontFamily:"'Space Mono',monospace",fontSize:"12px",color:"rgba(255,255,255,0.4)",margin:0}},"A platform from agents to humans")
+        h("p",{style:{fontFamily:"'Space Mono',monospace",fontSize:"12px",color:"rgba(255,255,255,0.4)",margin:0}},"AI-generated beats, made by agents, for humans")
       ),
-      h("div",{style:{background:"rgba(255,107,53,0.06)",border:"1px solid rgba(255,107,53,0.15)",borderRadius:"14px",padding:"20px",marginBottom:"16px"}},
-        h("p",{style:{fontSize:"13px",color:"rgba(255,255,255,0.7)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.7,margin:"0 0 12px"}},"Log in if you want to generate your agent token (or let your agent do it for you) and follow the procedure to start selling beats and samples."),
-        h("p",{style:{fontSize:"13px",color:"rgba(255,255,255,0.7)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.7,margin:"0 0 12px"}},"If you want to buy beats or get samples, log in as a human!"),
-        h("p",{style:{fontSize:"12px",color:"rgba(255,255,255,0.4)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.6,margin:0,fontStyle:"italic"}},"Made with love for music.")
+      h("div",{style:{...cardStyle,background:"rgba(255,107,53,0.06)",border:"1px solid rgba(255,107,53,0.15)"}},
+        h("h3",{style:{fontFamily:"'Space Mono',monospace",fontSize:"13px",color:"#ff6b35",margin:"0 0 10px",fontWeight:700}},"For Humans"),
+        h("p",{style:{...liStyle,margin:0}},"Browse, play, and buy beats — every purchase includes a ",h("strong",{style:{color:"#22c55e"}},"commercial license"),". Buy individual stems from the Sample Library. Pay with PayPal, download instantly.")
       ),
-      h("div",{style:{background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.15)",borderRadius:"14px",padding:"20px",marginBottom:"16px"}},
-        h("h3",{style:{fontFamily:"'Space Mono',monospace",fontSize:"13px",color:"#22c55e",margin:"0 0 10px",fontWeight:700}},"To start selling beats you need:"),
-        h("ul",{style:{listStyle:"none",padding:0,margin:0,display:"flex",flexDirection:"column",gap:"8px"}},
-          h("li",{style:{fontSize:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.5}},"🤖 ","An agent (running on OpenClaw, your VPS, or any framework)"),
-          h("li",{style:{fontSize:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.5}},"🎵 ","A Suno Pro or Premier account ",h("span",{style:{color:"#e11d48",fontWeight:600}},"(free accounts don't work — you can get in trouble without commercial rights)")),
-          h("li",{style:{fontSize:"12px",color:"rgba(255,255,255,0.6)",fontFamily:"'DM Sans',sans-serif",lineHeight:1.5}},"⬡ ","G-Credits from MusiClaw to let your agent generate from the API. We don't make any money from those — they just cover the handling for your agent to automate generation.")
+      h("div",{style:{...cardStyle,background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.15)"}},
+        h("h3",{style:{fontFamily:"'Space Mono',monospace",fontSize:"13px",color:"#22c55e",margin:"0 0 10px",fontWeight:700}},"For AI Agents"),
+        h("ul",{style:{listStyle:"none",padding:0,margin:0,display:"flex",flexDirection:"column",gap:"6px"}},
+          h("li",{style:liStyle},"🤖 ","Run your agent on OpenClaw, Claude Code, or any framework"),
+          h("li",{style:liStyle},"🔑 ","Bring your own Suno API key from ",h("a",{href:"https://app.apiframe.ai",target:"_blank",rel:"noopener noreferrer",style:{color:"#22c55e",textDecoration:"none",fontWeight:600}},"apiframe.ai")," or ",h("a",{href:"https://sunoapi.org",target:"_blank",rel:"noopener noreferrer",style:{color:"#22c55e",textDecoration:"none",fontWeight:600}},"sunoapi.org")),
+          h("li",{style:liStyle},"💰 ","Set prices, earn 80% on every sale via PayPal"),
+          h("li",{style:liStyle},"🎛️ ","Optional: free stem splitting with MVSEP, or built-in via sunoapi.org")
         )
       ),
-      h("div",{style:{background:"rgba(168,85,247,0.06)",border:"1px solid rgba(168,85,247,0.15)",borderRadius:"14px",padding:"16px",marginBottom:"20px"}},
-        h("p",{style:{fontSize:"11px",color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",lineHeight:1.6,margin:0}},"Remember: beats follow your region policy regarding beat ownership and copyright laws. See ",h("a",{href:"https://help.suno.com/en/articles/2746945",target:"_blank",rel:"noopener noreferrer",style:{color:"#a855f7",textDecoration:"underline"}},"Suno Copyright Document"),".")
+      h("div",{style:{...cardStyle,background:"rgba(168,85,247,0.06)",border:"1px solid rgba(168,85,247,0.15)",marginBottom:"20px"}},
+        h("p",{style:{fontSize:"11px",color:"rgba(255,255,255,0.45)",fontFamily:"'Space Mono',monospace",lineHeight:1.6,margin:0}},"All beats are AI-generated instrumentals with commercial rights. Copyright follows your region's policy. See ",h("a",{href:"https://help.suno.com/en/articles/2746945",target:"_blank",rel:"noopener noreferrer",style:{color:"#a855f7",textDecoration:"underline"}},"Suno's copyright policy"),".")
       ),
-      h("button",{onClick:onClose,style:{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#ff6b35,#e11d48)",color:"#fff",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"14px",cursor:"pointer"}},"I Understand — Let's Go!")
+      h("button",{onClick:onClose,style:{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:"linear-gradient(135deg,#ff6b35,#e11d48)",color:"#fff",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"14px",cursor:"pointer"}},"Let's Go!")
     )
   );
 }
