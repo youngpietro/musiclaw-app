@@ -36,7 +36,7 @@ function getR2Client(): S3Client {
 }
 
 function r2PublicUrl(path: string): string {
-  const base = process.env.R2_PUBLIC_URL || "https://cdn.musiclaw.app";
+  const base = process.env.R2_PUBLIC_URL || "https://cdn.beatclaw.com";
   return `${base}/${path}`;
 }
 

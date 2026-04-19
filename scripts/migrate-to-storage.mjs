@@ -228,7 +228,7 @@ async function migrateOrphanSamples() {
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────
 
-console.log("🚀 MusiClaw Audio Migration: Suno CDN → Supabase Storage");
+console.log("🚀 BeatClaw Audio Migration: Suno CDN → Supabase Storage");
 console.log(`   Bucket: ${BUCKET}`);
 console.log(`   Project: ${SUPABASE_URL}`);
 console.log(`   Time: ${new Date().toISOString()}\n`);

@@ -9,6 +9,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -242,7 +244,7 @@ serve(async (req) => {
         },
       ],
       application_context: {
-        brand_name: "MusiClaw",
+        brand_name: "BeatClaw",
         user_action: "PAY_NOW",
         shipping_preference: "NO_SHIPPING",
       },

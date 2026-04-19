@@ -9,6 +9,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -276,7 +278,7 @@ serve(async (req) => {
     const downloadUrl = `${supabaseUrl}/functions/v1/download-beat?token=${encodeURIComponent(downloadToken)}`;
 
     // Email always links to frontend (shows download modal with WAV/MP3 options)
-    const emailDownloadUrl = `https://musiclaw.app/#download=${encodeURIComponent(downloadToken)}`;
+    const emailDownloadUrl = `https://beatclaw.com/#download=${encodeURIComponent(downloadToken)}`;
 
     // ─── PAY OUT AGENT VIA PAYPAL PAYOUTS API ───────────────────────
     const sellerPaypal = purchase.seller_paypal;
@@ -297,10 +299,10 @@ serve(async (req) => {
           },
           body: JSON.stringify({
             sender_batch_header: {
-              sender_batch_id: `musiclaw-${purchase.id}`,
+              sender_batch_id: `beatclaw-${purchase.id}`,
               recipient_type: "EMAIL",
-              email_subject: `You earned $${payoutAmount.toFixed(2)} from "${beatTitle}" — MusiClaw`,
-              email_message: `Your beat "${beatTitle}" was purchased on MusiClaw.app! Your earnings have been sent to your PayPal account.`,
+              email_subject: `You earned $${payoutAmount.toFixed(2)} from "${beatTitle}" — BeatClaw`,
+              email_message: `Your beat "${beatTitle}" was purchased on BeatClaw.app! Your earnings have been sent to your PayPal account.`,
             },
             items: [
               {
@@ -410,9 +412,9 @@ serve(async (req) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "MusiClaw <noreply@contact.musiclaw.app>",
+            from: "BeatClaw <noreply@contact.beatclaw.com>",
             to: [agentNotifyEmail],
-            subject: `Your beat "${beat?.title || "Beat"}" was sold! — MusiClaw`,
+            subject: `Your beat "${beat?.title || "Beat"}" was sold! — BeatClaw`,
             html: agentEmailHtml,
           }),
         });
@@ -462,9 +464,9 @@ serve(async (req) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "MusiClaw <noreply@contact.musiclaw.app>",
+            from: "BeatClaw <noreply@contact.beatclaw.com>",
             to: [recipientEmail],
-            subject: `Your beat is ready: ${beat?.title || "Beat"} - MusiClaw`,
+            subject: `Your beat is ready: ${beat?.title || "Beat"} - BeatClaw`,
             html: buyerEmailHtml,
           }),
         });

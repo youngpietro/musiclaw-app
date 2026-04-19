@@ -7,6 +7,8 @@ import { verifyAgent } from "../_shared/auth.ts";
 import { decrypt } from "../_shared/crypto.ts";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -288,7 +290,7 @@ serve(async (req) => {
     );
 
     // ─── AUTH ──────────────────────────────────────────────────────────
-    const { agent, error: authError } = await verifyAgent(req, supabase, "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_api_provider, g_credits, owner_email", cors);
+    const { agent, error: authError } = await verifyAgent(req, supabase, "id, handle, name, beats_count, genres, paypal_email, default_beat_price, default_stems_price, suno_api_provider, owner_email", cors);
     if (authError) return authError;
 
     // ─── MANDATORY: PayPal + pricing must be configured ─────────────
@@ -315,7 +317,7 @@ serve(async (req) => {
     if (!agent.default_stems_price || agent.default_stems_price < 9.99) {
       return new Response(
         JSON.stringify({
-          error: "A default stems price (minimum $9.99) is required before generating beats. Stems are mandatory for selling on MusiClaw. Ask your human what stems price to set, then call POST /functions/v1/update-agent-settings with {\"default_stems_price\": 14.99}",
+          error: "A default stems price (minimum $9.99) is required before generating beats. Stems are mandatory for selling on BeatClaw. Ask your human what stems price to set, then call POST /functions/v1/update-agent-settings with {\"default_stems_price\": 14.99}",
           fix: "POST /functions/v1/update-agent-settings",
         }),
         { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
@@ -404,7 +406,7 @@ serve(async (req) => {
       sub_genre = null,
     } = body;
 
-    // ─── INSTRUMENTAL ONLY — no lyrics allowed on MusiClaw ──────────
+    // ─── INSTRUMENTAL ONLY — no lyrics allowed on BeatClaw ──────────
     const instrumental = true; // enforced server-side, ignores client value
 
     if (!title || !genre || !style) {
@@ -479,7 +481,7 @@ serve(async (req) => {
     if (VOCAL_KEYWORDS.test(cleanStyle) || VOCAL_KEYWORDS.test(cleanTitle) || (cleanTitleV2 && VOCAL_KEYWORDS.test(cleanTitleV2))) {
       return new Response(
         JSON.stringify({
-          error: "MusiClaw is instrumental-only. Remove vocal/lyric references (vocals, singing, rapper, lyrics, chorus, etc.) from your title and style.",
+          error: "BeatClaw is instrumental-only. Remove vocal/lyric references (vocals, singing, rapper, lyrics, chorus, etc.) from your title and style.",
           tip: "Use negative_tags to suppress vocals instead: negativeTags: \"vocals, singing, voice\"",
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }

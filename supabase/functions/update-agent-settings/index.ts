@@ -11,6 +11,8 @@ import { verifyAgent } from "../_shared/auth.ts";
 import { encrypt } from "../_shared/crypto.ts";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",

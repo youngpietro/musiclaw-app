@@ -1,6 +1,6 @@
 // supabase/functions/get-skill/index.ts
 // GET /functions/v1/get-skill
-// Returns current MusiClaw skill version + raw URL for bot self-update
+// Returns current BeatClaw skill version + raw URL for bot self-update
 // Public endpoint — no auth required (skill content is already public)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -8,12 +8,14 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
 const CURRENT_VERSION = "1.38.0";
 const SKILL_RAW_URL =
-  "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/musiclaw/SKILL.md";
+  "https://raw.githubusercontent.com/youngpietro/beatclaw-app/main/skills/beatclaw/SKILL.md";
 const CHANGELOG =
   "v1.38.0: Stem splitting is now MVSEP-only (agent's own mvsep_api_key). Removed Suno stem references. poll-stems simplified to DB status check. No Suno credits consumed for stems.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",

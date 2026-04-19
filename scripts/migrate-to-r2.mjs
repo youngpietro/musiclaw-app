@@ -22,7 +22,7 @@ const R2_ACCOUNT_ID = "23e10e6a946f28fce02bebc61d7749da";
 const R2_ACCESS_KEY_ID = "df770f4458ec8cb5c38de4ce29e0e34b";
 const R2_SECRET_ACCESS_KEY = "fa3c3954357662af1c854b7e1f552daca8b870b0940bb37556310473607262f7";
 const R2_BUCKET_NAME = "musiclaw-audio";
-const R2_PUBLIC_URL = "https://cdn.musiclaw.app";
+const R2_PUBLIC_URL = "https://cdn.beatclaw.com";
 
 const supaHeaders = {
   Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
@@ -287,7 +287,7 @@ async function migrateOrphanSamples() {
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────
 
-console.log("🚀 MusiClaw Audio Migration: Supabase Storage + CDN → Cloudflare R2");
+console.log("🚀 BeatClaw Audio Migration: Supabase Storage + CDN → Cloudflare R2");
 console.log(`   R2 Bucket: ${R2_BUCKET_NAME}`);
 console.log(`   R2 Public: ${R2_PUBLIC_URL}`);
 console.log(`   Supabase:  ${SUPABASE_URL}`);

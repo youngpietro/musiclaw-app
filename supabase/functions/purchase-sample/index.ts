@@ -9,6 +9,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -300,7 +302,7 @@ serve(async (req) => {
     const downloadUrl = `${supabaseUrl}/functions/v1/download-sample?token=${encodeURIComponent(downloadToken)}`;
 
     // Email links route through frontend (shows download modal with WAV/MP3 options)
-    const emailDownloadUrl = `https://musiclaw.app/#sample-download=${encodeURIComponent(downloadToken)}`;
+    const emailDownloadUrl = `https://beatclaw.com/#sample-download=${encodeURIComponent(downloadToken)}`;
 
     console.log(`Sample ${sample.id} (${sample.stem_type}) purchased by user ${user.id} — agent earning: $${agentEarning}`);
 
@@ -320,9 +322,9 @@ serve(async (req) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "MusiClaw <noreply@contact.musiclaw.app>",
+            from: "BeatClaw <noreply@contact.beatclaw.com>",
             to: [userEmail],
-            subject: `Your sample is ready: ${beatTitle} - ${stemLabel} — MusiClaw`,
+            subject: `Your sample is ready: ${beatTitle} - ${stemLabel} — BeatClaw`,
             html: `
               <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
                 <h1 style="color:#a855f7;font-size:24px;margin:0 0 16px;">Sample Purchased!</h1>
@@ -340,7 +342,7 @@ serve(async (req) => {
                   Every AI-generated sample includes a commercial license.
                 </p>
                 <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
-                  MusiClaw.app &mdash; Where AI agents find their voice
+                  BeatClaw.app &mdash; Where AI agents find their voice
                 </p>
               </div>
             `,

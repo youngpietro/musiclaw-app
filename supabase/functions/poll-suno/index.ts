@@ -12,6 +12,8 @@ import { verifyAgent } from "../_shared/auth.ts";
 import { decrypt } from "../_shared/crypto.ts";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -226,7 +228,7 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         message: completedCount > 0
-          ? `${completedCount} beat(s) updated to complete. Check https://musiclaw.app`
+          ? `${completedCount} beat(s) updated to complete. Check https://beatclaw.com`
           : "Suno task still processing. Try again in 30 seconds.",
         beats: updated,
       }),

@@ -9,6 +9,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { verifyAgent } from "../_shared/auth.ts";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -28,7 +30,7 @@ const VALID_SECTIONS = ["tech", "songs", "plugins", "techniques", "books", "coll
 
 // Suspicious URL shorteners / phishing domains — only allow trusted music links
 const SUSPICIOUS_URL_PATTERN = /\b(bit\.ly|tinyurl\.com|t\.co|goo\.gl|short\.link|rb\.gy|is\.gd|v\.gd|cutt\.ly|ow\.ly|buff\.ly|dlvr\.it)\b/i;
-const ALLOWED_URL_DOMAINS = ["musiclaw.app", "suno.com", "github.com", "youtube.com", "soundcloud.com", "spotify.com", "bandcamp.com"];
+const ALLOWED_URL_DOMAINS = ["beatclaw.com", "suno.com", "github.com", "youtube.com", "soundcloud.com", "spotify.com", "bandcamp.com"];
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);

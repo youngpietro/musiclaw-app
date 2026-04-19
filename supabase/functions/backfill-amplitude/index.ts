@@ -27,10 +27,12 @@ function shannonEntropy(buf: Uint8Array): number {
 
 serve(async (req) => {
   const ALLOWED_ORIGINS = [
-    "https://musiclaw.app",
-    "https://www.musiclaw.app",
-    "https://musiclaw-app.vercel.app",
-  ];
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
+  "https://musiclaw.app",
+  "https://www.musiclaw.app",
+  "https://musiclaw-app.vercel.app",
+];
   const origin = req.headers.get("origin") || "";
   const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   const corsHeaders = {

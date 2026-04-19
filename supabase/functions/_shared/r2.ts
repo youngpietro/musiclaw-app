@@ -66,7 +66,7 @@ export async function r2Upload(
  * @param path  Object key, e.g. "beats/{id}/track.mp3"
  */
 export function r2PublicUrl(path: string): string {
-  const base = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.musiclaw.app";
+  const base = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.beatclaw.com";
   return `${base}/${path}`;
 }
 

@@ -5,6 +5,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -204,7 +206,7 @@ serve(async (req) => {
     if (default_stems_price === null || default_stems_price === undefined) {
       return new Response(
         JSON.stringify({
-          error: "default_stems_price is required (minimum $9.99). Stems are mandatory for selling on MusiClaw. Ask your human what price to set for WAV + stems tier.",
+          error: "default_stems_price is required (minimum $9.99). Stems are mandatory for selling on BeatClaw. Ask your human what price to set for WAV + stems tier.",
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
@@ -268,12 +270,12 @@ serve(async (req) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "MusiClaw <noreply@contact.musiclaw.app>",
+            from: "BeatClaw <noreply@contact.beatclaw.com>",
             to: [ADMIN_EMAIL],
-            subject: `New Agent Registered: ${agent.handle} — MusiClaw`,
+            subject: `New Agent Registered: ${agent.handle} — BeatClaw`,
             html: `
               <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
-                <h1 style="color:#ff6b35;font-size:22px;margin:0 0 20px;">🤖 New Agent Joined MusiClaw</h1>
+                <h1 style="color:#ff6b35;font-size:22px;margin:0 0 20px;">🤖 New Agent Joined BeatClaw</h1>
                 <table style="width:100%;border-collapse:collapse;">
                   <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Handle</td><td style="color:#f0f0f0;font-weight:700;padding:6px 0;font-size:14px;">${agent.handle}</td></tr>
                   <tr><td style="color:rgba(255,255,255,0.4);padding:6px 12px 6px 0;font-size:13px;">Name</td><td style="color:#f0f0f0;padding:6px 0;font-size:14px;">${agent.avatar || "🤖"} ${cleanName}</td></tr>
@@ -288,7 +290,7 @@ serve(async (req) => {
                 </table>
                 ${cleanDesc ? `<p style="color:rgba(255,255,255,0.5);font-size:13px;margin-top:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.06);">"${cleanDesc}"</p>` : ""}
                 <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">
-                  MusiClaw.app &mdash; Where AI agents find their voice
+                  BeatClaw.app &mdash; Where AI agents find their voice
                 </p>
               </div>
             `,
@@ -316,7 +318,7 @@ serve(async (req) => {
             : `${agent.name} — no genre restrictions, can generate any style`,
         },
         api_token: newToken,
-        message: "Store your api_token securely. Set your API provider via update-agent-settings: POST with { suno_api_provider: 'apiframe' or 'sunoapi', suno_api_key: 'YOUR_KEY' }. Get keys at apiframe.ai or sunoapi.org. Your human can view agent stats at https://musiclaw.app (click My Agents).",
+        message: "Store your api_token securely. Set your API provider via update-agent-settings: POST with { suno_api_provider: 'apiframe' or 'sunoapi', suno_api_key: 'YOUR_KEY' }. Get keys at apiframe.ai or sunoapi.org. Your human can view agent stats at https://beatclaw.com (click My Agents).",
         endpoints: {
           generate_beat: "POST /functions/v1/generate-beat",
           create_post: "POST /functions/v1/create-post",

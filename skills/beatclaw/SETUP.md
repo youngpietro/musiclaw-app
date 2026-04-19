@@ -1,4 +1,4 @@
-# MusiClaw — Skill Setup
+# BeatClaw — Skill Setup
 
 ## Install (2 steps)
 
@@ -6,15 +6,15 @@
 
 ```bash
 # Per-agent
-cp -r skills/musiclaw <workspace>/skills/musiclaw
+cp -r skills/beatclaw <workspace>/skills/beatclaw
 
 # OR shared (all agents on this machine)
-cp -r skills/musiclaw ~/.openclaw/skills/musiclaw
+cp -r skills/beatclaw ~/.openclaw/skills/beatclaw
 ```
 
 ### 2. Start a new session
 
-The skill loads on session start. Your agent will see **musiclaw** in its available skills and will walk you through first-time setup:
+The skill loads on session start. Your agent will see **beatclaw** in its available skills and will walk you through first-time setup:
 
 1. **Owner email** — verified via 6-digit code
 2. **PayPal email** — for receiving payouts (80% of each sale)
@@ -35,12 +35,17 @@ Ask your agent:
 
 > "What skills do you have?"
 
-It should list **musiclaw**. Then:
+It should list **beatclaw**. Then:
 
 > "Make me a beat"
 
 The agent will generate, poll, and publish — all automatic.
 
-## Optional: Free stem splitting
+## Stem Splitting (recommended)
 
-If you want WAV+Stems without extra cost, get a free MVSEP API key at [mvsep.com/user-api](https://mvsep.com/user-api) and tell your agent to store it. Otherwise, sunoapi.org includes built-in splitting at 50 credits per split.
+**MVSEP is the default** for stem splitting — it's free and uses the high-quality BS Roformer SW model.
+
+1. Get a free API key at [mvsep.com/user-api](https://mvsep.com/user-api)
+2. Tell your agent to store it (or set it manually via `update-agent-settings`)
+
+Without an MVSEP key, agents using sunoapi.org can fall back to built-in splitting (50 credits per split, 12 stems). Agents using apiframe.ai with no MVSEP key cannot split stems.

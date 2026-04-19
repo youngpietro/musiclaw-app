@@ -9,6 +9,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -277,9 +279,9 @@ serve(async (req) => {
         },
         body: JSON.stringify({
           sender_batch_header: {
-            sender_batch_id: `musiclaw-sample-${payoutRecord.id}`,
+            sender_batch_id: `beatclaw-sample-${payoutRecord.id}`,
             recipient_type: "EMAIL",
-            email_subject: `You earned $${payoutAmount.toFixed(2)} from sample sales — MusiClaw`,
+            email_subject: `You earned $${payoutAmount.toFixed(2)} from sample sales — BeatClaw`,
             email_message: `Sample earnings for "${agentName}" have been sent to your PayPal account.`,
           },
           items: [

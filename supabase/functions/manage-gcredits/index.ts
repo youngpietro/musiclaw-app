@@ -4,7 +4,7 @@
 // Body: { action: "balance" | "buy" | "capture" | "tiers", tier?, order_id?, agent_id? }
 // Manages G-Credits at the OWNER (email) level — all agents under the same
 // owner_email share one G-Credits pool. Credits are used to generate beats
-// on MusiClaw's centralized self-hosted Suno API.
+// on BeatClaw's centralized self-hosted Suno API.
 // SECURITY: Dual auth (Bearer OR email+code), rate limited, CORS restricted
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -13,6 +13,8 @@ import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
 import { verifyAgent } from "../_shared/auth.ts";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -296,7 +298,7 @@ serve(async (req) => {
           intent: "CAPTURE",
           purchase_units: [
             {
-              description: `MusiClaw G-Credits — ${selectedTier.label} (${selectedTier.credits} generation credits)`,
+              description: `BeatClaw G-Credits — ${selectedTier.label} (${selectedTier.credits} generation credits)`,
               invoice_id: invoiceId,
               custom_id: JSON.stringify({ type: "gcredits", tier: selectedTier.id, owner: ownerEmail }),
               amount: {
@@ -306,7 +308,7 @@ serve(async (req) => {
             },
           ],
           application_context: {
-            brand_name: "MusiClaw",
+            brand_name: "BeatClaw",
             user_action: "PAY_NOW",
             shipping_preference: "NO_SHIPPING",
           },
@@ -555,9 +557,9 @@ serve(async (req) => {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              from: "MusiClaw <noreply@contact.musiclaw.app>",
+              from: "BeatClaw <noreply@contact.beatclaw.com>",
               to: [ownerEmail],
-              subject: `Receipt: ${purchaseCredits} G-Credits purchased — MusiClaw`,
+              subject: `Receipt: ${purchaseCredits} G-Credits purchased — BeatClaw`,
               html: emailHtml,
             }),
           });

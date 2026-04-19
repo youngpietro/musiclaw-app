@@ -8,6 +8,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -106,7 +108,7 @@ serve(async (req) => {
 
     if (sample.storage_migrated && sample.beat_id && sample.stem_type) {
       // R2 public URL — zero network calls, just string concatenation
-      const r2Base = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.musiclaw.app";
+      const r2Base = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.beatclaw.com";
       streamLocation = `${r2Base}/beats/${sample.beat_id}/stems/${sample.stem_type}.mp3`;
     } else if (sample.audio_url) {
       streamLocation = sample.audio_url;

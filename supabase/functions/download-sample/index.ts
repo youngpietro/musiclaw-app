@@ -28,6 +28,8 @@ function isAllowedAudioUrl(urlStr: string): boolean {
 }
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -168,7 +170,7 @@ serve(async (req) => {
 
     // ─── RESOLVE AUDIO URL (R2 preferred, legacy fallback) ──────────
     const { r2PublicUrl } = await import("../_shared/r2.ts");
-    const R2_PUBLIC = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.musiclaw.app";
+    const R2_PUBLIC = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.beatclaw.com";
     let audioUrl: string | null = null;
 
     if (sample.storage_migrated && sample.beat_id && sample.stem_type) {

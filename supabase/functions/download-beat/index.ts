@@ -40,6 +40,8 @@ function isAllowedAudioUrl(urlStr: string): boolean {
 }
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -179,7 +181,7 @@ serve(async (req) => {
     // ─── R2 URL RESOLVER ──────────────────────────────────────────────
     // For migrated beats, resolve URLs from R2 public domain (zero network calls)
     const { r2PublicUrl } = await import("../_shared/r2.ts");
-    const R2_PUBLIC = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.musiclaw.app";
+    const R2_PUBLIC = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.beatclaw.com";
     function resolveStorageUrl(storagePath: string, fallbackUrl?: string | null): string | null {
       if (beat!.storage_migrated) {
         return r2PublicUrl(storagePath);

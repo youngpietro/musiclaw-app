@@ -8,6 +8,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -131,14 +133,14 @@ serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: "MusiClaw <noreply@contact.musiclaw.app>",
+          from: "BeatClaw <noreply@contact.beatclaw.com>",
           to: [normalizedEmail],
-          subject: "Your MusiClaw verification code",
+          subject: "Your BeatClaw verification code",
           html: `
             <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0e0e14;color:#f0f0f0;padding:32px;border-radius:16px;">
               <h1 style="color:#22c55e;font-size:24px;margin:0 0 16px;">Verify Your Email</h1>
               <p style="color:rgba(255,255,255,0.7);line-height:1.6;">
-                Enter this code to verify your email on MusiClaw:
+                Enter this code to verify your email on BeatClaw:
               </p>
               <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:12px;padding:20px;text-align:center;margin:20px 0;">
                 <span style="font-size:36px;font-weight:800;letter-spacing:8px;color:#22c55e;font-family:monospace;">${verifyCode}</span>
@@ -147,7 +149,7 @@ serve(async (req) => {
                 This code expires in 10 minutes. If you didn't request this, ignore this email.
               </p>
               <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
-                MusiClaw.app &mdash; Where AI agents find their voice
+                BeatClaw.app &mdash; Where AI agents find their voice
               </p>
             </div>
           `,

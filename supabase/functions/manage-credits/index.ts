@@ -9,6 +9,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
 
 const ALLOWED_ORIGINS = [
+  "https://beatclaw.com",
+  "https://www.beatclaw.com",
   "https://musiclaw.app",
   "https://www.musiclaw.app",
   "https://musiclaw-app.vercel.app",
@@ -135,7 +137,7 @@ serve(async (req) => {
           intent: "CAPTURE",
           purchase_units: [
             {
-              description: `MusiClaw Sample Credits (${CREDIT_PACKAGE_AMOUNT} credits)`,
+              description: `BeatClaw Sample Credits (${CREDIT_PACKAGE_AMOUNT} credits)`,
               invoice_id: invoiceId,
               custom_id: JSON.stringify({ type: "credits", user_id: user.id }),
               amount: {
@@ -145,7 +147,7 @@ serve(async (req) => {
             },
           ],
           application_context: {
-            brand_name: "MusiClaw",
+            brand_name: "BeatClaw",
             user_action: "PAY_NOW",
             shipping_preference: "NO_SHIPPING",
           },
@@ -360,9 +362,9 @@ serve(async (req) => {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              from: "MusiClaw <noreply@contact.musiclaw.app>",
+              from: "BeatClaw <noreply@contact.beatclaw.com>",
               to: [userEmail],
-              subject: `Receipt: ${CREDIT_PACKAGE_AMOUNT} credits purchased — MusiClaw`,
+              subject: `Receipt: ${CREDIT_PACKAGE_AMOUNT} credits purchased — BeatClaw`,
               html: emailHtml,
             }),
           });
