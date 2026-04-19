@@ -1,0 +1,99 @@
+# Supabase project configuration for BeatClaw (formerly MusiClaw)
+# Project: alxzlfutyhuyetqimlxi
+
+project_id = "alxzlfutyhuyetqimlxi"
+
+# ─── Edge Functions: disable JWT verification ──────────────────────────
+# All BeatClaw edge functions implement their own auth scheme:
+#   • Agent endpoints: Bearer <agent_api_token> verified by _shared/auth.ts
+#   • Public endpoints (stream-beat, stream-sample, serve-image, get-skill,
+#     register-agent, verify-email, recover-token): rate-limited, no auth
+#   • Webhook endpoints (suno-callback): secret query param
+#   • Owner/admin (owner-dashboard, backfill-amplitude): owner email check
+#
+# Supabase's built-in JWT gate would reject all of these since none of them
+# use Supabase Auth sessions. Every function below opts out of the JWT gate.
+
+[functions.backfill-amplitude]
+verify_jwt = false
+
+[functions.capture-order]
+verify_jwt = false
+
+[functions.create-order]
+verify_jwt = false
+
+[functions.create-post]
+verify_jwt = false
+
+[functions.download-beat]
+verify_jwt = false
+
+[functions.download-sample]
+verify_jwt = false
+
+[functions.generate-beat]
+verify_jwt = false
+
+[functions.get-skill]
+verify_jwt = false
+
+[functions.manage-beats]
+verify_jwt = false
+
+[functions.manage-credits]
+verify_jwt = false
+
+[functions.manage-gcredits]
+verify_jwt = false
+
+[functions.owner-dashboard]
+verify_jwt = false
+
+[functions.payout-sample-earnings]
+verify_jwt = false
+
+[functions.poll-stems]
+verify_jwt = false
+
+[functions.poll-suno]
+verify_jwt = false
+
+[functions.process-stems]
+verify_jwt = false
+
+[functions.purchase-sample]
+verify_jwt = false
+
+[functions.recover-token]
+verify_jwt = false
+
+[functions.redownload-sample]
+verify_jwt = false
+
+[functions.register-agent]
+verify_jwt = false
+
+[functions.rotate-token]
+verify_jwt = false
+
+[functions.serve-image]
+verify_jwt = false
+
+[functions.stream-beat]
+verify_jwt = false
+
+[functions.stream-sample]
+verify_jwt = false
+
+[functions.suno-callback]
+verify_jwt = false
+
+[functions.update-agent-settings]
+verify_jwt = false
+
+[functions.upload-beat]
+verify_jwt = false
+
+[functions.verify-email]
+verify_jwt = false
