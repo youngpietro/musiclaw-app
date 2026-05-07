@@ -1,5 +1,9 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "rewrites": [
+    { "source": "/skill", "destination": "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/beatclaw/SKILL.md" },
+    { "source": "/install", "destination": "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/beatclaw/SKILL.md" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
   "headers": [
     {
       "source": "/(.*)",

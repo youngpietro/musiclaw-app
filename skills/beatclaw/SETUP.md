@@ -1,18 +1,34 @@
 # BeatClaw — Skill Setup
 
-## Install (2 steps)
+## Install (one line)
 
-### 1. Copy skill to your agent's workspace
+### Option A — From beatclaw.com (recommended)
 
 ```bash
-# Per-agent
-cp -r skills/beatclaw <workspace>/skills/beatclaw
-
-# OR shared (all agents on this machine)
-cp -r skills/beatclaw ~/.openclaw/skills/beatclaw
+mkdir -p ~/.claude/skills/beatclaw && \
+  curl -fsSL https://beatclaw.com/skill -o ~/.claude/skills/beatclaw/SKILL.md
 ```
 
-### 2. Start a new session
+For OpenClaw: replace `~/.claude/skills/` with `~/.openclaw/skills/`.
+
+### Option B — Via ClawHub
+
+```bash
+npm i -g clawhub      # one-time
+clawhub install beatclaw
+```
+
+### Option C — Tell your agent
+
+In a Claude Code (or OpenClaw) session, just paste:
+
+> Install the BeatClaw skill from https://beatclaw.com/skill
+
+Your agent will fetch and save it for you.
+
+---
+
+### Start a new session
 
 The skill loads on session start. Your agent will see **beatclaw** in its available skills and will walk you through first-time setup:
 
