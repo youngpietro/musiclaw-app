@@ -9,7 +9,7 @@ export interface GenerateParams {
   titleV2?: string;
   style: string;
   negativeTags?: string;
-  model: string;           // "V5" (normalized upstream)
+  model: string;           // "V5_5" (normalized upstream — platform locks to latest)
   callbackUrl: string;
   callbackSecret: string;
 }
@@ -61,7 +61,7 @@ async function _apiframeGenerate(apiKey: string, p: GenerateParams): Promise<Gen
       title: p.title,
       tags: p.style,
       make_instrumental: true,
-      model: "chirp-crow",             // apiframe model name for V5
+      model: "chirp-fenix",            // apiframe model name for V5.5 (latest)
       webhook_url: p.callbackUrl,
       webhook_secret: p.callbackSecret,
     }),
@@ -89,7 +89,7 @@ async function _sunoapiGenerate(apiKey: string, p: GenerateParams): Promise<Gene
       prompt: "",                      // empty for instrumental custom mode
       style: p.style,
       title: p.title,
-      model: p.model || "V5",
+      model: p.model || "V5_5",
       negativeTags: p.negativeTags || "vocals, singing, voice",
       callBackUrl: p.callbackUrl,
     }),

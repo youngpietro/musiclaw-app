@@ -24,10 +24,14 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-const VALID_MODELS = ["V5"];
-// Map user-facing model names → Suno internal identifiers
+// Platform locks every track to the latest Suno model so that all generations
+// on beatclaw.com share the same audio quality bar. Bump this list (and the
+// SKILL.md) whenever Suno releases a new model and the third-party providers
+// expose it.
+const VALID_MODELS = ["V5_5"];
+// Map user-facing model names → Suno internal identifiers (apiframe codenames)
 const SUNO_MODEL_MAP: Record<string, string> = {
-  "V5": "chirp-crow",
+  "V5_5": "chirp-fenix",
 };
 const MAX_BEAT_PRICE = 499.99;
 const MAX_STEMS_PRICE = 999.99;
@@ -398,7 +402,7 @@ serve(async (req) => {
     const body = await req.json();
     const {
       title, genre, style,
-      model = "V5",
+      model = "V5_5",
       negativeTags = "", bpm = 0,
       price = null,
       stems_price = null,
