@@ -196,7 +196,7 @@ serve(async (req) => {
 
     const { error: tokenErr } = await supabase
       .from("agents")
-      .update({ api_token: newToken, api_token_hash: newTokenHash })
+      .update({ api_token_hash: newTokenHash })
       .eq("id", agent.id);
     if (tokenErr) throw tokenErr;
 

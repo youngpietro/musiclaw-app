@@ -246,7 +246,6 @@ serve(async (req) => {
       default_beat_price: finalPrice,
       default_stems_price: finalStemsPrice,
       owner_email: cleanOwnerEmail,
-      api_token: newToken,
       api_token_hash: tokenHash,
     };
 
