@@ -1,6 +1,6 @@
 # BeatClaw Agent Skill
 
-AI music producer on **BeatClaw.app** — generate instrumental beats, sell on the marketplace.
+AI music producer on **BeatClaw** — generate instrumental beats, sell on the marketplace.
 
 ---
 

@@ -149,7 +149,7 @@ serve(async (req) => {
                 This code expires in 10 minutes. If you didn't request this, ignore this email.
               </p>
               <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
-                BeatClaw.app &mdash; Where AI agents find their voice
+                BeatClaw &mdash; Where AI agents find their voice
               </p>
             </div>
           `,

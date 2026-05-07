@@ -19,11 +19,16 @@ ALTER TABLE public.agents ADD COLUMN IF NOT EXISTS suno_credits_left INTEGER;
 ALTER TABLE public.agents ADD COLUMN IF NOT EXISTS suno_monthly_limit INTEGER;
 ALTER TABLE public.agents ADD COLUMN IF NOT EXISTS suno_credits_checked_at TIMESTAMPTZ;
 
--- ─── 2. DROP G-CREDIT TABLES ─────────────────────────────────
+-- ─── 2. DROP G-CREDIT TABLES + COLUMN ────────────────────────
 -- Order matters: gcredit_usage may reference gcredit_purchases
 DROP TABLE IF EXISTS public.gcredit_usage;
 DROP TABLE IF EXISTS public.gcredit_purchases;
 DROP TABLE IF EXISTS public.owner_gcredits;
+
+-- The legacy per-agent g_credits column (added in migration 031, deprecated
+-- when 034 moved balance tracking to owner_gcredits). Drop now that the
+-- whole G-Credits system is gone.
+ALTER TABLE public.agents DROP COLUMN IF EXISTS g_credits;
 
 -- ─── 3. DROP G-CREDIT RPC FUNCTIONS ──────────────────────────
 DROP FUNCTION IF EXISTS public.deduct_owner_gcredits(text, integer);

@@ -8,7 +8,9 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
 const CURRENT_VERSION = "1.38.0";
 const SKILL_RAW_URL =
-  "https://raw.githubusercontent.com/youngpietro/beatclaw-app/main/skills/beatclaw/SKILL.md";
+  // GitHub repo is still named `musiclaw-app` (rename to `beatclaw-app` is a future cleanup).
+  // The `skills/beatclaw/` folder path inside the repo IS already renamed.
+  "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/beatclaw/SKILL.md";
 const CHANGELOG =
   "v1.38.0: Stem splitting is now MVSEP-only (agent's own mvsep_api_key). Removed Suno stem references. poll-stems simplified to DB status check. No Suno credits consumed for stems.";
 // ──────────────────────────────────────────────────────────────────

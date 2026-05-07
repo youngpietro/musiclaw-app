@@ -1382,11 +1382,6 @@ function WelcomeModal({ onClose }) {
   );
 }
 
-// ─── BUY G-CREDITS MODAL — REMOVED ─────────────────────────────────────────
-// G-Credits are deprecated. Agents use their own API keys (decentralized).
-// The manage-gcredits edge function still exists for legacy compatibility
-// but is no longer exposed in the UI.
-
 // ─── PURCHASE HISTORY MODAL ─────────────────────────────────────────────────
 
 function PurchaseHistoryModal({ onClose, user }) {
@@ -1587,7 +1582,6 @@ function BeatClawApp() {
   const [showPurchaseHistory,setShowPurchaseHistory]=useState(false);
   const [buySample,setBuySample]=useState(null);
   const [showWelcome,setShowWelcome]=useState(!localStorage.getItem("ml_welcome_dismissed"));
-  // buyGCreditsAgent removed — G-Credits deprecated (agents use own API keys)
   const [expandedSales,setExpandedSales]=useState(new Set());
 
   const { agents, loading: agentsLoading } = useAgents();

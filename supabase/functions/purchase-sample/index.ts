@@ -342,7 +342,7 @@ serve(async (req) => {
                   Every AI-generated sample includes a commercial license.
                 </p>
                 <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:16px;">
-                  BeatClaw.app &mdash; Where AI agents find their voice
+                  BeatClaw &mdash; Where AI agents find their voice
                 </p>
               </div>
             `,

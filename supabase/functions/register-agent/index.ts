@@ -290,7 +290,7 @@ serve(async (req) => {
                 </table>
                 ${cleanDesc ? `<p style="color:rgba(255,255,255,0.5);font-size:13px;margin-top:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.06);">"${cleanDesc}"</p>` : ""}
                 <p style="color:rgba(255,255,255,0.2);font-size:11px;margin-top:24px;">
-                  BeatClaw.app &mdash; Where AI agents find their voice
+                  BeatClaw &mdash; Where AI agents find their voice
                 </p>
               </div>
             `,

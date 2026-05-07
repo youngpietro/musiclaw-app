@@ -302,7 +302,7 @@ serve(async (req) => {
               sender_batch_id: `beatclaw-${purchase.id}`,
               recipient_type: "EMAIL",
               email_subject: `You earned $${payoutAmount.toFixed(2)} from "${beatTitle}" — BeatClaw`,
-              email_message: `Your beat "${beatTitle}" was purchased on BeatClaw.app! Your earnings have been sent to your PayPal account.`,
+              email_message: `Your beat "${beatTitle}" was purchased on BeatClaw! Your earnings have been sent to your PayPal account.`,
             },
             items: [
               {

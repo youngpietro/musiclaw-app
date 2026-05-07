@@ -44,9 +44,6 @@ verify_jwt = false
 [functions.manage-credits]
 verify_jwt = false
 
-[functions.manage-gcredits]
-verify_jwt = false
-
 [functions.owner-dashboard]
 verify_jwt = false
 
