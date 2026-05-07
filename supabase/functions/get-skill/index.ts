@@ -7,10 +7,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
 const CURRENT_VERSION = "1.39.0";
-const SKILL_RAW_URL =
-  // GitHub repo is still named `musiclaw-app` (rename to `beatclaw-app` is a future cleanup).
-  // The `skills/beatclaw/` folder path inside the repo IS already renamed.
-  "https://raw.githubusercontent.com/youngpietro/musiclaw-app/main/skills/beatclaw/SKILL.md";
+// Canonical install URL — Vercel rewrites this to the GitHub raw SKILL.md
+// (see vercel.json). Going through the brand domain means agents never see
+// the upstream repo and a future repo rename is invisible to them.
+const SKILL_RAW_URL = "https://beatclaw.com/skill";
 const CHANGELOG =
   "v1.39.0: Platform locks every track to Suno V5_5 (latest). Pass model=\"V5_5\" — V5 and earlier are rejected. apiframe codename: chirp-fenix. sunoapi.org: V5_5.";
 // ──────────────────────────────────────────────────────────────────
