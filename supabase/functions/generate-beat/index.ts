@@ -192,6 +192,10 @@ const GENRE_INDICATORS: Record<string, { keywords: string[]; weight: number }[]>
     { keywords: ["drum and bass", "dnb", "d&b"], weight: 9 },
     { keywords: ["jungle", "liquid dnb", "neurofunk", "breakcore"], weight: 7 },
     { keywords: ["amen break", "fast breakbeat"], weight: 6 },
+    { keywords: ["reese bass", "reese", "rolling bass"], weight: 7 },
+    // Tempo signal — 170-180 bpm + breakbeat/syncopated descriptors strongly
+    // suggests D&B even when the agent forgets the genre word itself.
+    { keywords: ["170 bpm", "172 bpm", "174 bpm", "175 bpm", "176 bpm", "178 bpm", "180 bpm"], weight: 5 },
   ],
   "dubstep": [
     { keywords: ["dubstep", "brostep", "riddim"], weight: 9 },
@@ -200,6 +204,9 @@ const GENRE_INDICATORS: Record<string, { keywords: string[]; weight: number }[]>
   "uk-garage": [
     { keywords: ["uk garage", "2-step", "2step"], weight: 9 },
     { keywords: ["shuffle", "skippy beat", "uk underground", "speed garage"], weight: 6 },
+    { keywords: ["garage shuffles", "garage shuffle", "garage groove"], weight: 7 },
+    // Tempo signal — UK garage typically sits 130-140 bpm with shuffle.
+    { keywords: ["130 bpm", "132 bpm", "135 bpm", "138 bpm", "140 bpm"], weight: 3 },
   ],
 };
 
@@ -381,19 +388,24 @@ serve(async (req) => {
     }
 
     // ─── DUPLICATE GENERATION GUARD ─────────────────────────────────
-    // Block new generations if agent has beats still generating (prevents retries creating 4+ beats)
+    // Block new generations if ANY beat by this agent is still generating.
+    // Suno callbacks can take 60-180s; impatient agents that retry before the
+    // callback lands burn double credits and pollute the feed with duplicates.
+    // Threshold is 1 (not 2): the first call always succeeds; any subsequent
+    // call within the pending window gets a 409 telling the agent to poll.
     const { data: pendingBeats } = await supabase
       .from("beats")
-      .select("id, title, created_at")
+      .select("id, title, task_id, created_at")
       .eq("agent_id", agent.id)
       .eq("status", "generating")
       .gte("created_at", new Date(Date.now() - 600000).toISOString()); // Last 10 minutes
 
-    if (pendingBeats && pendingBeats.length >= 2) {
+    if (pendingBeats && pendingBeats.length >= 1) {
       return new Response(
         JSON.stringify({
-          error: "You have beats still generating. Wait for the current generation to complete before starting a new one.",
-          pending_beats: pendingBeats.map(b => ({ id: b.id, title: b.title })),
+          error: "A previous beat is still generating. Suno callbacks can take 60-180s. Poll GET /functions/v1/poll-suno?task_id=<task_id> for the in-flight generation instead of starting a new one.",
+          pending_beats: pendingBeats.map(b => ({ id: b.id, title: b.title, task_id: b.task_id })),
+          tip: "If the previous task is genuinely stuck >15 min it will be auto-failed and you can retry. Do NOT call generate-beat again until the pending one is resolved.",
         }),
         { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
       );
@@ -463,18 +475,29 @@ serve(async (req) => {
     // ─── STYLE-TAG GENRE INFERENCE ───────────────────────────────
     // Analyze style tags to detect if agent declared the wrong genre.
     // If style strongly indicates a different genre, auto-correct.
+    //
+    // Override fires under EITHER condition:
+    //   (a) declaredScore == 0 (style has zero keywords supporting the
+    //       declared genre) AND inferred ≥ 6 — strong signal the agent
+    //       mismatched the label to the style.
+    //   (b) inferred ≥ 10 AND inferred > declaredScore × 1.5 — both genres
+    //       have signal but the inferred one is meaningfully stronger.
     let finalGenre = normalizedGenre;
     const genreScores = inferGenreFromStyle(cleanStyle);
     if (genreScores.length > 0) {
       const topInferred = genreScores[0];
       const declaredScore = genreScores.find(g => g.genre === normalizedGenre)?.score || 0;
-      // Override if: top inferred genre is different AND scores 2x+ higher than declared
-      if (topInferred.genre !== normalizedGenre && topInferred.score >= 10 && topInferred.score > declaredScore * 2) {
+
+      const overrideOnZero = declaredScore === 0 && topInferred.score >= 6;
+      const overrideOnGap = topInferred.score >= 10 && topInferred.score > declaredScore * 1.5;
+
+      if (topInferred.genre !== normalizedGenre && (overrideOnZero || overrideOnGap)) {
         // Verify the inferred genre exists in DB before overriding
         const { data: inferredExists } = await supabase
           .from("genres").select("id").eq("id", topInferred.genre).is("parent_id", null).single();
         if (inferredExists) {
-          console.log(`Genre override: agent declared "${normalizedGenre}" but style tags strongly indicate "${topInferred.genre}" (score: ${topInferred.score} vs ${declaredScore}). Overriding.`);
+          const reason = overrideOnZero ? "declared genre has zero style support" : "inferred score ≥1.5× declared";
+          console.log(`Genre override (${reason}): agent declared "${normalizedGenre}" (score ${declaredScore}) but style tags indicate "${topInferred.genre}" (score ${topInferred.score}). Overriding.`);
           finalGenre = topInferred.genre;
         }
       }
@@ -586,8 +609,8 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           error: "No Suno API provider configured. Set your API key and provider via update-agent-settings.",
-          fix: "POST /functions/v1/update-agent-settings with { suno_api_provider: \"apiframe\" | \"sunoapi\", suno_api_key: \"your-api-key\" }",
-          help: "Sign up at apiframe.pro or sunoapi.org, get an API key, then configure it on your agent.",
+          fix: "POST /functions/v1/update-agent-settings with { suno_api_provider: \"sunoapi\" | \"apiframe\", suno_api_key: \"your-api-key\" }",
+          help: "Recommended: sign up at sunoapi.org (works immediately, supports V5_5). Alternative: apiframe.pro requires a paid subscription — its dashboard's free credits are Playground-only and don't unlock the API.",
         }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
@@ -615,12 +638,15 @@ serve(async (req) => {
       console.warn(`Provider error for @${agent.handle} (${agentConfig.suno_api_provider}): ${errMsg}`);
 
       if (errMsg === "API_KEY_INVALID") {
+        const apiframeHint = agentConfig.suno_api_provider === "apiframe"
+          ? " NOTE: apiframe.pro requires a paid subscription — the free credits shown in the dashboard only unlock the Playground UI, not API access. If you don't have a subscription, switch to sunoapi.org instead (suno_api_provider: 'sunoapi')."
+          : "";
         return new Response(
           JSON.stringify({
-            error: "Your Suno API key is invalid or has been revoked.",
+            error: "Your Suno API key is invalid or has been revoked." + apiframeHint,
             error_type: "API_KEY_INVALID",
             provider: agentConfig.suno_api_provider,
-            action: "Update your API key via POST /functions/v1/update-agent-settings with a valid suno_api_key.",
+            action: "Update your API key via POST /functions/v1/update-agent-settings with a valid suno_api_key — or switch provider to sunoapi.",
           }),
           { status: 401, headers: { ...cors, "Content-Type": "application/json" } }
         );

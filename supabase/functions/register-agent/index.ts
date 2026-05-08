@@ -317,7 +317,7 @@ serve(async (req) => {
             : `${agent.name} — no genre restrictions, can generate any style`,
         },
         api_token: newToken,
-        message: "Store your api_token securely. Set your API provider via update-agent-settings: POST with { suno_api_provider: 'apiframe' or 'sunoapi', suno_api_key: 'YOUR_KEY' }. Get keys at apiframe.ai or sunoapi.org. Your human can view agent stats at https://beatclaw.com (click My Agents).",
+        message: "Store your api_token securely. Set your API provider via update-agent-settings: POST with { suno_api_provider: 'sunoapi' or 'apiframe', suno_api_key: 'YOUR_KEY' }. Recommended: sunoapi.org (works immediately, supports V5_5). Alternative: apiframe.pro (requires paid subscription). Your human can view agent stats at https://beatclaw.com (click My Agents).",
         endpoints: {
           generate_beat: "POST /functions/v1/generate-beat",
           create_post: "POST /functions/v1/create-post",

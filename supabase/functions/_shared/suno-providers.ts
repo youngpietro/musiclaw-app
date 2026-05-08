@@ -53,19 +53,49 @@ export async function generateBeat(
 }
 
 async function _apiframeGenerate(apiKey: string, p: GenerateParams): Promise<GenerateResult> {
-  const res = await fetch("https://api.apiframe.pro/suno-imagine", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: apiKey },
-    body: JSON.stringify({
-      prompt: "",                      // empty = instrumental, style-only
-      title: p.title,
-      tags: p.style,
-      make_instrumental: true,
-      model: "chirp-fenix",            // apiframe model name for V5.5 (latest)
-      webhook_url: p.callbackUrl,
-      webhook_secret: p.callbackSecret,
-    }),
-  });
+  // apiframe.pro state of play:
+  //   • Officially documented `/suno-imagine` model values: V4, V4_5,
+  //     V4_5PLUS, V4_5ALL, V5 (legacy aliases: chirp-v4, chirp-auk,
+  //     chirp-bluejay, chirp-crow). V5_5 is NOT in the docs as of 2026-05.
+  //   • Their Playground UI nonetheless exposes a "V5.5" Model Version
+  //     selector — meaning V5.5 likely works under an undocumented value.
+  //
+  // Strategy: try the canonical "V5_5" first (matches their `V4_5` /
+  // `V4_5PLUS` naming pattern + matches sunoapi.org). If apiframe rejects
+  // it as an invalid model (400 with "model"/"invalid" in the body), fall
+  // back transparently to "V5" — the highest documented value. Agents
+  // never see the difference.
+  const callApiframe = async (model: string): Promise<Response> =>
+    fetch("https://api.apiframe.pro/suno-imagine", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: apiKey },
+      body: JSON.stringify({
+        // No `prompt` field when going instrumental — `make_instrumental: true`
+        // is apiframe's only documented lever for "no lyrics". Sending an
+        // empty prompt alongside it can trigger partial-vocal output.
+        title: p.title,
+        tags: p.style,
+        make_instrumental: true,
+        model,
+        webhook_url: p.callbackUrl,
+        webhook_secret: p.callbackSecret,
+      }),
+    });
+
+  const requestedModel = p.model || "V5_5";
+  let res = await callApiframe(requestedModel);
+
+  // Fallback: if requested model triggered a 400 that mentions "model" or
+  // "invalid", retry once with V5 (apiframe's documented latest).
+  if (!res.ok && res.status === 400 && requestedModel !== "V5") {
+    const errBody = await res.text();
+    if (/model|invalid|unsupported|unknown/i.test(errBody)) {
+      console.log(`apiframe rejected model="${requestedModel}" (${errBody.slice(0, 120)}); falling back to V5`);
+      res = await callApiframe("V5");
+    } else {
+      throw new Error(`apiframe error 400: ${errBody.slice(0, 200)}`);
+    }
+  }
 
   if (!res.ok) {
     const body = await res.text();
@@ -80,6 +110,14 @@ async function _apiframeGenerate(apiKey: string, p: GenerateParams): Promise<Gen
 }
 
 async function _sunoapiGenerate(apiKey: string, p: GenerateParams): Promise<GenerateResult> {
+  // ALWAYS append our hard-locked anti-vocal block to whatever the agent
+  // passes. This prevents the "half-instrumental, half-vocal" output we saw
+  // on V5.5 when the agent passed weak or empty negativeTags.
+  const VOCAL_BLOCK = "vocals, singing, voice, lyrics, words, choir, rapper, mc, vocal chops, vocal stabs, spoken word, acapella";
+  const finalNeg = p.negativeTags && p.negativeTags.trim()
+    ? `${p.negativeTags.trim()}, ${VOCAL_BLOCK}`
+    : VOCAL_BLOCK;
+
   const res = await fetch("https://api.sunoapi.org/api/v1/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -90,7 +128,7 @@ async function _sunoapiGenerate(apiKey: string, p: GenerateParams): Promise<Gene
       style: p.style,
       title: p.title,
       model: p.model || "V5_5",
-      negativeTags: p.negativeTags || "vocals, singing, voice",
+      negativeTags: finalNeg,
       callBackUrl: p.callbackUrl,
     }),
   });

@@ -6,13 +6,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.39.0";
+const CURRENT_VERSION = "1.40.0";
 // Canonical install URL — Vercel rewrites this to the GitHub raw SKILL.md
 // (see vercel.json). Going through the brand domain means agents never see
 // the upstream repo and a future repo rename is invisible to them.
 const SKILL_RAW_URL = "https://beatclaw.com/skill";
 const CHANGELOG =
-  "v1.39.0: Platform locks every track to Suno V5_5 (latest). Pass model=\"V5_5\" — V5 and earlier are rejected. apiframe codename: chirp-fenix. sunoapi.org: V5_5.";
+  "v1.40.0: Default provider is now sunoapi.org (works immediately, supports V5_5). apiframe.pro still supported as alternative but requires paid subscription — its dashboard credits are Playground-only and don't unlock the API. model=\"V5_5\" served directly on sunoapi; apiframe tries V5_5 first then falls back to V5 transparently. Hard anti-vocal block always appended to negativeTags (fixes half-instrumental output). Duplicate-gen guard tightened: 409 if ANY beat is still generating — poll-suno instead of retrying.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
