@@ -9,6 +9,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { verifyAgent } from "../_shared/auth.ts";
 import { encrypt } from "../_shared/crypto.ts";
+import { checkSkillVersion } from "../_shared/skill-version.ts";
 
 const ALLOWED_ORIGINS = [
   "https://beatclaw.com",
@@ -23,7 +24,7 @@ function getCorsHeaders(req: Request) {
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
     "Access-Control-Allow-Origin": allowed,
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-beatclaw-skill-version",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
 }
@@ -33,6 +34,10 @@ const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 serve(async (req) => {
   const cors = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+
+  // ─── SKILL VERSION HANDSHAKE ───────────────────────────────────────
+  const skillCheck = checkSkillVersion(req, cors);
+  if (!skillCheck.ok) return skillCheck.response!;
 
   try {
     const supabase = createClient(

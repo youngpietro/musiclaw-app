@@ -2,17 +2,25 @@
 // GET /functions/v1/get-skill
 // Returns current BeatClaw skill version + raw URL for bot self-update
 // Public endpoint — no auth required (skill content is already public)
+//
+// NOTE: this endpoint is intentionally NOT gated by checkSkillVersion —
+// it's the chicken-and-egg path agents use to discover that they need
+// to upgrade.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import {
+  LATEST_SKILL_VERSION,
+  MIN_SKILL_VERSION,
+  SKILL_INSTALL_URL,
+} from "../_shared/skill-version.ts";
 
-// ─── UPDATE THESE WHEN PUBLISHING A NEW SKILL VERSION ────────────
-const CURRENT_VERSION = "1.40.0";
-// Canonical install URL — Vercel rewrites this to the GitHub raw SKILL.md
-// (see vercel.json). Going through the brand domain means agents never see
-// the upstream repo and a future repo rename is invisible to them.
-const SKILL_RAW_URL = "https://beatclaw.com/skill";
+// ─── UPDATE THE CONSTANTS IN _shared/skill-version.ts WHEN PUBLISHING ────
+const CURRENT_VERSION = LATEST_SKILL_VERSION;
+const SKILL_RAW_URL = SKILL_INSTALL_URL;
 const CHANGELOG =
-  "v1.40.0: Default provider is now sunoapi.org (works immediately, supports V5_5). apiframe.pro still supported as alternative but requires paid subscription — its dashboard credits are Playground-only and don't unlock the API. model=\"V5_5\" served directly on sunoapi; apiframe tries V5_5 first then falls back to V5 transparently. Hard anti-vocal block always appended to negativeTags (fixes half-instrumental output). Duplicate-gen guard tightened: 409 if ANY beat is still generating — poll-suno instead of retrying.";
+  "v1.41.0: Skill version handshake — every authenticated request now must include the X-BeatClaw-Skill-Version: <semver> header. Requests with a missing or outdated version (below " +
+  MIN_SKILL_VERSION +
+  ") get HTTP 426 Upgrade Required and a payload that tells the agent how to self-update. This keeps every live agent in lockstep with the latest SKILL.md so future breaking changes can ship safely.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
@@ -29,7 +37,7 @@ function getCorsHeaders(req: Request) {
   return {
     "Access-Control-Allow-Origin": allowed,
     "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type",
+      "authorization, x-client-info, apikey, content-type, x-beatclaw-skill-version",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
   };
 }
@@ -48,10 +56,14 @@ serve(async (req) => {
   return new Response(
     JSON.stringify({
       version: CURRENT_VERSION,
+      latest_skill_version: LATEST_SKILL_VERSION,
+      min_skill_version: MIN_SKILL_VERSION,
       skill_url: SKILL_RAW_URL,
       changelog: CHANGELOG,
       update_instructions:
-        "If your installed version is older, fetch the skill_url with curl and save it to your skills directory. Then tell your human to restart the session.",
+        "If your installed version is older than min_skill_version, the platform will reject your authenticated requests with HTTP 426. To upgrade: curl -fsSL " +
+        SKILL_RAW_URL +
+        " > <your-skills-dir>/beatclaw/SKILL.md, then ask your human to restart the session (Claude only loads SKILL.md at session start).",
     }),
     {
       status: 200,
