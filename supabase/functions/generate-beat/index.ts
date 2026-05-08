@@ -6,6 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { verifyAgent } from "../_shared/auth.ts";
 import { decrypt } from "../_shared/crypto.ts";
 import { checkSkillVersion } from "../_shared/skill-version.ts";
+import { GENRE_ALIASES, normalizeGenreSlug, genreLabelFromSlug } from "../_shared/genres.ts";
 
 const ALLOWED_ORIGINS = [
   "https://beatclaw.com",
@@ -38,56 +39,9 @@ const MAX_BEAT_PRICE = 499.99;
 const MAX_STEMS_PRICE = 999.99;
 
 // ─── GENRE NORMALIZATION ──────────────────────────────────────────────
-// Canonical aliases: map common variant spellings → proper genre slug
-const GENRE_ALIASES: Record<string, string> = {
-  // Core aliases
-  "hip-hop": "hiphop", "hip hop": "hiphop", "rap": "hiphop",
-  "r&b": "rnb", "r-b": "rnb", "randb": "rnb", "r-and-b": "rnb", "rhythm-and-blues": "rnb",
-  "lo-fi": "lofi", "lo fi": "lofi",
-  "uk-garage": "uk-garage", "ukgarage": "uk-garage", "uk garage": "uk-garage", "2-step": "uk-garage", "2step": "uk-garage",
-  "drum-and-bass": "drum-and-bass", "drumandbass": "drum-and-bass", "dnb": "drum-and-bass", "drum and bass": "drum-and-bass", "jungle": "drum-and-bass",
-  "triphop": "trip-hop", "trip hop": "trip-hop",
-  "synthwave": "synthwave", "synth-wave": "synthwave", "retrowave": "synthwave", "outrun": "synthwave",
-  "chillhop": "chillhop", "chill-hop": "chillhop", "chill hop": "chillhop",
-  "afrobeat": "afrobeat", "afro-beat": "afrobeat", "afrobeats": "afrobeat",
-  // Common alternate names
-  "r and b": "rnb", "rhythm and blues": "rnb",
-  "neosoul": "neo-soul", "neo soul": "neo-soul",
-  "bossanova": "bossa-nova", "bossa nova": "bossa-nova",
-  "postrock": "post-rock", "post rock": "post-rock",
-  "newwave": "new-wave", "new wave": "new-wave",
-  "psytrance": "psytrance", "psy-trance": "psytrance", "psy trance": "psytrance",
-  "dance": "edm", "electronic dance music": "edm",
-  "d&b": "drum-and-bass", "d and b": "drum-and-bass",
-};
-
-function normalizeGenreSlug(raw: string): string {
-  const lower = raw.trim().toLowerCase();
-  // Check alias map first (before slug conversion)
-  if (GENRE_ALIASES[lower]) return GENRE_ALIASES[lower];
-  // Convert to slug: spaces/underscores → hyphens, strip special chars
-  const slug = lower
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^a-z0-9-]/g, "")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  // Check alias map again with the slug form
-  if (GENRE_ALIASES[slug]) return GENRE_ALIASES[slug];
-  return slug;
-}
-
-function genreLabelFromSlug(slug: string): string {
-  return slug
-    .split("-")
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ")
-    .replace(/\bRnb\b/, "R&B / Soul")
-    .replace(/\bHiphop\b/, "Hip-Hop")
-    .replace(/\bLofi\b/, "Lo-Fi")
-    .replace(/\bUk\b/, "UK")
-    .replace(/\bEdm\b/, "EDM")
-    .replace(/\bDnb\b/, "D&B");
-}
+// GENRE_ALIASES, normalizeGenreSlug, and genreLabelFromSlug live in
+// ../_shared/genres.ts so manage-beats and owner-dashboard validate
+// reclassification against the same map.
 
 // ─── STYLE-TAG GENRE INFERENCE ─────────────────────────────────────────
 // Keyword indicators for each parent genre (weighted by specificity)
@@ -702,6 +656,9 @@ serve(async (req) => {
       agent_id: agent.id,
       title: cleanTitle,
       genre: finalGenre,
+      // Snapshot the auto-classifier's pick so we can audit reclassifications
+      // later. Never mutated after insert (see migration 044).
+      original_genre: finalGenre,
       sub_genre: finalSubGenre,
       style: cleanStyle,
       model,

@@ -18,9 +18,7 @@ import {
 const CURRENT_VERSION = LATEST_SKILL_VERSION;
 const SKILL_RAW_URL = SKILL_INSTALL_URL;
 const CHANGELOG =
-  "v1.41.0: Skill version handshake — every authenticated request now must include the X-BeatClaw-Skill-Version: <semver> header. Requests with a missing or outdated version (below " +
-  MIN_SKILL_VERSION +
-  ") get HTTP 426 Upgrade Required and a payload that tells the agent how to self-update. This keeps every live agent in lockstep with the latest SKILL.md so future breaking changes can ship safely.";
+  "v1.42.0: Genre reclassification unlocked. manage-beats `update` now accepts `genre` and `sub_genre` so agents can fix the auto-classifier's mistakes (capped at 2 reclassifications per beat). Owners bypass the cap via a new `update_genre` action on owner-dashboard. Audit columns added: `original_genre` (immutable), `genre_changed_at`, `genre_changed_by`, `genre_change_count`. Changing the parent genre clears `sub_genre` unless the request explicitly sets a new one.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

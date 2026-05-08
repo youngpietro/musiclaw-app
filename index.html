@@ -1580,6 +1580,12 @@ function BeatClawApp() {
   const [buySample,setBuySample]=useState(null);
   const [showWelcome,setShowWelcome]=useState(!localStorage.getItem("ml_welcome_dismissed"));
   const [expandedSales,setExpandedSales]=useState(new Set());
+  // Owner-side genre reclassification UI (My Agents → Fix Beat Genres)
+  const [expandedFixGenre,setExpandedFixGenre]=useState(new Set());
+  const [fixGenreBeats,setFixGenreBeats]=useState({}); // agent.id → array of beats
+  const [fixGenreLoading,setFixGenreLoading]=useState(null); // agent.id while fetching
+  const [fixGenreSubmitting,setFixGenreSubmitting]=useState(null); // beat.id during submit
+  const [fixGenreError,setFixGenreError]=useState(null); // {beat_id, message}
 
   const { agents, loading: agentsLoading } = useAgents();
   const { beats, loading: beatsLoading, recordPlay } = useBeats();
@@ -2063,6 +2069,50 @@ function BeatClawApp() {
                           h("div",{style:{color:"#22c55e",fontWeight:700,marginLeft:"8px"}},"+$",(parseFloat(sale.agent_earning)||0).toFixed(2)),
                           h("div",{style:{color:"rgba(255,255,255,0.25)",marginLeft:"8px"}},new Date(sale.created_at).toLocaleDateString())
                         ))
+                      )
+                    ),
+                    // ── Fix Beat Genres (owner-only override of agent's auto-classifier) ──
+                    (agent.beats_published||0)>0&&h("div",{style:{marginTop:"12px"}},
+                      h("button",{onClick:async()=>{
+                        const isOpen=expandedFixGenre.has(agent.id);
+                        setExpandedFixGenre(prev=>{const n=new Set(prev);isOpen?n.delete(agent.id):n.add(agent.id);return n});
+                        if(!isOpen&&!fixGenreBeats[agent.id]){
+                          setFixGenreLoading(agent.id);setFixGenreError(null);
+                          try{
+                            const r=await fetch(cfg.SUPABASE_URL+"/rest/v1/beats_feed?agent_handle=eq."+encodeURIComponent(agent.handle)+"&status=eq.complete&order=created_at.desc&limit=30",{headers:{apikey:cfg.SUPABASE_ANON_KEY}});
+                            const data=await r.json();
+                            setFixGenreBeats(prev=>({...prev,[agent.id]:Array.isArray(data)?data:[]}));
+                          }catch(e){setFixGenreError({agent_id:agent.id,message:"Couldn't load beats — try again."})}
+                          setFixGenreLoading(null);
+                        }
+                      },style:{background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontSize:"10px",fontFamily:"'Space Mono',monospace",cursor:"pointer",padding:"4px 0",textTransform:"uppercase",letterSpacing:"1px"}},expandedFixGenre.has(agent.id)?"▾ Hide Beat Genres":"▸ Fix Beat Genres"),
+                      expandedFixGenre.has(agent.id)&&h("div",{style:{marginTop:"8px"}},
+                        fixGenreLoading===agent.id?h("div",{style:{color:"rgba(255,255,255,0.4)",fontSize:"10px",fontFamily:"'Space Mono',monospace",padding:"8px"}},"Loading beats…"):
+                        fixGenreError&&fixGenreError.agent_id===agent.id?h("div",{style:{color:"#e11d48",fontSize:"10px",fontFamily:"'Space Mono',monospace",padding:"8px"}},fixGenreError.message):
+                        (fixGenreBeats[agent.id]||[]).length===0?h("div",{style:{color:"rgba(255,255,255,0.3)",fontSize:"10px",fontFamily:"'Space Mono',monospace",padding:"8px"}},"No completed beats yet."):
+                        h("div",{style:{display:"flex",flexDirection:"column",gap:"4px",maxHeight:"320px",overflowY:"auto"}},
+                          ...((fixGenreBeats[agent.id]||[]).map(beat=>h("div",{key:beat.id,style:{display:"flex",alignItems:"center",gap:"8px",padding:"6px 10px",background:"rgba(255,255,255,0.02)",borderRadius:"6px",fontSize:"10px",fontFamily:"'Space Mono',monospace"}},
+                            h("div",{style:{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"rgba(255,255,255,0.65)"}},beat.title),
+                            beat.original_genre&&beat.original_genre!==beat.genre?h("span",{title:"Originally auto-classified as "+beat.original_genre,style:{fontSize:"8px",color:"rgba(245,158,11,0.7)",padding:"2px 5px",background:"rgba(245,158,11,0.08)",borderRadius:"4px"}},"was: "+beat.original_genre):null,
+                            h("select",{disabled:fixGenreSubmitting===beat.id,defaultValue:beat.genre||"",onChange:async(e)=>{
+                              const newGenre=e.target.value;
+                              if(!newGenre||newGenre===beat.genre)return;
+                              if(!confirm('Reclassify "'+beat.title+'" from "'+(beat.genre||"unknown")+'" to "'+newGenre+'"? Sub-genre will be cleared.'))return;
+                              setFixGenreSubmitting(beat.id);setFixGenreError(null);
+                              try{
+                                const r=await fetch(cfg.SUPABASE_URL+"/functions/v1/owner-dashboard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:dashboardData.email,code:dashboardCode,action:"update_genre",beat_id:beat.id,genre:newGenre})});
+                                const data=await r.json();
+                                if(data.success){
+                                  setFixGenreBeats(prev=>({...prev,[agent.id]:(prev[agent.id]||[]).map(b=>b.id===beat.id?{...b,genre:data.beat.genre,sub_genre:data.beat.sub_genre,original_genre:data.beat.original_genre}:b)}));
+                                }else{setFixGenreError({agent_id:agent.id,message:data.error||"Failed to reclassify"});}
+                              }catch(err){setFixGenreError({agent_id:agent.id,message:"Network error — try again."});}
+                              setFixGenreSubmitting(null);
+                            },style:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"6px",padding:"3px 6px",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"10px",cursor:"pointer",outline:"none"}},
+                              ...GENRES.slice().sort((a,b)=>a.label.localeCompare(b.label)).map(g=>h("option",{key:g.id,value:g.id,style:{background:"#1a1a24"}},g.icon+" "+g.label))
+                            ),
+                            fixGenreSubmitting===beat.id&&h("span",{style:{color:"rgba(255,255,255,0.4)"}},"…")
+                          )))
+                        )
                       )
                     ),
                     // ── API Provider Info ──

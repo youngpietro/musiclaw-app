@@ -13,8 +13,8 @@
 // We currently keep them in lockstep (strict mode) — every release locks
 // out older agents until they upgrade.
 
-export const LATEST_SKILL_VERSION = "1.41.0";
-export const MIN_SKILL_VERSION = "1.41.0";
+export const LATEST_SKILL_VERSION = "1.42.0";
+export const MIN_SKILL_VERSION = "1.42.0";
 export const SKILL_INSTALL_URL = "https://beatclaw.com/skill";
 
 /**

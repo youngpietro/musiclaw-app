@@ -1,13 +1,19 @@
 // supabase/functions/manage-beats/index.ts
 // POST /functions/v1/manage-beats
 // Headers: Authorization: Bearer <agent_api_token>
-// Body: { action: "list" | "update" | "update-price" | "delete", beat_id?, title?, price? }
-// Lets agents list, update (title/price), or soft-delete their beats
+// Body: { action: "list" | "update" | "update-price" | "delete", beat_id?, title?, price?, stems_price?, genre?, sub_genre? }
+// Lets agents list, update (title/price/genre/sub_genre), or soft-delete their beats.
+// Genre reclassification is capped at GENRE_CHANGE_AGENT_CAP per beat (lifetime).
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { verifyAgent } from "../_shared/auth.ts";
 import { checkSkillVersion } from "../_shared/skill-version.ts";
+import { validateGenre } from "../_shared/genres.ts";
+
+// Agents can reclassify a beat up to this many times (lifetime).
+// Owners (via owner-dashboard) bypass this cap.
+const GENRE_CHANGE_AGENT_CAP = 2;
 
 const ALLOWED_ORIGINS = [
   "https://beatclaw.com",
@@ -210,14 +216,15 @@ serve(async (req) => {
     //  ACTION: UPDATE (title and/or price)
     // ═══════════════════════════════════════════════════════════════════
     if (action === "update") {
-      const { beat_id, title, price, stems_price, genre, style, sub_genre, description } = body;
+      const { beat_id, title, price, stems_price, genre, sub_genre, style, description } = body;
 
-      // ─── LOCKED FIELDS: genre, style, sub_genre, description ──────
-      if (genre !== undefined || style !== undefined || sub_genre !== undefined || description !== undefined) {
+      // ─── LOCKED FIELDS: style, description ────────────────────────
+      // (genre + sub_genre are now editable — see genre reclassification below)
+      if (style !== undefined || description !== undefined) {
         return new Response(
           JSON.stringify({
-            error: "Genre, style, sub_genre, and description cannot be changed after generation. Only title, price, and stems_price are editable.",
-            editable_fields: ["title", "price", "stems_price"],
+            error: "Style and description cannot be changed after generation — they were used as inputs to Suno generation. Title, price, stems_price, genre, and sub_genre are editable.",
+            editable_fields: ["title", "price", "stems_price", "genre", "sub_genre"],
           }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
@@ -230,9 +237,15 @@ serve(async (req) => {
         );
       }
 
-      if ((title === null || title === undefined) && (price === null || price === undefined) && (stems_price === null || stems_price === undefined)) {
+      const noFieldsProvided =
+        (title === null || title === undefined) &&
+        (price === null || price === undefined) &&
+        (stems_price === null || stems_price === undefined) &&
+        (genre === null || genre === undefined) &&
+        (sub_genre === null || sub_genre === undefined);
+      if (noFieldsProvided) {
         return new Response(
-          JSON.stringify({ error: "Provide at least one field to update: title, price, stems_price" }),
+          JSON.stringify({ error: "Provide at least one field to update: title, price, stems_price, genre, sub_genre" }),
           { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
@@ -240,7 +253,7 @@ serve(async (req) => {
       // Look up beat — must belong to this agent
       const { data: beat } = await supabase
         .from("beats")
-        .select("id, title, price, stems_price, sold, deleted_at, status, agent_id")
+        .select("id, title, price, stems_price, genre, sub_genre, original_genre, genre_change_count, sold, deleted_at, status, agent_id")
         .eq("id", beat_id)
         .eq("agent_id", agent.id)
         .single();
@@ -317,6 +330,110 @@ serve(async (req) => {
         changes.push(`stems_price: $${beat.stems_price || "default"} → $${roundedStemsPrice.toFixed(2)}`);
       }
 
+      // ─── GENRE / SUB_GENRE RECLASSIFICATION ────────────────────────
+      // Agents can fix the auto-classifier's mistakes, but only up to
+      // GENRE_CHANGE_AGENT_CAP times per beat (owners bypass via
+      // owner-dashboard). Changing the parent genre clears sub_genre
+      // unless the request explicitly sets a new one — so a hiphop beat
+      // re-tagged as uk-garage doesn't keep its now-meaningless
+      // "boom-bap" sub.
+      const wantsGenreChange = genre !== null && genre !== undefined;
+      const wantsSubGenreChange = sub_genre !== null && sub_genre !== undefined;
+
+      if (wantsGenreChange || wantsSubGenreChange) {
+        let newGenre = beat.genre as string;
+
+        if (wantsGenreChange) {
+          // Hard cap on agent-initiated reclassification
+          const currentCount = (beat.genre_change_count as number) || 0;
+          if (currentCount >= GENRE_CHANGE_AGENT_CAP) {
+            return new Response(
+              JSON.stringify({
+                error: `This beat has already been reclassified ${currentCount} times. Agents are capped at ${GENRE_CHANGE_AGENT_CAP} genre changes per beat. Ask the owner to fix it from the My Agents dashboard if needed.`,
+                error_type: "GENRE_CHANGE_CAP_REACHED",
+                current_genre: beat.genre,
+                original_genre: beat.original_genre,
+                genre_change_count: currentCount,
+                cap: GENRE_CHANGE_AGENT_CAP,
+              }),
+              { status: 409, headers: { ...cors, "Content-Type": "application/json" } }
+            );
+          }
+
+          const validation = await validateGenre(supabase, String(genre));
+          if (!validation.ok) {
+            return new Response(
+              JSON.stringify(validation),
+              { status: validation.status, headers: { ...cors, "Content-Type": "application/json" } }
+            );
+          }
+          newGenre = validation.genre;
+
+          if (newGenre === beat.genre && !wantsSubGenreChange) {
+            return new Response(
+              JSON.stringify({
+                error: `Beat is already classified as "${beat.genre}". No change needed.`,
+                current_genre: beat.genre,
+              }),
+              { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+            );
+          }
+
+          updateData.genre = newGenre;
+          // Reset sub_genre when parent changes unless caller provides one
+          if (newGenre !== beat.genre && !wantsSubGenreChange) {
+            updateData.sub_genre = null;
+          }
+          updateData.genre_change_count = currentCount + 1;
+          updateData.genre_changed_at = new Date().toISOString();
+          updateData.genre_changed_by = "agent";
+          // Preserve original_genre on legacy rows that pre-date migration 044
+          if (!beat.original_genre) {
+            updateData.original_genre = beat.genre;
+          }
+          changes.push(`genre: "${beat.genre}" → "${newGenre}"`);
+        }
+
+        if (wantsSubGenreChange) {
+          const cleanSub = String(sub_genre).trim().toLowerCase();
+          if (cleanSub === "") {
+            // Explicit clear
+            updateData.sub_genre = null;
+            changes.push(`sub_genre: "${beat.sub_genre || "(none)"}" → (cleared)`);
+          } else {
+            // Validate the sub-genre belongs to the (possibly new) parent genre
+            const { data: subRow } = await supabase
+              .from("genres")
+              .select("id, parent_id")
+              .eq("id", cleanSub)
+              .not("parent_id", "is", null)
+              .single();
+
+            if (!subRow) {
+              return new Response(
+                JSON.stringify({
+                  error: `Unknown sub_genre "${cleanSub}".`,
+                  hint: "Sub-genres must exist in the genres table under the chosen parent.",
+                }),
+                { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+              );
+            }
+            if (subRow.parent_id !== newGenre) {
+              return new Response(
+                JSON.stringify({
+                  error: `Sub-genre "${cleanSub}" belongs to parent "${subRow.parent_id}", not "${newGenre}".`,
+                  expected_parent: subRow.parent_id,
+                  current_parent: newGenre,
+                }),
+                { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+              );
+            }
+            updateData.sub_genre = cleanSub;
+            changes.push(`sub_genre: "${beat.sub_genre || "(none)"}" → "${cleanSub}"`);
+          }
+        }
+      }
+
       const { error: updateErr } = await supabase
         .from("beats")
         .update(updateData)
@@ -330,8 +447,12 @@ serve(async (req) => {
           beat: {
             id: beat.id,
             title: updateData.title || beat.title,
-            price: updateData.price || beat.price,
-            stems_price: updateData.stems_price || beat.stems_price,
+            price: updateData.price ?? beat.price,
+            stems_price: updateData.stems_price ?? beat.stems_price,
+            genre: updateData.genre ?? beat.genre,
+            sub_genre: updateData.sub_genre !== undefined ? updateData.sub_genre : beat.sub_genre,
+            original_genre: beat.original_genre || beat.genre,
+            genre_change_count: updateData.genre_change_count ?? beat.genre_change_count ?? 0,
           },
           changes,
           message: `Beat updated: ${changes.join(", ")}`,
