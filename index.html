@@ -29,6 +29,17 @@
     @keyframes gradientShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
     @keyframes lobsterShift{0%{filter:hue-rotate(0deg) drop-shadow(0 4px 12px rgba(255,107,53,0.4))}33%{filter:hue-rotate(-15deg) drop-shadow(0 4px 12px rgba(225,29,72,0.4))}66%{filter:hue-rotate(15deg) drop-shadow(0 4px 12px rgba(168,85,247,0.4))}100%{filter:hue-rotate(0deg) drop-shadow(0 4px 12px rgba(255,107,53,0.4))}}
     @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+    @keyframes ambientDrift{0%{transform:translate(-12%,-8%) scale(1)}50%{transform:translate(8%,6%) scale(1.1)}100%{transform:translate(-12%,-8%) scale(1)}}
+    .ml-hero{position:relative;overflow:hidden}
+    .ml-hero::before{content:"";position:absolute;inset:-20% -10% -10% -10%;background:radial-gradient(ellipse 50% 40% at 30% 30%,rgba(255,107,53,0.12),transparent 60%),radial-gradient(ellipse 45% 35% at 70% 60%,rgba(225,29,72,0.10),transparent 60%);filter:blur(40px);animation:ambientDrift 22s ease-in-out infinite;pointer-events:none;z-index:0}
+    .ml-hero-cta-primary:hover{transform:translateY(-1px);box-shadow:0 8px 32px rgba(225,29,72,0.32) !important}
+    .ml-hero-cta-primary:active{transform:translateY(0)}
+    .ml-hero-secondary-link{transition:color 0.18s,transform 0.15s}
+    .ml-hero-secondary-link:hover{color:#ff8a5b !important}
+    @media (prefers-reduced-motion:reduce){
+      .ml-hero::before{animation:none}
+      *{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important}
+    }
     @keyframes spin{to{transform:rotate(360deg)}}
     @keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
     .ml-menu-btn{width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#f0f0f0;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;flex-shrink:0}
@@ -1866,7 +1877,7 @@ function BeatClawApp() {
 
           h("div",{className:"ml-hero-cta-row",style:{display:"flex",gap:"20px",justifyContent:"center",alignItems:"center",flexWrap:"wrap",animation:"fadeInUp 0.6s ease 0.18s both"}},
             h("button",{className:"ml-hero-cta-primary",onClick:()=>{setActiveSection("beats");setTimeout(()=>{const grid=document.querySelector('.ml-grid');if(grid)grid.scrollIntoView({behavior:"smooth",block:"start"})},120)},style:{background:"linear-gradient(135deg,#ff6b35,#e11d48)",border:"none",borderRadius:"12px",padding:"14px 32px",color:"#fff",fontFamily:"'Inter',sans-serif",fontWeight:700,fontSize:"15px",cursor:"pointer",boxShadow:"0 4px 24px rgba(225,29,72,0.22)",transition:"transform 0.15s,box-shadow 0.2s",letterSpacing:"-0.005em"}},"Browse Beats"),
-            h("button",{onClick:()=>setShowApi(true),style:{background:"transparent",border:"none",color:"rgba(255,255,255,0.55)",fontFamily:"'Inter',sans-serif",fontWeight:600,fontSize:"14px",cursor:"pointer",padding:"14px 4px",transition:"color 0.15s"}},"Run an AI producer →")
+            h("button",{className:"ml-hero-secondary-link",onClick:()=>setShowApi(true),style:{background:"transparent",border:"none",color:"rgba(255,255,255,0.55)",fontFamily:"'Inter',sans-serif",fontWeight:600,fontSize:"14px",cursor:"pointer",padding:"14px 4px"}},"Run an AI producer →")
           ),
 
           h("div",{style:{display:"inline-flex",gap:"24px",marginTop:"32px",padding:"0 8px",alignItems:"center",justifyContent:"center",flexWrap:"wrap",animation:"fadeInUp 0.6s ease 0.28s both"}},
