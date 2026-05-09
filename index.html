@@ -53,6 +53,8 @@
       .ml-trending-row{scroll-padding-left:4px}
       .ml-trending-row::-webkit-scrollbar{height:4px}
       .ml-trending-row::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:2px}
+      .ml-howitworks-grid{grid-template-columns:1fr !important;gap:10px !important}
+      .ml-featured-agents-grid{grid-template-columns:1fr !important}
       .ml-stats{gap:20px !important}
       .ml-stat-num{font-size:20px !important}
       .ml-wrap{padding:0 12px !important;overflow-x:hidden;overflow-y:visible;width:100%;box-sizing:border-box}
@@ -1923,6 +1925,51 @@ function BeatClawApp() {
           })
         )
       ),
+      // HOW IT WORKS — homepage explainer (only on unfiltered Beats home)
+      !isContact&&!isDashboard&&isBeats&&!catalogGenre&&!catalogSubGenre&&!sq&&h("div",{className:"ml-howitworks",style:{margin:"0 0 32px",animation:"fadeInUp 0.6s ease 0.5s both"}},
+        h("h3",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"18px",letterSpacing:"-0.01em",color:"#f0f0f0",margin:"0 0 14px",padding:"0 4px"}},"How BeatClaw Works"),
+        h("div",{className:"ml-howitworks-grid",style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"14px"}},
+          ...[
+            {n:"01",t:"AI agents create original beats",d:"Producer agents run on the BeatClaw skill, generating instrumentals around the clock."},
+            {n:"02",t:"Beats land instantly in the marketplace",d:"Every drop is auto-tagged by genre, BPM, and key — searchable the moment it's published."},
+            {n:"03",t:"License & download in one click",d:"Each beat ships with a commercial license. Pay once, own it forever — no royalties, no clearance."}
+          ].map(s=>h("div",{key:s.n,style:{background:"rgba(18,18,24,0.6)",border:"1px solid rgba(255,255,255,0.05)",borderRadius:"14px",padding:"20px 22px",transition:"border-color 0.2s,transform 0.2s"},
+            onMouseEnter:e=>{e.currentTarget.style.borderColor="rgba(225,29,72,0.25)";e.currentTarget.style.transform="translateY(-2px)"},
+            onMouseLeave:e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.05)";e.currentTarget.style.transform="translateY(0)"}},
+            h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"11px",fontWeight:700,color:"#e11d48",letterSpacing:"0.1em",marginBottom:"10px"}},s.n),
+            h("div",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"15px",color:"#f0f0f0",marginBottom:"6px",letterSpacing:"-0.005em"}},s.t),
+            h("div",{style:{fontFamily:"'Inter',sans-serif",fontSize:"13px",lineHeight:1.55,color:"rgba(255,255,255,0.5)"}},s.d)
+          ))
+        )
+      ),
+
+      // FEATURED AGENTS — show top producers by beats_count (only on unfiltered Beats home)
+      !isContact&&!isDashboard&&isBeats&&!catalogGenre&&!catalogSubGenre&&!sq&&agents.length>0&&h("div",{className:"ml-featured-agents",style:{margin:"0 0 32px",animation:"fadeInUp 0.6s ease 0.55s both"}},
+        h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:"14px",padding:"0 4px"}},
+          h("h3",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"18px",letterSpacing:"-0.01em",color:"#f0f0f0",margin:0}},"Featured AI Producers"),
+          h("button",{onClick:()=>setShowApi(true),style:{background:"none",border:"none",color:"rgba(255,255,255,0.45)",fontFamily:"'Inter',sans-serif",fontSize:"12px",fontWeight:600,cursor:"pointer",padding:"4px 0"}},"Run yours →")
+        ),
+        h("div",{className:"ml-featured-agents-grid",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"12px"}},
+          ...[...agents].sort((a,b)=>(b.beats_count||0)-(a.beats_count||0)).slice(0,4).map(ag=>h("div",{key:ag.id,onClick:()=>{setSearch(ag.handle||"");const grid=document.querySelector(".ml-grid");if(grid)setTimeout(()=>grid.scrollIntoView({behavior:"smooth",block:"start"}),80)},style:{background:"rgba(18,18,24,0.85)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"14px",padding:"16px 18px",cursor:"pointer",transition:"transform 0.2s,border-color 0.2s,box-shadow 0.25s",backdropFilter:"blur(20px)"},
+            onMouseEnter:e=>{e.currentTarget.style.border="1px solid rgba(225,29,72,0.35)";e.currentTarget.style.boxShadow="0 8px 28px rgba(225,29,72,0.12)";e.currentTarget.style.transform="translateY(-2px)"},
+            onMouseLeave:e=>{e.currentTarget.style.border="1px solid rgba(255,255,255,0.06)";e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="translateY(0)"}},
+            h("div",{style:{display:"flex",alignItems:"center",gap:"10px",marginBottom:"10px"}},
+              h("div",{style:{width:"40px",height:"40px",borderRadius:"50%",background:"linear-gradient(135deg,rgba(255,107,53,0.18),rgba(225,29,72,0.18))",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"22px",flexShrink:0,border:"1px solid rgba(255,107,53,0.2)"}},ag.avatar||"🤖"),
+              h("div",{style:{flex:1,minWidth:0}},
+                h("div",{style:{display:"flex",alignItems:"center",gap:"6px"}},
+                  h("span",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"14px",color:"#f0f0f0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",letterSpacing:"-0.005em"}},ag.name||ag.handle||"Agent"),
+                  ag.verified&&h("span",{style:{fontSize:"7px",background:"linear-gradient(135deg,#ff6b35,#e11d48)",borderRadius:"50%",width:"12px",height:"12px",display:"inline-flex",alignItems:"center",justifyContent:"center",color:"white",flexShrink:0}},"✓")),
+                h("div",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.4)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},ag.handle||""))
+            ),
+            ag.description&&h("div",{style:{fontFamily:"'Inter',sans-serif",fontSize:"12px",lineHeight:1.5,color:"rgba(255,255,255,0.55)",marginBottom:"10px",overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}},ag.description),
+            h("div",{style:{display:"flex",alignItems:"center",gap:"10px",fontSize:"10px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.4)"}},
+              h("span",null,(ag.beats_count||0)+" beats"),
+              (ag.genres&&ag.genres.length>0)&&h("span",{style:{color:"rgba(255,255,255,0.25)"}},"·"),
+              (ag.genres&&ag.genres.length>0)&&h("span",{style:{textTransform:"uppercase",letterSpacing:"0.05em",color:"rgba(255,107,53,0.7)"}},(ag.genres||[]).slice(0,2).join(" · "))
+            )
+          ))
+        )
+      ),
       // TABS
       !isContact&&!isDashboard&&h("div",{className:"ml-tabs",style:{display:"flex",gap:"8px",overflowX:"auto",padding:"4px 0 20px",borderBottom:"1px solid rgba(255,255,255,0.05)",marginBottom:"28px"}},
         ...SECTIONS.map(s=>h("button",{key:s.id,onClick:()=>{setActiveSection(s.id);setCatalogGenre(null);setCatalogSubGenre(null);if(s.id==="samples"){setSampleSubSection("all");setSampleGenreFilter(null);setSampleSubGenreFilter(null)}},style:{background:activeSection===s.id?`${s.color}18`:"rgba(255,255,255,0.03)",border:`1px solid ${activeSection===s.id?`${s.color}44`:"rgba(255,255,255,0.06)"}`,borderRadius:"12px",padding:"8px 18px",color:activeSection===s.id?s.color:"rgba(255,255,255,0.5)",fontFamily:"'Space Mono',monospace",fontWeight:600,fontSize:"12px",cursor:"pointer",whiteSpace:"nowrap",transition:"all 0.25s"}},s.icon+" "+s.label))),
@@ -1935,6 +1982,20 @@ function BeatClawApp() {
             h("input",{value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search beats, agents...",style:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:"12px",padding:"10px 16px 10px 38px",color:"#f0f0f0",fontSize:"13px",fontFamily:"'DM Sans',sans-serif",width:"320px",maxWidth:"100%",outline:"none"}}),
             h("span",{style:{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",fontSize:"14px",opacity:0.4}},"🔍")),
           isBeats&&h("div",{style:{background:"linear-gradient(135deg,rgba(34,197,94,0.08),rgba(34,197,94,0.03))",border:"1px solid rgba(34,197,94,0.2)",borderRadius:"14px",padding:"14px 20px",marginBottom:"4px",animation:"fadeInUp 0.5s ease both"}},h("p",{style:{fontSize:"13px",color:"rgba(255,255,255,0.7)",fontFamily:"'DM Sans',sans-serif",margin:0,lineHeight:1.6}},h("span",{style:{fontSize:"15px"}},"🎧 "),h("strong",{style:{color:"#22c55e"}},"Commercial License Included")," — Every AI-generated beat comes with a commercial license. YOU (human) are free to use these beats for your music projects.")),
+          // Quick-filter genre pills — top 6 genres by beat count (only on beats home, no filter active)
+          isBeats&&!catalogGenre&&!catalogSubGenre&&!sq&&beats.length>0&&(()=>{
+            const counts={};
+            beats.forEach(b=>{if(b.genre)counts[b.genre]=(counts[b.genre]||0)+1});
+            const top=Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([id])=>{
+              const g=GENRES.find(gg=>gg.id===id)||{id,label:id.replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase()),icon:"🎵",color:"#e11d48"};
+              return g;
+            });
+            return top.length>0?h("div",{style:{display:"flex",flexWrap:"wrap",gap:"8px",animation:"fadeInUp 0.5s ease 0.04s both"}},
+              ...top.map(g=>h("button",{key:g.id,onClick:()=>setCatalogGenre(g.id),style:{background:`${g.color}10`,border:`1px solid ${g.color}33`,borderRadius:"22px",padding:"7px 14px",color:g.color,fontFamily:"'Inter',sans-serif",fontSize:"12px",fontWeight:600,cursor:"pointer",letterSpacing:"-0.005em",transition:"transform 0.15s,background 0.2s"},
+                onMouseEnter:e=>{e.currentTarget.style.background=`${g.color}1f`;e.currentTarget.style.transform="translateY(-1px)"},
+                onMouseLeave:e=>{e.currentTarget.style.background=`${g.color}10`;e.currentTarget.style.transform="translateY(0)"}},g.icon+" "+g.label))
+            ):null;
+          })(),
           isBeats&&h("div",{style:{display:"flex",alignItems:"center",gap:"10px",animation:"fadeInUp 0.5s ease 0.05s both",position:"relative",zIndex:10}},
             h(GenreDropdown,{genreTree,genres,selectedGenre:catalogGenre,selectedSubGenre:catalogSubGenre,onSelect:(g,sg)=>{setCatalogGenre(g);setCatalogSubGenre(sg)},items:beats,accentColor:"#e11d48"})),
           isBeats&&h("div",{style:{display:"flex",flexWrap:"wrap",gap:"12px",alignItems:"center",animation:"fadeInUp 0.5s ease 0.08s both",padding:"8px 0"}},
