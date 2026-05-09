@@ -7,6 +7,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
+import { sendPayPalPayout } from "../_shared/paypal-payouts.ts";
 
 const ALLOWED_ORIGINS = [
   "https://beatclaw.com",
@@ -286,65 +287,55 @@ serve(async (req) => {
     const payoutAmount = Math.round((parseFloat(purchase.amount) - platformFee) * 100) / 100;
 
     if (sellerPaypal && payoutAmount > 0) {
-      try {
-        const payoutToken = await getPayPalAccessToken();
-        const payoutApiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
-        const beatTitle = beat?.title || "Beat";
+      // Read the current attempt count so we increment correctly even if the
+      // retry cron has touched this row before.
+      const { data: priorRow } = await supabase
+        .from("purchases")
+        .select("payout_attempts")
+        .eq("id", purchase.id)
+        .single();
+      const nextAttempt = ((priorRow?.payout_attempts as number) || 0) + 1;
+      const nowIso = new Date().toISOString();
+      const beatTitle = beat?.title || "Beat";
 
-        const payoutRes = await fetch(`${payoutApiBase}/v1/payments/payouts`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${payoutToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            sender_batch_header: {
-              sender_batch_id: `beatclaw-${purchase.id}`,
-              recipient_type: "EMAIL",
-              email_subject: `You earned $${payoutAmount.toFixed(2)} from "${beatTitle}" — BeatClaw`,
-              email_message: `Your beat "${beatTitle}" was purchased on BeatClaw! Your earnings have been sent to your PayPal account.`,
-            },
-            items: [
-              {
-                amount: { value: payoutAmount.toFixed(2), currency: "USD" },
-                sender_item_id: purchase.id,
-                recipient_wallet: "PAYPAL",
-                receiver: sellerPaypal,
-              },
-            ],
-          }),
-        });
+      const result = await sendPayPalPayout({
+        rowId: purchase.id,
+        attempt: nextAttempt,
+        amount: payoutAmount,
+        receiverEmail: sellerPaypal,
+        kind: "beat",
+        emailSubject: `You earned $${payoutAmount.toFixed(2)} from "${beatTitle}" — BeatClaw`,
+        emailMessage: `Your beat "${beatTitle}" was purchased on BeatClaw! Your earnings have been sent to your PayPal account.`,
+      });
 
-        const payoutData = await payoutRes.json();
-
-        if (payoutRes.ok || payoutRes.status === 201) {
-          const batchId = payoutData?.batch_header?.payout_batch_id || null;
-          await supabase
-            .from("purchases")
-            .update({
-              payout_batch_id: batchId,
-              payout_status: "sent",
-              payout_amount: payoutAmount,
-            })
-            .eq("id", purchase.id);
-          console.log(`Payout sent: $${payoutAmount.toFixed(2)} for purchase ${purchase.id} (batch: ${batchId})`);
-        } else {
-          console.error("PayPal payout failed:", JSON.stringify(payoutData));
-          await supabase
-            .from("purchases")
-            .update({
-              payout_status: "failed",
-              payout_amount: payoutAmount,
-            })
-            .eq("id", purchase.id);
-        }
-      } catch (payoutErr) {
-        console.error("Payout error:", payoutErr.message);
+      if (result.ok) {
         await supabase
           .from("purchases")
-          .update({ payout_status: "error", payout_amount: payoutAmount })
+          .update({
+            payout_batch_id: result.batchId,
+            payout_status: "sent",
+            payout_amount: payoutAmount,
+            payout_attempts: nextAttempt,
+            payout_last_attempt_at: nowIso,
+            payout_error: null,
+          })
           .eq("id", purchase.id);
-        // Non-fatal: purchase succeeded even if payout fails
+        console.log(`Payout sent: $${payoutAmount.toFixed(2)} for purchase ${purchase.id} (batch: ${result.batchId}, attempt ${nextAttempt})`);
+      } else {
+        const newStatus = result.status === 0 ? "error" : "failed";
+        console.error(`PayPal payout ${newStatus}:`, result.error);
+        await supabase
+          .from("purchases")
+          .update({
+            payout_status: newStatus,
+            payout_amount: payoutAmount,
+            payout_attempts: nextAttempt,
+            payout_last_attempt_at: nowIso,
+            payout_error: result.error,
+          })
+          .eq("id", purchase.id);
+        // Non-fatal: purchase succeeded even if payout fails — retry-failed-payouts
+        // will pick this row up on the next cron tick.
       }
     }
 

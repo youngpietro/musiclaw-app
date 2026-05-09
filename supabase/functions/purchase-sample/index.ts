@@ -7,6 +7,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { sendPayPalPayout } from "../_shared/paypal-payouts.ts";
 
 const ALLOWED_ORIGINS = [
   "https://beatclaw.com",
@@ -355,6 +356,113 @@ serve(async (req) => {
       }
     }
 
+    // ─── AUTO-PAYOUT (sample earnings) ───────────────────────────────
+    // After crediting the agent, if their fresh pending balance crosses
+    // their auto_payout_threshold AND auto_payout_enabled is on AND a
+    // paypal_email is set — disburse immediately without requiring the
+    // owner to log in and manually request payout. Failure is non-fatal:
+    // the buyer's purchase is already complete and their download is ready.
+    // deno-lint-ignore no-explicit-any
+    let autoPayout: any = null;
+    if (beat?.agent_id) {
+      try {
+        const { data: agentRow } = await supabase
+          .from("agents")
+          .select("id, name, handle, paypal_email, owner_email, pending_sample_earnings, auto_payout_enabled, auto_payout_threshold")
+          .eq("id", beat.agent_id)
+          .single();
+
+        const pending = parseFloat(agentRow?.pending_sample_earnings || "0");
+        const threshold = parseFloat(agentRow?.auto_payout_threshold || "5");
+        const enabled = agentRow?.auto_payout_enabled !== false; // default on
+        const paypalEmail = agentRow?.paypal_email;
+
+        if (enabled && paypalEmail && pending >= threshold && pending >= 5) {
+          // Atomically pull the full pending balance off the agent.
+          const payoutAmount = Math.round(pending * 100) / 100;
+          const { data: deductOk, error: deductErr } = await supabase.rpc(
+            "process_sample_payout",
+            { p_agent_id: agentRow!.id, p_amount: payoutAmount }
+          );
+
+          if (!deductErr && deductOk) {
+            // Insert payout ledger row up-front so the auto-payout is visible
+            // in owner_dashboard even if PayPal hangs.
+            const { data: payoutRecord } = await supabase
+              .from("sample_payouts")
+              .insert({
+                agent_id: agentRow!.id,
+                owner_email: agentRow!.owner_email || "",
+                amount: payoutAmount,
+                paypal_email: paypalEmail,
+                status: "pending",
+              })
+              .select("id")
+              .single();
+
+            if (payoutRecord?.id) {
+              const agentName = agentRow!.name || agentRow!.handle || "Agent";
+              const result = await sendPayPalPayout({
+                rowId: payoutRecord.id,
+                attempt: 1,
+                amount: payoutAmount,
+                receiverEmail: paypalEmail,
+                kind: "sample-auto",
+                emailSubject: `You earned $${payoutAmount.toFixed(2)} from sample sales — BeatClaw`,
+                emailMessage: `Auto-payout for "${agentName}" sample sales. Sent to your PayPal because your pending balance crossed $${threshold.toFixed(2)}.`,
+              });
+
+              const nowIso = new Date().toISOString();
+              if (result.ok) {
+                await supabase
+                  .from("sample_payouts")
+                  .update({
+                    paypal_batch_id: result.batchId,
+                    status: "sent",
+                    payout_attempts: 1,
+                    payout_last_attempt_at: nowIso,
+                    payout_error: null,
+                  })
+                  .eq("id", payoutRecord.id);
+                autoPayout = {
+                  triggered: true,
+                  amount: payoutAmount,
+                  paypal_batch_id: result.batchId,
+                  status: "sent",
+                };
+                console.log(`Auto-payout sent: $${payoutAmount.toFixed(2)} to ${paypalEmail} for agent ${agentRow!.id}`);
+              } else {
+                // Refund the deducted balance — agent will retry via cron or manual.
+                await supabase.rpc("increment_agent_sample_earnings", {
+                  p_agent_id: agentRow!.id,
+                  p_amount: payoutAmount,
+                });
+                await supabase
+                  .from("sample_payouts")
+                  .update({
+                    status: result.status === 0 ? "error" : "failed",
+                    payout_attempts: 1,
+                    payout_last_attempt_at: nowIso,
+                    payout_error: result.error,
+                  })
+                  .eq("id", payoutRecord.id);
+                autoPayout = {
+                  triggered: true,
+                  amount: payoutAmount,
+                  status: result.status === 0 ? "error" : "failed",
+                  error: result.error,
+                };
+                console.error(`Auto-payout FAILED for agent ${agentRow!.id}: ${result.error}`);
+              }
+            }
+          }
+        }
+      } catch (autoErr: unknown) {
+        // Non-fatal — sample purchase already succeeded.
+        console.error("Auto-payout exception:", (autoErr as Error).message);
+      }
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -365,6 +473,7 @@ serve(async (req) => {
         stem_type: sample.stem_type,
         expires_in: "never",
         max_downloads: "unlimited",
+        auto_payout: autoPayout,
       }),
       { headers: { ...cors, "Content-Type": "application/json" } }
     );

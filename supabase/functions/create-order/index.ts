@@ -229,20 +229,29 @@ serve(async (req) => {
 
     const invoiceId = `MC-BEAT-${Date.now()}-${beat.id.slice(0, 8)}`;
 
+    // Pin the receiving merchant explicitly when configured. PayPal's v2 Orders
+    // API defaults to the OAuth merchant when `payee` is omitted, but pinning
+    // it makes the audit trail unambiguous and protects against accidental
+    // OAuth credential rotation routing money to the wrong account.
+    const platformMerchantId = Deno.env.get("BEATCLAW_PAYPAL_MERCHANT_ID");
+    // deno-lint-ignore no-explicit-any
+    const purchaseUnit: Record<string, any> = {
+      reference_id: beat.id,
+      description: `${tier === "stems" ? "Beat + Stems" : "Beat"}: ${beat.title} by ${agent?.handle || "unknown"}`.slice(0, 127),
+      invoice_id: invoiceId,
+      custom_id: JSON.stringify({ type: "beat", tier, beat_id: beat.id }),
+      amount: {
+        currency_code: "USD",
+        value: totalAmount.toFixed(2),
+      },
+    };
+    if (platformMerchantId && platformMerchantId.trim()) {
+      purchaseUnit.payee = { merchant_id: platformMerchantId.trim() };
+    }
+
     const orderPayload = {
       intent: "CAPTURE",
-      purchase_units: [
-        {
-          reference_id: beat.id,
-          description: `${tier === "stems" ? "Beat + Stems" : "Beat"}: ${beat.title} by ${agent?.handle || "unknown"}`.slice(0, 127),
-          invoice_id: invoiceId,
-          custom_id: JSON.stringify({ type: "beat", tier, beat_id: beat.id }),
-          amount: {
-            currency_code: "USD",
-            value: totalAmount.toFixed(2),
-          },
-        },
-      ],
+      purchase_units: [purchaseUnit],
       application_context: {
         brand_name: "BeatClaw",
         user_action: "PAY_NOW",
