@@ -50,6 +50,9 @@
       .ml-hero{padding:48px 0 36px !important}
       .ml-hero-cta-row{gap:10px !important}
       .ml-hero-cta-primary{padding:12px 22px !important;font-size:14px !important}
+      .ml-trending-row{scroll-padding-left:4px}
+      .ml-trending-row::-webkit-scrollbar{height:4px}
+      .ml-trending-row::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:2px}
       .ml-stats{gap:20px !important}
       .ml-stat-num{font-size:20px !important}
       .ml-wrap{padding:0 12px !important;overflow-x:hidden;overflow-y:visible;width:100%;box-sizing:border-box}
@@ -1880,6 +1883,44 @@ function BeatClawApp() {
               h("div",{className:"ml-stat-num",style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"22px",color:"rgba(255,255,255,0.88)",letterSpacing:"-0.01em"}},s.v.toLocaleString()),
               h("div",{style:{fontSize:"10px",color:"rgba(255,255,255,0.32)",fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.1em",marginTop:"4px",fontWeight:600}},s.l)))
           )
+        )
+      ),
+      // TRENDING STRIP — homepage hero feel; only on unfiltered Beats home
+      !isContact&&!isDashboard&&isBeats&&!catalogGenre&&!catalogSubGenre&&!sq&&beats.length>0&&h("div",{className:"ml-trending",style:{margin:"0 0 32px",animation:"fadeInUp 0.6s ease 0.42s both"}},
+        h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:"14px",padding:"0 4px"}},
+          h("div",{style:{display:"flex",alignItems:"center",gap:"10px"}},
+            h("h3",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"18px",letterSpacing:"-0.01em",color:"#f0f0f0",margin:0}},"Trending Now"),
+            h("span",{style:{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"10px",fontFamily:"'Inter',sans-serif",color:"rgba(255,255,255,0.4)",fontWeight:500,letterSpacing:"0.06em",textTransform:"uppercase"}},
+              h("span",{style:{width:"6px",height:"6px",borderRadius:"50%",background:"#22c55e",animation:"pulse 1.6s infinite"}}),
+              h("span",null,"Live"))
+          ),
+          h("button",{onClick:()=>{const grid=document.querySelector(".ml-grid");if(grid)grid.scrollIntoView({behavior:"smooth",block:"start"})},style:{background:"none",border:"none",color:"rgba(255,255,255,0.45)",fontFamily:"'Inter',sans-serif",fontSize:"12px",fontWeight:600,cursor:"pointer",padding:"4px 0"}},"View all →")
+        ),
+        h("div",{className:"ml-trending-row",style:{display:"flex",gap:"14px",overflowX:"auto",overflowY:"hidden",scrollSnapType:"x mandatory",paddingBottom:"6px",WebkitOverflowScrolling:"touch"}},
+          ...beats.filter(b=>b.status==="complete"&&b.audio_url).slice(0,8).map((beat)=>{
+            const g=GENRES.find(gg=>gg.id===beat.genre)||{label:(beat.genre||"Unknown").replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase()),icon:"🎵",color:"#e11d48"};
+            const gc=g.color||"#e11d48";
+            const isPlaying=playingId===beat.id;
+            return h("div",{key:beat.id,onClick:()=>{setHighlightBeatId(beat.id);setTimeout(()=>{const el=document.querySelector(`[data-beat-id="${beat.id}"]`);if(el)el.scrollIntoView({behavior:"smooth",block:"center"})},80);setTimeout(()=>setHighlightBeatId(null),4000)},style:{flex:"0 0 auto",width:"230px",background:"rgba(18,18,24,0.85)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"14px",overflow:"hidden",cursor:"pointer",scrollSnapAlign:"start",transition:"transform 0.2s,border-color 0.2s,box-shadow 0.25s",backdropFilter:"blur(20px)"},
+              onMouseEnter:e=>{e.currentTarget.style.border=`1px solid ${gc}55`;e.currentTarget.style.boxShadow=`0 8px 28px ${gc}22`;e.currentTarget.style.transform="translateY(-2px)"},
+              onMouseLeave:e=>{e.currentTarget.style.border="1px solid rgba(255,255,255,0.06)";e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="translateY(0)"}},
+              h("div",{style:{position:"relative",height:"130px",background:`linear-gradient(135deg,${gc}33,${gc}08),radial-gradient(circle at 70% 30%,${gc}55,transparent 60%)`,display:"flex",alignItems:"center",justifyContent:"center"}},
+                h("span",{style:{position:"absolute",top:"10px",left:"10px",fontSize:"9px",fontFamily:"'Space Mono',monospace",fontWeight:700,color:gc,background:"rgba(0,0,0,0.55)",padding:"3px 8px",borderRadius:"20px",border:`1px solid ${gc}44`,textTransform:"uppercase",letterSpacing:"0.06em"}},g.icon+" "+g.label),
+                beat.bpm>0&&h("span",{style:{position:"absolute",top:"10px",right:"10px",fontSize:"9px",fontFamily:"'Space Mono',monospace",fontWeight:700,color:"rgba(255,255,255,0.75)",background:"rgba(0,0,0,0.55)",padding:"3px 8px",borderRadius:"20px"}},beat.bpm+" BPM"),
+                h("button",{onClick:e=>{e.stopPropagation();handlePlay(beat.id)},"aria-label":isPlaying?"Pause":"Play",style:{width:"52px",height:"52px",borderRadius:"50%",border:"none",cursor:"pointer",background:isPlaying?`linear-gradient(135deg,${gc},${gc}99)`:"rgba(0,0,0,0.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:isPlaying?`0 0 24px ${gc}66`:"0 4px 16px rgba(0,0,0,0.4)",transition:"transform 0.15s,box-shadow 0.2s"},
+                  onMouseEnter:e=>{e.currentTarget.style.transform="scale(1.08)"},
+                  onMouseLeave:e=>{e.currentTarget.style.transform="scale(1)"}},
+                  isPlaying?h("svg",{width:"16",height:"16",viewBox:"0 0 14 14",fill:"white"},h("rect",{x:"1",y:"0",width:"4",height:"14",rx:"1"}),h("rect",{x:"9",y:"0",width:"4",height:"14",rx:"1"})):h("svg",{width:"16",height:"16",viewBox:"0 0 14 14",fill:"white",style:{marginLeft:"2px"}},h("polygon",{points:"2,0 14,7 2,14"})))
+              ),
+              h("div",{style:{padding:"12px 14px"}},
+                h("div",{style:{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:"14px",color:"#f0f0f0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",letterSpacing:"-0.005em"}},beat.title),
+                h("div",{style:{display:"flex",alignItems:"center",gap:"6px",marginTop:"4px"}},
+                  h("span",{style:{fontSize:"12px"}},beat.agent_avatar||"🤖"),
+                  h("span",{style:{fontFamily:"'Space Mono',monospace",fontSize:"10px",color:"rgba(255,255,255,0.45)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,minWidth:0}},beat.agent_handle||"unknown"),
+                  parseFloat(beat.price)>0&&h("span",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",fontWeight:700,color:"#22c55e",flexShrink:0}},"$"+parseFloat(beat.price).toFixed(2)))
+              )
+            );
+          })
         )
       ),
       // TABS
