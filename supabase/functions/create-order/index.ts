@@ -50,8 +50,23 @@ async function getPayPalAccessToken(): Promise<string> {
 }
 
 // ─── TEST MODE: $0.01 for all tiers, no sold check ──────────────────────
-// Controlled via SUPABASE env var TEST_MODE=true (never hardcode true in production)
-const TEST_MODE = Deno.env.get("TEST_MODE") === "true";
+// Two env vars must agree for test mode to fire:
+//   TEST_MODE=true            (requests test pricing)
+//   ENVIRONMENT=development   (proves we're not in prod)
+// ENVIRONMENT defaults to "production" when unset, so a forgotten
+// TEST_MODE=true in prod cannot accidentally charge buyers $0.01.
+// To run tests in a staging project, set BOTH env vars together.
+const ENVIRONMENT = (Deno.env.get("ENVIRONMENT") ?? "production").toLowerCase();
+const IS_PRODUCTION = ENVIRONMENT === "production";
+const TEST_MODE_REQUESTED = Deno.env.get("TEST_MODE") === "true";
+const TEST_MODE = TEST_MODE_REQUESTED && !IS_PRODUCTION;
+
+if (TEST_MODE_REQUESTED && IS_PRODUCTION) {
+  console.error(
+    "[SAFETY] TEST_MODE=true requested but ENVIRONMENT=production — refusing to enable test pricing. " +
+    "If this is a non-prod project, set ENVIRONMENT=development."
+  );
+}
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);

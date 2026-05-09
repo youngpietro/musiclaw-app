@@ -69,8 +69,23 @@ async function hmacSign(payload: string, secret: string): Promise<string> {
 }
 
 // ─── TEST MODE: Don't mark beat as sold after purchase ──────────────────
-// Controlled via SUPABASE env var TEST_MODE=true (never hardcode true in production)
-const TEST_MODE = Deno.env.get("TEST_MODE") === "true";
+// Two env vars must agree for test mode to fire:
+//   TEST_MODE=true            (requests test behaviour)
+//   ENVIRONMENT=development   (proves we're not in prod)
+// ENVIRONMENT defaults to "production" when unset, so a forgotten
+// TEST_MODE=true in prod cannot leave a beat unsold after capture.
+// To run tests in a staging project, set BOTH env vars together.
+const ENVIRONMENT = (Deno.env.get("ENVIRONMENT") ?? "production").toLowerCase();
+const IS_PRODUCTION = ENVIRONMENT === "production";
+const TEST_MODE_REQUESTED = Deno.env.get("TEST_MODE") === "true";
+const TEST_MODE = TEST_MODE_REQUESTED && !IS_PRODUCTION;
+
+if (TEST_MODE_REQUESTED && IS_PRODUCTION) {
+  console.error(
+    "[SAFETY] TEST_MODE=true requested but ENVIRONMENT=production — refusing to skip beat-sold update. " +
+    "If this is a non-prod project, set ENVIRONMENT=development."
+  );
+}
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);
@@ -91,30 +106,46 @@ serve(async (req) => {
       );
     }
 
+    // ─── INTERNAL CALLER DETECTION (paypal-webhook) ───────────────────
+    // The paypal-webhook function calls this endpoint server-to-server when
+    // PayPal notifies us that a buyer approved/captured an order. Those calls
+    // bypass per-IP rate-limiting because the IP is meaningless (it's PayPal's
+    // outbound IP). The shared INTERNAL_WEBHOOK_SECRET prevents anyone else
+    // from claiming to be the webhook.
+    const internalTrigger = req.headers.get("x-internal-trigger");
+    const internalSecret = req.headers.get("x-internal-webhook-secret");
+    const expectedInternalSecret = Deno.env.get("INTERNAL_WEBHOOK_SECRET");
+    const isInternalCall =
+      internalTrigger === "paypal-webhook" &&
+      !!expectedInternalSecret &&
+      internalSecret === expectedInternalSecret;
+
     // ─── RATE LIMITING: max 20 capture attempts per hour per IP ───────
-    const clientIp =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("cf-connecting-ip") ||
-      "unknown";
+    if (!isInternalCall) {
+      const clientIp =
+        req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        req.headers.get("cf-connecting-ip") ||
+        "unknown";
 
-    const { data: recentCaptures } = await supabase
-      .from("rate_limits")
-      .select("id")
-      .eq("action", "capture_order")
-      .eq("identifier", clientIp)
-      .gte("created_at", new Date(Date.now() - 3600000).toISOString());
+      const { data: recentCaptures } = await supabase
+        .from("rate_limits")
+        .select("id")
+        .eq("action", "capture_order")
+        .eq("identifier", clientIp)
+        .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentCaptures && recentCaptures.length >= 20) {
-      return new Response(
-        JSON.stringify({ error: "Too many attempts. Try again later." }),
-        { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
-      );
+      if (recentCaptures && recentCaptures.length >= 20) {
+        return new Response(
+          JSON.stringify({ error: "Too many attempts. Try again later." }),
+          { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      await supabase.from("rate_limits").insert({
+        action: "capture_order",
+        identifier: clientIp,
+      });
     }
-
-    await supabase.from("rate_limits").insert({
-      action: "capture_order",
-      identifier: clientIp,
-    });
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
