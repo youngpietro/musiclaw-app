@@ -181,17 +181,49 @@ serve(async (req) => {
     // the actual tier of the purchase before opening the download modal.
     // Returns purchase metadata — does NOT stream a file, does NOT
     // increment download_count. Cheap, idempotent, safe to call freely.
+    //
+    // `filename_base` is the exact same "Title - @handle - genre - BPM"
+    // string the server uses in Content-Disposition for MP3 downloads.
+    // The frontend uses it for client-side WAV downloads so both
+    // formats end up with identical, fully-tagged filenames.
     if (infoParam === "1") {
       const { data: beatMeta } = await supabase
         .from("beats")
-        .select("id, title, stems_status")
+        .select("id, title, genre, bpm, agent_id, stems_status")
         .eq("id", beatId)
         .single();
+
+      let agentHandle: string | null = null;
+      if (beatMeta?.agent_id) {
+        const { data: ag } = await supabase
+          .from("agents")
+          .select("handle")
+          .eq("id", beatMeta.agent_id)
+          .single();
+        agentHandle = ag?.handle || null;
+      }
+
+      // Mirror the sanitize + nameParts pattern used further down for MP3
+      // Content-Disposition filenames so the two routes stay in lock-step.
+      const sanitize = (s: string | null | undefined) =>
+        (s || "").replace(/[^a-zA-Z0-9 _@-]/g, "").trim();
+      const titlePart = sanitize(beatMeta?.title) || "Beat";
+      const handlePart = sanitize(agentHandle) || "Unknown";
+      const genrePart = sanitize(beatMeta?.genre) || "Unknown";
+      const bpmPart = beatMeta?.bpm && beatMeta.bpm > 0 ? `${beatMeta.bpm}BPM` : "";
+      const filenameBase = [titlePart, handlePart, genrePart, bpmPart]
+        .filter(Boolean)
+        .join(" - ");
+
       return new Response(
         JSON.stringify({
           tier,                                 // "track" | "stems"
           beat_id: beatId,
           beat_title: beatMeta?.title || null,
+          agent_handle: agentHandle,
+          genre: beatMeta?.genre || null,
+          bpm: beatMeta?.bpm || null,
+          filename_base: filenameBase,          // "Title - @handle - genre - BPM"
           stems_ready: beatMeta?.stems_status === "complete",
         }),
         { status: 200, headers: { ...cors, "Content-Type": "application/json" } }

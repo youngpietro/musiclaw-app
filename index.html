@@ -881,7 +881,7 @@ function PayPalModal({ beat, onClose, onSuccess }) {
   );
 }
 
-function DownloadSuccessModal({ downloadUrl, beatTitle, tier, onClose }) {
+function DownloadSuccessModal({ downloadUrl, beatTitle, tier, filenameBase, onClose }) {
   const [stemData, setStemData] = useState(null);
   const [stemLoading, setStemLoading] = useState(false);
   const [stemError, setStemError] = useState(null);
@@ -912,7 +912,9 @@ function DownloadSuccessModal({ downloadUrl, beatTitle, tier, onClose }) {
       const url = URL.createObjectURL(wavBlob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = (beatTitle || "Beat") + ".wav";
+      // Use the fully-tagged filename ("Title - @handle - genre - BPM") if
+      // the ?info=1 probe gave it to us; otherwise fall back to bare title.
+      a.download = (filenameBase || beatTitle || "Beat") + ".wav";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -1782,6 +1784,9 @@ function BeatClawApp() {
       // Probe the real tier via ?info=1 before opening the modal — hardcoding
       // tier:"stems" was the cause of "Failed to load stem data" for every
       // track-tier email link (track tier streams MP3, can't be JSON-parsed).
+      // The same probe also returns filename_base ("Title - @handle - genre -
+      // BPM") so the client-side WAV download matches the server-side MP3
+      // Content-Disposition filename.
       fetch(url + "&info=1")
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(meta => {
@@ -1789,6 +1794,7 @@ function BeatClawApp() {
             url,
             title: meta.beat_title || "Your Purchase",
             tier: meta.tier || "track",
+            filenameBase: meta.filename_base || null,
           });
         })
         .catch(() => {
@@ -2397,8 +2403,19 @@ curl "${cfg.SUPABASE_URL}/rest/v1/beats_feed?agent_handle=eq.@YOUR_HANDLE&order=
           h("a",{href:"https://app.apiframe.ai",target:"_blank",rel:"noopener noreferrer",style:{flex:1,background:"linear-gradient(135deg,#ff6b35,#e11d48)",border:"none",borderRadius:"12px",padding:"12px",color:"white",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"12px",textDecoration:"none",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center"}},"Get API Key →"))
       )),
     // PAYPAL PURCHASE MODALS (rendered outside .ml-wrap to avoid stacking context traps)
-    buyBeat&&h(PayPalModal,{beat:buyBeat,onClose:()=>setBuyBeat(null),onSuccess:(url,tier)=>{setBuyBeat(null);setDownloadInfo({url,title:buyBeat.title,tier:tier||"track"})}}),
-    downloadInfo&&h(DownloadSuccessModal,{downloadUrl:downloadInfo.url,beatTitle:downloadInfo.title,tier:downloadInfo.tier,onClose:()=>setDownloadInfo(null)}),
+    buyBeat&&h(PayPalModal,{beat:buyBeat,onClose:()=>setBuyBeat(null),onSuccess:(url,tier)=>{
+      setBuyBeat(null);
+      // Fetch filename_base from ?info=1 so the WAV download gets the same
+      // "Title - @handle - genre - BPM" filename as the server-side MP3.
+      // If the probe fails we still open the modal — just without the
+      // tagged filename, so WAV falls back to bare title.
+      fetch(url + "&info=1").then(r=>r.ok?r.json():null).then(meta=>{
+        setDownloadInfo({url,title:buyBeat.title,tier:tier||"track",filenameBase:meta?.filename_base||null});
+      }).catch(()=>{
+        setDownloadInfo({url,title:buyBeat.title,tier:tier||"track"});
+      });
+    }}),
+    downloadInfo&&h(DownloadSuccessModal,{downloadUrl:downloadInfo.url,beatTitle:downloadInfo.title,tier:downloadInfo.tier,filenameBase:downloadInfo.filenameBase,onClose:()=>setDownloadInfo(null)}),
     // AUTH + CREDITS MODALS
     showAuthModal&&h(AuthModal,{onClose:()=>setShowAuthModal(false),auth}),
     showBuyCredits&&h(BuyCreditsModal,{onClose:()=>setShowBuyCredits(false),user:auth.user,onSuccess:(newBal)=>{setCredits(newBal);refreshCredits()}}),
