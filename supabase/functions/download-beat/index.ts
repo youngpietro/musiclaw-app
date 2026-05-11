@@ -174,6 +174,29 @@ serve(async (req) => {
 
     const tier = purchase.purchase_tier || "track";
     const fileParam = url.searchParams.get("file"); // e.g., "track", "drums", "bass", "vocal"
+    const infoParam = url.searchParams.get("info");  // "1" → return metadata only
+
+    // ─── INFO-ONLY MODE ────────────────────────────────────────────────
+    // The frontend's email-link handler calls `?info=1` first to discover
+    // the actual tier of the purchase before opening the download modal.
+    // Returns purchase metadata — does NOT stream a file, does NOT
+    // increment download_count. Cheap, idempotent, safe to call freely.
+    if (infoParam === "1") {
+      const { data: beatMeta } = await supabase
+        .from("beats")
+        .select("id, title, stems_status")
+        .eq("id", beatId)
+        .single();
+      return new Response(
+        JSON.stringify({
+          tier,                                 // "track" | "stems"
+          beat_id: beatId,
+          beat_title: beatMeta?.title || null,
+          stems_ready: beatMeta?.stems_status === "complete",
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
 
     // ─── GET BEAT DATA ────────────────────────────────────────────────
     const { data: beat } = await supabase

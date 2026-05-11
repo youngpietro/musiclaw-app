@@ -1772,7 +1772,24 @@ function BeatClawApp() {
     if (hash.startsWith("#download=")) {
       const token = decodeURIComponent(hash.slice("#download=".length));
       const url = cfg.SUPABASE_URL + "/functions/v1/download-beat?token=" + encodeURIComponent(token);
-      setDownloadInfo({ url, title: "Your Purchase", tier: "stems" });
+      // Probe the real tier via ?info=1 before opening the modal — hardcoding
+      // tier:"stems" was the cause of "Failed to load stem data" for every
+      // track-tier email link (track tier streams MP3, can't be JSON-parsed).
+      fetch(url + "&info=1")
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(meta => {
+          setDownloadInfo({
+            url,
+            title: meta.beat_title || "Your Purchase",
+            tier: meta.tier || "track",
+          });
+        })
+        .catch(() => {
+          // Server-side info probe failed — fall back to track tier so the
+          // user can at least download the MP3 directly. Better than the old
+          // bug where every track purchase showed "Failed to load stem data".
+          setDownloadInfo({ url, title: "Your Purchase", tier: "track" });
+        });
       history.replaceState(null, "", window.location.pathname + window.location.search);
     } else if (hash.startsWith("#sample-download=")) {
       const token = decodeURIComponent(hash.slice("#sample-download=".length));
