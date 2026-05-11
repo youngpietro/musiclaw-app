@@ -41,6 +41,18 @@ export interface CallbackResult {
 }
 
 // ─── GENERATE ────────────────────────────────────────────────────────
+//
+// HISTORICAL NOTE — REVERTED 2026-05-11:
+// We briefly appended a "full-length production, intro build drop
+// breakdown outro, minimum 95 seconds duration" suffix to every style
+// string in the hope of nudging Suno toward longer outputs. In practice
+// it INVERTED the result — Suno's V5/V5.5 treats the `style`/`tags`
+// field as musical descriptors only, and stuffing natural-language
+// directives into it derailed generations to 8–32s broken clips. Test
+// burned ~24 of an agent's sunoapi credits before we caught it. DO NOT
+// re-add a style-field length nudge. If we ever revisit duration
+// steering, do it via a dedicated provider parameter (when one exists)
+// or via the title field — never via style/tags.
 
 export async function generateBeat(
   provider: SunoProvider,
@@ -82,7 +94,7 @@ async function _apiframeGenerate(apiKey: string, p: GenerateParams): Promise<Gen
       }),
     });
 
-  const requestedModel = p.model || "V5_5";
+  const requestedModel = p.model || "V5";
   let res = await callApiframe(requestedModel);
 
   // Fallback: if requested model triggered a 400 that mentions "model" or
@@ -92,6 +104,8 @@ async function _apiframeGenerate(apiKey: string, p: GenerateParams): Promise<Gen
     if (/model|invalid|unsupported|unknown/i.test(errBody)) {
       console.log(`apiframe rejected model="${requestedModel}" (${errBody.slice(0, 120)}); falling back to V5`);
       res = await callApiframe("V5");
+    } else if (isContentPolicyRejection(errBody)) {
+      throw new Error(`CONTENT_REJECTED: ${errBody.slice(0, 300)}`);
     } else {
       throw new Error(`apiframe error 400: ${errBody.slice(0, 200)}`);
     }
@@ -102,6 +116,9 @@ async function _apiframeGenerate(apiKey: string, p: GenerateParams): Promise<Gen
     if (res.status === 401) throw new Error("API_KEY_INVALID");
     if (res.status === 402) throw new Error("INSUFFICIENT_CREDITS");
     if (res.status === 429) throw new Error("PROVIDER_RATE_LIMITED");
+    if (isContentPolicyRejection(body)) {
+      throw new Error(`CONTENT_REJECTED: ${body.slice(0, 300)}`);
+    }
     throw new Error(`apiframe error ${res.status}: ${body.slice(0, 200)}`);
   }
 
@@ -127,7 +144,7 @@ async function _sunoapiGenerate(apiKey: string, p: GenerateParams): Promise<Gene
       prompt: "",                      // empty for instrumental custom mode
       style: p.style,
       title: p.title,
-      model: p.model || "V5_5",
+      model: p.model || "V5",
       negativeTags: finalNeg,
       callBackUrl: p.callbackUrl,
     }),
@@ -138,12 +155,32 @@ async function _sunoapiGenerate(apiKey: string, p: GenerateParams): Promise<Gene
     if (res.status === 401) throw new Error("API_KEY_INVALID");
     if (res.status === 402 || res.status === 403) throw new Error("INSUFFICIENT_CREDITS");
     if (res.status === 429) throw new Error("PROVIDER_RATE_LIMITED");
+    if (isContentPolicyRejection(body)) {
+      throw new Error(`CONTENT_REJECTED: ${body.slice(0, 300)}`);
+    }
     throw new Error(`sunoapi error ${res.status}: ${body.slice(0, 200)}`);
   }
 
   const data = await res.json();
-  if (data.code !== 200) throw new Error(`sunoapi rejected: ${data.msg || JSON.stringify(data).slice(0, 200)}`);
+  if (data.code !== 200) {
+    const msg = data.msg || JSON.stringify(data).slice(0, 200);
+    if (isContentPolicyRejection(msg)) {
+      throw new Error(`CONTENT_REJECTED: ${msg.slice(0, 300)}`);
+    }
+    throw new Error(`sunoapi rejected: ${msg}`);
+  }
   return { taskId: data.data?.taskId, provider: "sunoapi" };
+}
+
+// Recognise when Suno's content filter rejected the prompt (artist names,
+// copyrighted material, prohibited content). Both providers surface these
+// as 400-with-text or `data.code != 200`, and they're NOT retryable — the
+// agent must change the title/style before resubmitting. Crucial: no
+// generation credits are consumed on a content-policy rejection, which
+// is the opposite of a successful generation that produced bad output.
+function isContentPolicyRejection(text: string): boolean {
+  if (!text) return false;
+  return /content[\s_-]*polic|prohibited|copyright|trademark|artist[\s_-]*name|celebrity|in the style of|impersonat|violat|moderation|safety|filter|forbidden/i.test(text);
 }
 
 // ─── FETCH / POLL STATUS ─────────────────────────────────────────────

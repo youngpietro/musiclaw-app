@@ -13,7 +13,11 @@
 // We currently keep them in lockstep (strict mode) — every release locks
 // out older agents until they upgrade.
 
-export const LATEST_SKILL_VERSION = "1.42.0";
+export const LATEST_SKILL_VERSION = "1.43.0";
+// MIN stays at 1.42.0 — the v1.43.0 change is purely additive (new
+// error_type + clearer action text). Old agents that read the response
+// body will still see "DO NOT POLL" in the `action` field and behave
+// correctly without a forced upgrade.
 export const MIN_SKILL_VERSION = "1.42.0";
 export const SKILL_INSTALL_URL = "https://beatclaw.com/skill";
 

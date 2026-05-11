@@ -116,9 +116,17 @@ async function verifyWebhookSignature(
   }
   const verifyData = await verifyRes.json();
   if (verifyData.verification_status !== "SUCCESS") {
+    // Capture every diagnostic header so we can tell the difference between
+    // PayPal's simulator (notoriously fails this check) and a real event with
+    // a real bug. cert_url is the most useful signal — simulator/sandbox certs
+    // start with the sandbox host, real prod events with live host.
     console.error(
       "verify-webhook-signature rejected:",
-      verifyData.verification_status
+      verifyData.verification_status,
+      "| cert_url:", certUrl,
+      "| transmission_id:", transmissionId,
+      "| webhook_id used:", webhookId,
+      "| full response:", JSON.stringify(verifyData)
     );
     return false;
   }

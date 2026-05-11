@@ -26,15 +26,19 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-// Platform locks every track to the latest Suno model so that all generations
-// on beatclaw.com share the same audio quality bar. Bump this list (and the
-// SKILL.md) whenever Suno releases a new model and the third-party providers
-// expose it.
-const VALID_MODELS = ["V5_5"];
-// Map user-facing model names → Suno internal identifiers (apiframe codenames)
-const SUNO_MODEL_MAP: Record<string, string> = {
-  "V5_5": "chirp-fenix",
-};
+// Allowed Suno model values. Bump this list (and the SKILL.md) whenever
+// Suno releases a new model and the third-party providers expose it.
+//
+// V5 = default (recommended). Documented as latest stable across both
+//      apiframe.pro and sunoapi.org. Reliable instrumental output,
+//      consistent 2–3 minute durations.
+// V5_5 = OPT-IN. Undocumented on apiframe (Playground-only). Observed
+//      to leak vocals into the second half of tracks and produce
+//      short/aborted clips even with `instrumental: true` set. Keep
+//      available for agents who want to experiment, but never default
+//      to it.
+const VALID_MODELS = ["V5", "V5_5"];
+const DEFAULT_MODEL = "V5";
 const MAX_BEAT_PRICE = 499.99;
 const MAX_STEMS_PRICE = 999.99;
 
@@ -374,7 +378,7 @@ serve(async (req) => {
     const body = await req.json();
     const {
       title, genre, style,
-      model = "V5_5",
+      model = DEFAULT_MODEL,
       negativeTags = "", bpm = 0,
       price = null,
       stems_price = null,
@@ -483,6 +487,23 @@ serve(async (req) => {
       );
     }
 
+    // ─── COERCE V5_5 → V5 ─────────────────────────────────────────────
+    // V5_5 is unreliable upstream (vocal leaks in second half, frequent
+    // short/aborted clips). Until the agent's installed SKILL.md catches
+    // up to v1.43.0 (where the default flipped to V5), keep silently
+    // routing V5_5 requests to V5. We log it so we can later see when
+    // V5_5 traffic drops to zero and remove this coercion.
+    let effectiveModel = model;
+    let modelOverridden = false;
+    if (effectiveModel === "V5_5") {
+      console.warn(
+        `Coercing model V5_5 → V5 for @${agent.handle} (V5_5 has known vocal-leak + short-clip issues upstream). ` +
+        `Agent should update SKILL.md to v1.43.0 to pass V5 directly.`
+      );
+      effectiveModel = "V5";
+      modelOverridden = true;
+    }
+
     // ─── RESOLVE SUB-GENRE (explicit or auto-detect) ─────────────────
     const allSubGenres = await loadSubGenres(supabase);
     let finalSubGenre: string | null = null;
@@ -588,7 +609,7 @@ serve(async (req) => {
           title: cleanTitle,
           style: cleanStyle,
           negativeTags: cleanNegTags,
-          model,
+          model: effectiveModel,
           callbackUrl,
           callbackSecret: Deno.env.get("SUNO_CALLBACK_SECRET")!,
         }
@@ -636,14 +657,37 @@ serve(async (req) => {
         );
       }
 
-      // Generic provider error
+      if (errMsg.startsWith("CONTENT_REJECTED")) {
+        // Suno's content filter rejected the prompt synchronously. No
+        // credits were consumed and NO beat row was created — the agent
+        // must STOP, surface this to the human, and not poll for a
+        // task_id that doesn't exist.
+        const detail = errMsg.replace(/^CONTENT_REJECTED:\s*/, "");
+        return new Response(
+          JSON.stringify({
+            error: "Suno rejected the prompt under its content policy (artist names, copyrighted material, or other prohibited content).",
+            error_type: "CONTENT_REJECTED",
+            provider: agentConfig.suno_api_provider,
+            detail: detail.slice(0, 300),
+            action: "DO NOT POLL. No task_id was issued and no credits were used. Show this rejection to the human and ask them to revise the title/style — remove any artist names, song-name references, or in-the-style-of phrasings — before retrying.",
+            no_credits_used: true,
+          }),
+          { status: 422, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Generic provider error — every code path above already returned,
+      // so this is the catch-all for unrecognized provider errors. The
+      // request DID NOT produce a task_id and DID NOT create a beat row,
+      // so the agent must NOT proceed to poll. Make that explicit.
       return new Response(
         JSON.stringify({
-          error: "Suno API provider returned an error.",
+          error: "Suno API provider returned an error. No beat was created.",
           error_type: "PROVIDER_ERROR",
           provider: agentConfig.suno_api_provider,
           detail: errMsg.slice(0, 300),
-          action: "Try again. If this persists, check your API key and provider account status.",
+          action: "DO NOT POLL. No task_id was issued. Show this error to the human, then optionally retry with a different title/style.",
+          no_task_id: true,
         }),
         { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
       );
@@ -661,7 +705,7 @@ serve(async (req) => {
       original_genre: finalGenre,
       sub_genre: finalSubGenre,
       style: cleanStyle,
-      model,
+      model: effectiveModel,
       bpm: safeBpm,
       instrumental: true,
       negative_tags: cleanNegTags,
@@ -687,6 +731,14 @@ serve(async (req) => {
         success: true,
         task_id: generateResult.taskId,
         provider: agentConfig.suno_api_provider,
+        model: effectiveModel,
+        ...(modelOverridden ? {
+          model_override: {
+            requested: "V5_5",
+            served: "V5",
+            reason: "V5_5 has known reliability issues (vocal leaks, short clips). Update your SKILL.md to v1.43.0 — it now defaults to V5.",
+          },
+        } : {}),
         agent: { handle: agent.handle, music_soul: agentGenres.join(" × ") },
         genre_normalized: finalGenre !== genre ? `"${genre}" → "${finalGenre}"${finalGenre !== normalizedGenre ? " (style-inferred)" : ""}` : undefined,
         beats: [{

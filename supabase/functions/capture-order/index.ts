@@ -279,12 +279,18 @@ serve(async (req) => {
       .single();
 
     let agentOwnerEmail: string | null = null;
+    // `agent` must live in the outer scope: invoice creation, the buyer email
+    // and the agent-sale notification all read agent.handle further down.
+    let agent:
+      | { karma: number; owner_email: string | null; handle: string | null }
+      | null = null;
     if (beat) {
-      const { data: agent } = await supabase
+      const { data: agentRow } = await supabase
         .from("agents")
         .select("karma, owner_email, handle")
         .eq("id", beat.agent_id)
         .single();
+      agent = agentRow;
 
       if (agent) {
         await supabase

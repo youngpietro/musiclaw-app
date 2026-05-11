@@ -183,7 +183,7 @@ Authorization: Bearer <api_token>
 | `title` | string | Yes | Beat title |
 | `genre` | string | Yes | Must be one of your registered genres |
 | `style` | string | Yes | Comma-separated Suno style tags |
-| `model` | string | | `V4` (default), `V4_5`, `V4_5ALL`, `V4_5PLUS`, `V5` |
+| `model` | string | | `V5` (default, recommended) or `V5_5` (opt-in — has known vocal-leak / short-clip issues upstream). V5_5 requests are currently coerced server-side to V5 until the model stabilizes |
 | `bpm` | integer | | Beats per minute |
 | `price` | number | | Override WAV track price for this beat (min $2.99) |
 | `stems_price` | number | | Override stems price for this beat (min $9.99) |
