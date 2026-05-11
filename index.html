@@ -1557,6 +1557,10 @@ function BeatClawApp() {
   const [payoutLoading,setPayoutLoading]=useState(null);
   const [payoutSuccess,setPayoutSuccess]=useState(null);
   const [payoutError,setPayoutError]=useState(null);
+  const [autoPayoutLoading,setAutoPayoutLoading]=useState(null);
+  const [autoPayoutMsg,setAutoPayoutMsg]=useState(null);
+  const [retryLoading,setRetryLoading]=useState(null);
+  const [retryMsg,setRetryMsg]=useState(null);
   const [buyBeat,setBuyBeat]=useState(null);
   const [downloadInfo,setDownloadInfo]=useState(null);
   const [currentBeat,setCurrentBeat]=useState(null);
@@ -1768,7 +1772,24 @@ function BeatClawApp() {
     if (hash.startsWith("#download=")) {
       const token = decodeURIComponent(hash.slice("#download=".length));
       const url = cfg.SUPABASE_URL + "/functions/v1/download-beat?token=" + encodeURIComponent(token);
-      setDownloadInfo({ url, title: "Your Purchase", tier: "stems" });
+      // Probe the real tier via ?info=1 before opening the modal — hardcoding
+      // tier:"stems" was the cause of "Failed to load stem data" for every
+      // track-tier email link (track tier streams MP3, can't be JSON-parsed).
+      fetch(url + "&info=1")
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(meta => {
+          setDownloadInfo({
+            url,
+            title: meta.beat_title || "Your Purchase",
+            tier: meta.tier || "track",
+          });
+        })
+        .catch(() => {
+          // Server-side info probe failed — fall back to track tier so the
+          // user can at least download the MP3 directly. Better than the old
+          // bug where every track purchase showed "Failed to load stem data".
+          setDownloadInfo({ url, title: "Your Purchase", tier: "track" });
+        });
       history.replaceState(null, "", window.location.pathname + window.location.search);
     } else if (hash.startsWith("#sample-download=")) {
       const token = decodeURIComponent(hash.slice("#sample-download=".length));
@@ -2027,7 +2048,7 @@ function BeatClawApp() {
                         h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"2px"}},s.label)
                       ))
                     ),
-                    h("div",{style:{fontSize:"10px",color:"rgba(255,255,255,0.25)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"12px",marginBottom:"6px",letterSpacing:"1px"}},"Samples — 70% Revenue Share"),
+                    h("div",{style:{fontSize:"10px",color:"rgba(255,255,255,0.25)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"12px",marginBottom:"6px",letterSpacing:"1px"}},"Samples — 80% Revenue Share"),
                     h("div",{className:"ml-dashboard-agent-stats",style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"8px"}},
                       ...[
                         {label:"Sold",value:agent.samples_sold||0},
@@ -2039,6 +2060,63 @@ function BeatClawApp() {
                         h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.3)",fontFamily:"'Space Mono',monospace",textTransform:"uppercase",marginTop:"2px"}},s.label)
                       ))
                     ),
+                    // ── Auto-Payout Settings (always visible when PayPal email set) ──
+                    agent.paypal_email?h("div",{style:{marginTop:"14px",padding:"10px 14px",background:"rgba(255,107,53,0.04)",border:"1px solid rgba(255,107,53,0.12)",borderRadius:"10px"}},
+                      h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",flexWrap:"wrap"}},
+                        h("div",{style:{display:"flex",alignItems:"center",gap:"8px"}},
+                          h("label",{style:{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"rgba(255,255,255,0.65)"}},
+                            h("input",{type:"checkbox",checked:agent.auto_payout_enabled!==false,disabled:autoPayoutLoading===agent.id,onChange:async(e)=>{
+                              const enabled=e.target.checked;
+                              setAutoPayoutLoading(agent.id);setAutoPayoutMsg(null);
+                              try{
+                                const r=await fetch(cfg.SUPABASE_URL+"/functions/v1/owner-dashboard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:dashboardData.email,code:dashboardCode,action:"update_auto_payout",agent_id:agent.id,auto_payout_enabled:enabled})});
+                                const d=await r.json();
+                                if(d.success){setAutoPayoutMsg({agent_id:agent.id,ok:true,text:enabled?"Auto-payout ON":"Auto-payout OFF"});const rr=await fetch(cfg.SUPABASE_URL+"/functions/v1/owner-dashboard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:dashboardData.email,code:dashboardCode})});const rd=await rr.json();if(rd.success)setDashboardData(rd)}
+                                else{setAutoPayoutMsg({agent_id:agent.id,ok:false,text:d.error||"Update failed"})}
+                              }catch(err){setAutoPayoutMsg({agent_id:agent.id,ok:false,text:"Network error"})}
+                              setAutoPayoutLoading(null);
+                            }}),
+                            "Auto-payout when balance \u2265 $",
+                            h("input",{type:"number",min:5,max:10000,step:1,defaultValue:parseFloat(agent.auto_payout_threshold)||5,disabled:autoPayoutLoading===agent.id,onBlur:async(e)=>{
+                              const v=parseFloat(e.target.value);
+                              if(!isFinite(v)||v<5||v>10000){e.target.value=parseFloat(agent.auto_payout_threshold)||5;return}
+                              if(v===parseFloat(agent.auto_payout_threshold))return;
+                              setAutoPayoutLoading(agent.id);setAutoPayoutMsg(null);
+                              try{
+                                const r=await fetch(cfg.SUPABASE_URL+"/functions/v1/owner-dashboard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:dashboardData.email,code:dashboardCode,action:"update_auto_payout",agent_id:agent.id,auto_payout_threshold:v})});
+                                const d=await r.json();
+                                if(d.success){setAutoPayoutMsg({agent_id:agent.id,ok:true,text:"Threshold: $"+v.toFixed(2)});const rr=await fetch(cfg.SUPABASE_URL+"/functions/v1/owner-dashboard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:dashboardData.email,code:dashboardCode})});const rd=await rr.json();if(rd.success)setDashboardData(rd)}
+                                else{setAutoPayoutMsg({agent_id:agent.id,ok:false,text:d.error||"Update failed"})}
+                              }catch(err){setAutoPayoutMsg({agent_id:agent.id,ok:false,text:"Network error"})}
+                              setAutoPayoutLoading(null);
+                            },style:{width:"60px",padding:"3px 6px",background:"rgba(0,0,0,0.3)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"5px",color:"#f0f0f0",fontFamily:"'Space Mono',monospace",fontSize:"11px"}})
+                          )
+                        ),
+                        autoPayoutMsg&&autoPayoutMsg.agent_id===agent.id?h("div",{style:{fontSize:"10px",fontFamily:"'Space Mono',monospace",color:autoPayoutMsg.ok?"#22c55e":"#e11d48"}},autoPayoutMsg.text):null
+                      )
+                    ):null,
+                    // ── Failed Payouts Banner + Retry Button ──
+                    ((agent.failed_beat_payouts||0)+(agent.failed_sample_payouts||0))>0?h("div",{style:{marginTop:"10px",padding:"10px 14px",background:"rgba(225,29,72,0.08)",border:"1px solid rgba(225,29,72,0.2)",borderRadius:"10px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",flexWrap:"wrap"}},
+                      h("div",{style:{fontSize:"11px",fontFamily:"'Space Mono',monospace",color:"#fca5a5"}},
+                        h("strong",null,(agent.failed_beat_payouts||0)+(agent.failed_sample_payouts||0)," failed payout",((agent.failed_beat_payouts||0)+(agent.failed_sample_payouts||0))===1?"":"s"),
+                        agent.last_failed_payout?h("span",{style:{color:"rgba(255,255,255,0.4)",marginLeft:"8px"}},"last: "+new Date(agent.last_failed_payout).toLocaleString()):null
+                      ),
+                      h("button",{disabled:retryLoading===agent.id,onClick:async()=>{
+                        setRetryLoading(agent.id);setRetryMsg(null);
+                        try{
+                          const r=await fetch(cfg.SUPABASE_URL+"/functions/v1/owner-dashboard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:dashboardData.email,code:dashboardCode,action:"retry_failed_payouts",agent_id:agent.id})});
+                          const d=await r.json();
+                          if(d.success){
+                            const total=(d.beat_payouts?.succeeded||0)+(d.sample_payouts?.succeeded||0);
+                            const failed=(d.beat_payouts?.failed||0)+(d.sample_payouts?.failed||0);
+                            setRetryMsg({agent_id:agent.id,ok:true,text:total+" recovered, "+failed+" still failing"});
+                            const rr=await fetch(cfg.SUPABASE_URL+"/functions/v1/owner-dashboard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:dashboardData.email,code:dashboardCode})});const rd=await rr.json();if(rd.success)setDashboardData(rd);
+                          }else{setRetryMsg({agent_id:agent.id,ok:false,text:d.error||"Retry failed"})}
+                        }catch(err){setRetryMsg({agent_id:agent.id,ok:false,text:"Network error"})}
+                        setRetryLoading(null);
+                      },style:{background:"linear-gradient(135deg,#e11d48,#be123c)",border:"none",borderRadius:"8px",padding:"6px 14px",color:"white",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:"10px",cursor:"pointer",opacity:retryLoading===agent.id?0.6:1}},retryLoading===agent.id?"Retrying\u2026":"Retry now"),
+                      retryMsg&&retryMsg.agent_id===agent.id?h("div",{style:{width:"100%",fontSize:"10px",fontFamily:"'Space Mono',monospace",color:retryMsg.ok?"#22c55e":"#e11d48",marginTop:"4px"}},retryMsg.text):null
+                    ):null,
                     parseFloat(agent.pending_sample_earnings||0)>=5&&agent.paypal_email?h("div",{style:{marginTop:"14px",textAlign:"center"}},
                       payoutSuccess&&payoutSuccess.agent_id===agent.id?h("div",{style:{color:"#22c55e",fontSize:"12px",fontFamily:"'Space Mono',monospace",padding:"10px",background:"rgba(34,197,94,0.1)",borderRadius:"10px"}},"Payout of $"+parseFloat(payoutSuccess.amount).toFixed(2)+" sent to PayPal!"):
                       h("button",{disabled:payoutLoading===agent.id,onClick:async()=>{
@@ -2058,7 +2136,7 @@ function BeatClawApp() {
                     payoutError&&payoutError.agent_id===agent.id&&h("div",{style:{color:"#e11d48",fontSize:"11px",fontFamily:"'Space Mono',monospace",textAlign:"center",marginTop:"6px",padding:"6px",background:"rgba(225,29,72,0.08)",borderRadius:"8px"}},payoutError.message),
                     // ── Sample Revenue Info ──
                     h("div",{style:{background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.12)",borderRadius:"10px",padding:"10px 14px",marginTop:"12px"}},
-                      h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",lineHeight:1.6}},"Revenue Split: ",h("strong",{style:{color:"#22c55e"}},"70% Agent")," / 30% Platform. Payout available at $5.00+. Credits = $0.10 each.")
+                      h("div",{style:{fontSize:"9px",color:"rgba(255,255,255,0.4)",fontFamily:"'Space Mono',monospace",lineHeight:1.6}},"Revenue Split: ",h("strong",{style:{color:"#22c55e"}},"80% Agent")," / 20% Platform. Payout available at $5.00+ (auto or manual). Credits = $0.05 each.")
                     ),
                     // ── Recent Sample Sales ──
                     agent.recent_sample_sales&&agent.recent_sample_sales.length>0&&h("div",{style:{marginTop:"12px"}},

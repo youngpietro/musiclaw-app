@@ -7,6 +7,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { sendPayPalPayout } from "../_shared/paypal-payouts.ts";
 
 const ALLOWED_ORIGINS = [
   "https://beatclaw.com",
@@ -27,26 +28,6 @@ function getCorsHeaders(req: Request) {
       "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
-}
-
-async function getPayPalAccessToken(): Promise<string> {
-  const clientId = Deno.env.get("PAYPAL_CLIENT_ID")!;
-  const clientSecret = Deno.env.get("PAYPAL_CLIENT_SECRET")!;
-  const apiBase =
-    Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
-
-  const res = await fetch(`${apiBase}/v1/oauth2/token`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: "grant_type=client_credentials",
-  });
-
-  if (!res.ok) throw new Error(`PayPal auth failed: ${res.status}`);
-  const data = await res.json();
-  return data.access_token;
 }
 
 serve(async (req) => {
@@ -262,128 +243,79 @@ serve(async (req) => {
       );
     }
 
-    // ─── SEND PAYPAL PAYOUT ──────────────────────────────────────
-    try {
-      const accessToken = await getPayPalAccessToken();
-      const apiBase =
-        Deno.env.get("PAYPAL_API_BASE") ||
-        "https://api-m.paypal.com";
+    // ─── SEND PAYPAL PAYOUT (via shared helper) ──────────────────
+    const agentName = agent.name || agent.handle || "Agent";
+    const nowIso = new Date().toISOString();
 
-      const agentName = agent.name || agent.handle || "Agent";
+    const result = await sendPayPalPayout({
+      rowId: payoutRecord.id,
+      attempt: 1,
+      amount: payoutAmount,
+      receiverEmail: agent.paypal_email,
+      kind: "sample",
+      emailSubject: `You earned $${payoutAmount.toFixed(2)} from sample sales — BeatClaw`,
+      emailMessage: `Sample earnings for "${agentName}" have been sent to your PayPal account.`,
+    });
 
-      const payoutRes = await fetch(`${apiBase}/v1/payments/payouts`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          sender_batch_header: {
-            sender_batch_id: `beatclaw-sample-${payoutRecord.id}`,
-            recipient_type: "EMAIL",
-            email_subject: `You earned $${payoutAmount.toFixed(2)} from sample sales — BeatClaw`,
-            email_message: `Sample earnings for "${agentName}" have been sent to your PayPal account.`,
+    if (result.ok) {
+      await supabase
+        .from("sample_payouts")
+        .update({
+          paypal_batch_id: result.batchId,
+          status: "sent",
+          payout_attempts: 1,
+          payout_last_attempt_at: nowIso,
+          payout_error: null,
+        })
+        .eq("id", payoutRecord.id);
+
+      console.log(
+        `Sample payout sent: $${payoutAmount.toFixed(2)} to ${agent.paypal_email} for agent ${agent_id} (batch: ${result.batchId})`
+      );
+
+      // Create invoice record (non-fatal if it fails)
+      try {
+        const { data: invoiceData } = await supabase.rpc("create_invoice", {
+          p_data: {
+            type: "sample_payout",
+            seller_email: agent.paypal_email,
+            amount: String(payoutAmount),
+            seller_amount: String(payoutAmount),
+            line_items: [
+              { description: `Sample earnings payout for "${agentName}"`, quantity: 1, unit_price: payoutAmount },
+            ],
+            paypal_payout_batch_id: result.batchId || "",
+            sample_payout_id: payoutRecord.id,
+            notes: `Payout to ${agent.paypal_email}.`,
           },
-          items: [
-            {
-              amount: {
-                value: payoutAmount.toFixed(2),
-                currency: "USD",
-              },
-              sender_item_id: payoutRecord.id,
-              recipient_wallet: "PAYPAL",
-              receiver: agent.paypal_email,
-            },
-          ],
-        }),
-      });
-
-      const payoutData = await payoutRes.json();
-
-      if (payoutRes.ok || payoutRes.status === 201) {
-        // ── SUCCESS ──
-        const batchId =
-          payoutData?.batch_header?.payout_batch_id || null;
-
-        await supabase
-          .from("sample_payouts")
-          .update({ paypal_batch_id: batchId, status: "sent" })
-          .eq("id", payoutRecord.id);
-
-        console.log(
-          `Sample payout sent: $${payoutAmount.toFixed(2)} to ${agent.paypal_email} for agent ${agent_id} (batch: ${batchId})`
-        );
-
-        // ── Create invoice record ──
-        try {
-          const { data: invoiceData } = await supabase.rpc("create_invoice", {
-            p_data: {
-              type: "sample_payout",
-              seller_email: agent.paypal_email,
-              amount: String(payoutAmount),
-              seller_amount: String(payoutAmount),
-              line_items: [
-                { description: `Sample earnings payout for "${agentName}"`, quantity: 1, unit_price: payoutAmount },
-              ],
-              paypal_payout_batch_id: batchId || "",
-              sample_payout_id: payoutRecord.id,
-              notes: `Payout to ${agent.paypal_email}.`,
-            },
-          });
-          console.log(`Invoice created: ${invoiceData?.invoice_number} for payout ${payoutRecord.id}`);
-        } catch (invErr: unknown) {
-          console.error("Invoice creation error:", (invErr as Error).message);
-        }
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            payout_amount: payoutAmount,
-            paypal_batch_id: batchId,
-            agent_name: agentName,
-          }),
-          {
-            status: 200,
-            headers: { ...cors, "Content-Type": "application/json" },
-          }
-        );
-      } else {
-        // ── PAYPAL REJECTED — refund balance ──
-        console.error(
-          "PayPal payout failed:",
-          JSON.stringify(payoutData)
-        );
-
-        await supabase
-          .from("sample_payouts")
-          .update({ status: "failed" })
-          .eq("id", payoutRecord.id);
-
-        // Restore the deducted amount
-        await supabase.rpc("increment_agent_sample_earnings", {
-          p_agent_id: agent_id,
-          p_amount: payoutAmount,
         });
-
-        return new Response(
-          JSON.stringify({
-            error:
-              "PayPal payout failed. Your balance has been restored. Please try again later.",
-          }),
-          {
-            status: 502,
-            headers: { ...cors, "Content-Type": "application/json" },
-          }
-        );
+        console.log(`Invoice created: ${invoiceData?.invoice_number} for payout ${payoutRecord.id}`);
+      } catch (invErr: unknown) {
+        console.error("Invoice creation error:", (invErr as Error).message);
       }
-    } catch (payoutErr: unknown) {
-      // ── NETWORK / AUTH ERROR — refund balance ──
-      const errMsg = payoutErr instanceof Error ? payoutErr.message : String(payoutErr);
-      console.error("Payout error:", errMsg);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          payout_amount: payoutAmount,
+          paypal_batch_id: result.batchId,
+          agent_name: agentName,
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    } else {
+      // PayPal rejected OR network/auth error — log + refund balance
+      const newStatus = result.status === 0 ? "error" : "failed";
+      console.error(`Sample payout ${newStatus}:`, result.error);
 
       await supabase
         .from("sample_payouts")
-        .update({ status: "error" })
+        .update({
+          status: newStatus,
+          payout_attempts: 1,
+          payout_last_attempt_at: nowIso,
+          payout_error: result.error,
+        })
         .eq("id", payoutRecord.id);
 
       // Restore the deducted amount
@@ -392,15 +324,13 @@ serve(async (req) => {
         p_amount: payoutAmount,
       });
 
+      const userMsg = newStatus === "error"
+        ? "Payment service unavailable. Your balance has been restored. Please try again later."
+        : "PayPal payout failed. Your balance has been restored. Please try again later.";
+
       return new Response(
-        JSON.stringify({
-          error:
-            "Payment service unavailable. Your balance has been restored. Please try again later.",
-        }),
-        {
-          status: 502,
-          headers: { ...cors, "Content-Type": "application/json" },
-        }
+        JSON.stringify({ error: userMsg }),
+        { status: 502, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
   } catch (err: unknown) {

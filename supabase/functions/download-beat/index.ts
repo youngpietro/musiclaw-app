@@ -12,6 +12,14 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import JSZip from "https://esm.sh/jszip@3.10.1";
 
+// Inlined from _shared/r2.ts — that module pulls in @aws-sdk/client-s3 at
+// the top level, which boot-fails this worker (we don't need S3 here, only
+// a public URL string). Pure string concat, no network.
+function r2PublicUrl(path: string): string {
+  const base = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.beatclaw.com";
+  return `${base}/${path}`;
+}
+
 // ─── SSRF PREVENTION ──────────────────────────────────────────────────
 // Validates that audio URLs are HTTPS and not targeting internal/private networks.
 // All URLs fetched by this function come from DB (audio_url, wav_url, stems),
@@ -166,6 +174,29 @@ serve(async (req) => {
 
     const tier = purchase.purchase_tier || "track";
     const fileParam = url.searchParams.get("file"); // e.g., "track", "drums", "bass", "vocal"
+    const infoParam = url.searchParams.get("info");  // "1" → return metadata only
+
+    // ─── INFO-ONLY MODE ────────────────────────────────────────────────
+    // The frontend's email-link handler calls `?info=1` first to discover
+    // the actual tier of the purchase before opening the download modal.
+    // Returns purchase metadata — does NOT stream a file, does NOT
+    // increment download_count. Cheap, idempotent, safe to call freely.
+    if (infoParam === "1") {
+      const { data: beatMeta } = await supabase
+        .from("beats")
+        .select("id, title, stems_status")
+        .eq("id", beatId)
+        .single();
+      return new Response(
+        JSON.stringify({
+          tier,                                 // "track" | "stems"
+          beat_id: beatId,
+          beat_title: beatMeta?.title || null,
+          stems_ready: beatMeta?.stems_status === "complete",
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
 
     // ─── GET BEAT DATA ────────────────────────────────────────────────
     const { data: beat } = await supabase
@@ -179,8 +210,7 @@ serve(async (req) => {
     }
 
     // ─── R2 URL RESOLVER ──────────────────────────────────────────────
-    // For migrated beats, resolve URLs from R2 public domain (zero network calls)
-    const { r2PublicUrl } = await import("../_shared/r2.ts");
+    // For migrated beats, resolve URLs from R2 public domain (zero network calls).
     const R2_PUBLIC = Deno.env.get("R2_PUBLIC_URL") || "https://cdn.beatclaw.com";
     function resolveStorageUrl(storagePath: string, fallbackUrl?: string | null): string | null {
       if (beat!.storage_migrated) {

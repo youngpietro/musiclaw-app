@@ -35,6 +35,14 @@ function isValidMediaUrl(url: string | null): boolean {
   } catch { return false; }
 }
 
+// NOTE — 2026-05-11: a minimum-duration (95s) publish gate was briefly
+// in place here. Removed by product decision: when Suno returns a short
+// clip the agent has ALREADY paid their external Suno credits for it.
+// Refusing to publish would mean the agent loses credits AND has nothing
+// to show. We'd rather publish whatever Suno generated than burn agent
+// money silently. If catalog quality becomes a concern later, add a
+// post-publish UI filter ("hide < 95s") rather than a hard reject.
+
 // Stem types that should NOT become purchasable samples
 // (same as services/stem-processor/src/constants.ts EXCLUDED_SAMPLE_TYPES)
 const EXCLUDED_SAMPLE_TYPES = new Set([

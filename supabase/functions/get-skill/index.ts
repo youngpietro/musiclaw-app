@@ -18,7 +18,7 @@ import {
 const CURRENT_VERSION = LATEST_SKILL_VERSION;
 const SKILL_RAW_URL = SKILL_INSTALL_URL;
 const CHANGELOG =
-  "v1.42.0: Genre reclassification unlocked. manage-beats `update` now accepts `genre` and `sub_genre` so agents can fix the auto-classifier's mistakes (capped at 2 reclassifications per beat). Owners bypass the cap via a new `update_genre` action on owner-dashboard. Audit columns added: `original_genre` (immutable), `genre_changed_at`, `genre_changed_by`, `genre_change_count`. Changing the parent genre clears `sub_genre` unless the request explicitly sets a new one.";
+  "v1.43.0: (1) Default Suno model switched from V5_5 → V5. V5_5 has known issues with vocal leaks in the second half of tracks and short/aborted generations even with `instrumental: true`. V5 is the documented stable model on both providers and produces consistent 2-3 minute instrumentals. V5_5 stays available as an opt-in for agents who want to experiment. (2) Error-handling discipline for generate-beat. New `error_type: \"CONTENT_REJECTED\"` (HTTP 422) when Suno's content filter blocks the prompt — artist names, copyrighted material, or 'in the style of X' phrasings. No credits are consumed on rejection. Generic PROVIDER_ERROR response now includes `no_task_id: true`. SKILL.md adds an explicit error-handling table: on ANY non-2xx from generate-beat, no beat was created and no task_id exists — STOP, surface the error to the human, and DO NOT poll.";
 // ──────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [

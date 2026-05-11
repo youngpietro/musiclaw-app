@@ -110,6 +110,114 @@ serve(async (req) => {
       );
     }
 
+    // ─── ACTION: update_auto_payout ──────────────────────────────────
+    // Toggle auto-payout for samples and/or set the threshold (USD).
+    // Body: { email, code, agent_id, auto_payout_enabled?: bool, auto_payout_threshold?: number }
+    if (body.action === "update_auto_payout") {
+      const { agent_id, auto_payout_enabled, auto_payout_threshold } = body;
+      if (!agent_id) {
+        return new Response(
+          JSON.stringify({ error: "agent_id is required" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      if (auto_payout_enabled === undefined && auto_payout_threshold === undefined) {
+        return new Response(
+          JSON.stringify({ error: "Provide auto_payout_enabled and/or auto_payout_threshold" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Verify caller owns the agent
+      const { data: agentRow } = await supabase
+        .from("agents")
+        .select("id, name, handle, owner_email")
+        .eq("id", agent_id)
+        .single();
+      if (!agentRow || (agentRow.owner_email || "").toLowerCase() !== normalizedEmail) {
+        return new Response(
+          JSON.stringify({ error: "Agent not found or you don't own it." }),
+          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // deno-lint-ignore no-explicit-any
+      const updateData: Record<string, any> = {};
+      if (auto_payout_enabled !== undefined) {
+        updateData.auto_payout_enabled = !!auto_payout_enabled;
+      }
+      if (auto_payout_threshold !== undefined) {
+        const t = parseFloat(auto_payout_threshold);
+        if (!Number.isFinite(t) || t < 5 || t > 10000) {
+          return new Response(
+            JSON.stringify({ error: "auto_payout_threshold must be between 5 and 10000 USD." }),
+            { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+          );
+        }
+        updateData.auto_payout_threshold = Math.round(t * 100) / 100;
+      }
+
+      const { error: updateErr } = await supabase
+        .from("agents")
+        .update(updateData)
+        .eq("id", agent_id);
+      if (updateErr) throw updateErr;
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          agent_id,
+          auto_payout_enabled: updateData.auto_payout_enabled,
+          auto_payout_threshold: updateData.auto_payout_threshold,
+          message: "Auto-payout settings updated.",
+        }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── ACTION: retry_failed_payouts ────────────────────────────────
+    // Owner-initiated retry of all failed/error payouts for a single agent.
+    // Body: { email, code, action: "retry_failed_payouts", agent_id }
+    if (body.action === "retry_failed_payouts") {
+      const { agent_id } = body;
+      if (!agent_id) {
+        return new Response(
+          JSON.stringify({ error: "agent_id is required" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+      // Verify caller owns the agent (defense in depth — retry-failed-payouts
+      // re-checks too).
+      const { data: agentRow } = await supabase
+        .from("agents")
+        .select("id, owner_email")
+        .eq("id", agent_id)
+        .single();
+      if (!agentRow || (agentRow.owner_email || "").toLowerCase() !== normalizedEmail) {
+        return new Response(
+          JSON.stringify({ error: "Agent not found or you don't own it." }),
+          { status: 403, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Forward to retry-failed-payouts edge function with the same email+code.
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const retryRes = await fetch(`${supabaseUrl}/functions/v1/retry-failed-payouts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${serviceKey}`,
+        },
+        body: JSON.stringify({ email: normalizedEmail, code, agent_id }),
+      });
+      const retryData = await retryRes.json();
+      return new Response(
+        JSON.stringify(retryData),
+        { status: retryRes.status, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
     // ─── ACTION: update_genre ────────────────────────────────────────
     // Owners can reclassify any beat owned by an agent under their
     // owner_email — no per-beat cap (the cap is an agent-side guardrail).

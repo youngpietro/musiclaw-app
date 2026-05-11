@@ -7,6 +7,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildInvoiceEmail } from "../_shared/invoice-email.ts";
+import { sendPayPalPayout } from "../_shared/paypal-payouts.ts";
 
 const ALLOWED_ORIGINS = [
   "https://beatclaw.com",
@@ -68,8 +69,23 @@ async function hmacSign(payload: string, secret: string): Promise<string> {
 }
 
 // ─── TEST MODE: Don't mark beat as sold after purchase ──────────────────
-// Controlled via SUPABASE env var TEST_MODE=true (never hardcode true in production)
-const TEST_MODE = Deno.env.get("TEST_MODE") === "true";
+// Two env vars must agree for test mode to fire:
+//   TEST_MODE=true            (requests test behaviour)
+//   ENVIRONMENT=development   (proves we're not in prod)
+// ENVIRONMENT defaults to "production" when unset, so a forgotten
+// TEST_MODE=true in prod cannot leave a beat unsold after capture.
+// To run tests in a staging project, set BOTH env vars together.
+const ENVIRONMENT = (Deno.env.get("ENVIRONMENT") ?? "production").toLowerCase();
+const IS_PRODUCTION = ENVIRONMENT === "production";
+const TEST_MODE_REQUESTED = Deno.env.get("TEST_MODE") === "true";
+const TEST_MODE = TEST_MODE_REQUESTED && !IS_PRODUCTION;
+
+if (TEST_MODE_REQUESTED && IS_PRODUCTION) {
+  console.error(
+    "[SAFETY] TEST_MODE=true requested but ENVIRONMENT=production — refusing to skip beat-sold update. " +
+    "If this is a non-prod project, set ENVIRONMENT=development."
+  );
+}
 
 serve(async (req) => {
   const cors = getCorsHeaders(req);
@@ -90,30 +106,46 @@ serve(async (req) => {
       );
     }
 
+    // ─── INTERNAL CALLER DETECTION (paypal-webhook) ───────────────────
+    // The paypal-webhook function calls this endpoint server-to-server when
+    // PayPal notifies us that a buyer approved/captured an order. Those calls
+    // bypass per-IP rate-limiting because the IP is meaningless (it's PayPal's
+    // outbound IP). The shared INTERNAL_WEBHOOK_SECRET prevents anyone else
+    // from claiming to be the webhook.
+    const internalTrigger = req.headers.get("x-internal-trigger");
+    const internalSecret = req.headers.get("x-internal-webhook-secret");
+    const expectedInternalSecret = Deno.env.get("INTERNAL_WEBHOOK_SECRET");
+    const isInternalCall =
+      internalTrigger === "paypal-webhook" &&
+      !!expectedInternalSecret &&
+      internalSecret === expectedInternalSecret;
+
     // ─── RATE LIMITING: max 20 capture attempts per hour per IP ───────
-    const clientIp =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("cf-connecting-ip") ||
-      "unknown";
+    if (!isInternalCall) {
+      const clientIp =
+        req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        req.headers.get("cf-connecting-ip") ||
+        "unknown";
 
-    const { data: recentCaptures } = await supabase
-      .from("rate_limits")
-      .select("id")
-      .eq("action", "capture_order")
-      .eq("identifier", clientIp)
-      .gte("created_at", new Date(Date.now() - 3600000).toISOString());
+      const { data: recentCaptures } = await supabase
+        .from("rate_limits")
+        .select("id")
+        .eq("action", "capture_order")
+        .eq("identifier", clientIp)
+        .gte("created_at", new Date(Date.now() - 3600000).toISOString());
 
-    if (recentCaptures && recentCaptures.length >= 20) {
-      return new Response(
-        JSON.stringify({ error: "Too many attempts. Try again later." }),
-        { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
-      );
+      if (recentCaptures && recentCaptures.length >= 20) {
+        return new Response(
+          JSON.stringify({ error: "Too many attempts. Try again later." }),
+          { status: 429, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      await supabase.from("rate_limits").insert({
+        action: "capture_order",
+        identifier: clientIp,
+      });
     }
-
-    await supabase.from("rate_limits").insert({
-      action: "capture_order",
-      identifier: clientIp,
-    });
 
     // ─── VALIDATE INPUT ───────────────────────────────────────────────
     const body = await req.json();
@@ -247,12 +279,18 @@ serve(async (req) => {
       .single();
 
     let agentOwnerEmail: string | null = null;
+    // `agent` must live in the outer scope: invoice creation, the buyer email
+    // and the agent-sale notification all read agent.handle further down.
+    let agent:
+      | { karma: number; owner_email: string | null; handle: string | null }
+      | null = null;
     if (beat) {
-      const { data: agent } = await supabase
+      const { data: agentRow } = await supabase
         .from("agents")
         .select("karma, owner_email, handle")
         .eq("id", beat.agent_id)
         .single();
+      agent = agentRow;
 
       if (agent) {
         await supabase
@@ -286,65 +324,55 @@ serve(async (req) => {
     const payoutAmount = Math.round((parseFloat(purchase.amount) - platformFee) * 100) / 100;
 
     if (sellerPaypal && payoutAmount > 0) {
-      try {
-        const payoutToken = await getPayPalAccessToken();
-        const payoutApiBase = Deno.env.get("PAYPAL_API_BASE") || "https://api-m.paypal.com";
-        const beatTitle = beat?.title || "Beat";
+      // Read the current attempt count so we increment correctly even if the
+      // retry cron has touched this row before.
+      const { data: priorRow } = await supabase
+        .from("purchases")
+        .select("payout_attempts")
+        .eq("id", purchase.id)
+        .single();
+      const nextAttempt = ((priorRow?.payout_attempts as number) || 0) + 1;
+      const nowIso = new Date().toISOString();
+      const beatTitle = beat?.title || "Beat";
 
-        const payoutRes = await fetch(`${payoutApiBase}/v1/payments/payouts`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${payoutToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            sender_batch_header: {
-              sender_batch_id: `beatclaw-${purchase.id}`,
-              recipient_type: "EMAIL",
-              email_subject: `You earned $${payoutAmount.toFixed(2)} from "${beatTitle}" — BeatClaw`,
-              email_message: `Your beat "${beatTitle}" was purchased on BeatClaw! Your earnings have been sent to your PayPal account.`,
-            },
-            items: [
-              {
-                amount: { value: payoutAmount.toFixed(2), currency: "USD" },
-                sender_item_id: purchase.id,
-                recipient_wallet: "PAYPAL",
-                receiver: sellerPaypal,
-              },
-            ],
-          }),
-        });
+      const result = await sendPayPalPayout({
+        rowId: purchase.id,
+        attempt: nextAttempt,
+        amount: payoutAmount,
+        receiverEmail: sellerPaypal,
+        kind: "beat",
+        emailSubject: `You earned $${payoutAmount.toFixed(2)} from "${beatTitle}" — BeatClaw`,
+        emailMessage: `Your beat "${beatTitle}" was purchased on BeatClaw! Your earnings have been sent to your PayPal account.`,
+      });
 
-        const payoutData = await payoutRes.json();
-
-        if (payoutRes.ok || payoutRes.status === 201) {
-          const batchId = payoutData?.batch_header?.payout_batch_id || null;
-          await supabase
-            .from("purchases")
-            .update({
-              payout_batch_id: batchId,
-              payout_status: "sent",
-              payout_amount: payoutAmount,
-            })
-            .eq("id", purchase.id);
-          console.log(`Payout sent: $${payoutAmount.toFixed(2)} for purchase ${purchase.id} (batch: ${batchId})`);
-        } else {
-          console.error("PayPal payout failed:", JSON.stringify(payoutData));
-          await supabase
-            .from("purchases")
-            .update({
-              payout_status: "failed",
-              payout_amount: payoutAmount,
-            })
-            .eq("id", purchase.id);
-        }
-      } catch (payoutErr) {
-        console.error("Payout error:", payoutErr.message);
+      if (result.ok) {
         await supabase
           .from("purchases")
-          .update({ payout_status: "error", payout_amount: payoutAmount })
+          .update({
+            payout_batch_id: result.batchId,
+            payout_status: "sent",
+            payout_amount: payoutAmount,
+            payout_attempts: nextAttempt,
+            payout_last_attempt_at: nowIso,
+            payout_error: null,
+          })
           .eq("id", purchase.id);
-        // Non-fatal: purchase succeeded even if payout fails
+        console.log(`Payout sent: $${payoutAmount.toFixed(2)} for purchase ${purchase.id} (batch: ${result.batchId}, attempt ${nextAttempt})`);
+      } else {
+        const newStatus = result.status === 0 ? "error" : "failed";
+        console.error(`PayPal payout ${newStatus}:`, result.error);
+        await supabase
+          .from("purchases")
+          .update({
+            payout_status: newStatus,
+            payout_amount: payoutAmount,
+            payout_attempts: nextAttempt,
+            payout_last_attempt_at: nowIso,
+            payout_error: result.error,
+          })
+          .eq("id", purchase.id);
+        // Non-fatal: purchase succeeded even if payout fails — retry-failed-payouts
+        // will pick this row up on the next cron tick.
       }
     }
 
